@@ -1,0 +1,11 @@
+.DS_Store
+Thumbs.db
+node_modules/
+*.log
+*.tmp
+.env
+.env.*
+
+# Local session state: settings, rosters, hierarchy messages, and compaction
+# captures, which are conversation content and must not reach the public remote.
+.claude/

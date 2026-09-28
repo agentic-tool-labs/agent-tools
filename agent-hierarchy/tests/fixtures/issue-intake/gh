@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+// Stand-in for `gh` in test-issue-intake.sh. Every call is appended to $FAKE_GH_LOG as one JSON line
+// holding its argv and the request body it sent, then answered from the fixtures beside this file:
+//   auth status      success; with FAKE_GH_AUTH_HOST_ONLY set, only when `--hostname github.com` is passed
+//   IntakeOwner      repo.json "owners": login -> "User" | "Organization"
+//   IntakeLabelled   repo.json "labelled": pages of issue numbers; the cursor is the next page's index
+//   IntakeMeta       issues.json "<N>".meta, its comments cut to the query's comments(first|last: N)
+//                    window; NOT_FOUND (gh exits 1) when there is no such issue
+//   IntakeFetch      issues.json "<N>".fetch: "raw" {status, stdout, stderr} is replayed verbatim;
+//                    otherwise the issue is meta's state, labels and timeline overlaid with fetch.issue,
+//                    and only the comment ids the request names are answered (null when absent)
+const fs = require("fs");
+const path = require("path");
+
+const args = process.argv.slice(2);
+const stdin = args.includes("--input") ? fs.readFileSync(0, "utf8") : "";
+fs.appendFileSync(process.env.FAKE_GH_LOG, `${JSON.stringify({ args, stdin })}\n`);
+
+const fixture = (f) => JSON.parse(fs.readFileSync(path.join(__dirname, f), "utf8"));
+const reply = (body, code = 0) => {
+  process.stdout.write(typeof body === "string" ? body : JSON.stringify(body));
+  process.exit(code);
+};
+
+if (args[0] === "auth") {
+  const host = args.includes("--hostname") ? args[args.indexOf("--hostname") + 1] : null;
+  process.exit(!process.env.FAKE_GH_AUTH_HOST_ONLY || host === "github.com" ? 0 : 1);
+}
+const { query, variables: v } = JSON.parse(stdin);
+const op = /query (\w+)/.exec(query)[1];
+const issue = fixture("issues.json")[String(v.number)];
+
+if (op === "IntakeOwner") {
+  reply({ data: { repository: { owner: { __typename: fixture("repo.json").owners[v.owner], login: v.owner } } } });
+} else if (op === "IntakeLabelled") {
+  const pages = fixture("repo.json").labelled;
+  const page = v.after ? Number(v.after) : 0;
+  const more = page + 1 < pages.length;
+  reply({ data: { repository: { issues: {
+    nodes: pages[page].map((number) => ({ number })),
+    pageInfo: { hasNextPage: more, endCursor: more ? String(page + 1) : null },
+  } } } });
+} else if (op === "IntakeMeta" && !issue) {
+  process.stderr.write(`gh: Could not resolve to an Issue with the number of ${v.number}.\n`);
+  reply({ data: { repository: { issue: null } }, errors: [{ type: "NOT_FOUND" }] }, 1);
+} else if (op === "IntakeMeta") {
+  const [, end, n] = /comments\((first|last): (\d+)\)/.exec(query);
+  const nodes = issue.meta.comments.nodes;
+  const window = end === "last" ? nodes.slice(-Number(n)) : nodes.slice(0, Number(n));
+  reply({ data: { repository: { issue: { ...issue.meta, comments: { nodes: window } } } } });
+} else if (op === "IntakeFetch" && issue.fetch.raw) {
+  const { status, stdout, stderr } = issue.fetch.raw;
+  process.stderr.write(stderr);
+  reply(stdout, status);
+} else if (op === "IntakeFetch") {
+  const { state, labels, timelineItems } = issue.meta;
+  const comments = issue.fetch.comments || {};
+  reply({ data: {
+    repository: { issue: { state, labels, timelineItems, ...issue.fetch.issue } },
+    nodes: v.ids.map((id) => (comments[id] ? { id, ...comments[id] } : null)),
+  } });
+} else {
+  process.stderr.write(`fake gh: no answer for ${op}\n`);
+  process.exit(2);
+}

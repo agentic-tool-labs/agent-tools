@@ -1,0 +1,19 @@
+{
+  "name": "ah",
+  "displayName": "Agent Hierarchy — Role/Model Assignment",
+  "version": "0.105.0",
+  "description": "Multi-agent role hierarchy, each on the right model. Optional herdr transport for pane-based teams.",
+  "author": {
+    "name": "Jim Cline"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "subagent",
+    "delegation",
+    "orchestration",
+    "models",
+    "review",
+    "cost",
+    "herdr"
+  ]
+}

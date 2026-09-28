@@ -1,0 +1,430 @@
+#!/usr/bin/env bash
+# Test harness for hooks/guard.mjs.  Run:  bash hooks/guard.test.sh
+#
+# WHY THIS EXISTS. The guard fails SILENTLY. A hook that exits 0 when it meant to
+# exit 2 looks exactly like a hook that correctly allowed the call — there is no
+# error, no log line, nothing to notice until someone runs `gh pr create` and it
+# works. Three real defects were caught here rather than in the wild:
+#   - a second MCP shell channel bypassed a gate keyed on `tool === "Bash"`
+#     entirely, because its command lived in a different argument field.
+#   - wrapper heads (`bash -c "gh …"`, `xargs gh …`, `env gh …`) walked past
+#     command-position detection, a regression against the older regex.
+#   - a `const` declared beside its helper at the bottom of the file threw
+#     ReferenceError (temporal dead zone) — and exit 1 is NOT a block, so every
+#     rule in the file stopped enforcing at once.
+# That last one is the reason to keep running this: the failure mode of this file
+# is total and invisible. Add a case for every rule you add.
+#
+# Each case: expected exit code, description, JSON input. 0 = allowed, 2 = blocked.
+GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/guard.mjs"
+SANDBOX="$(mktemp -d)"
+trap 'rm -rf "$SANDBOX"' EXIT
+mkdir -p "$SANDBOX/.git"
+# The once-per-session stop keeps its state under os.tmpdir(); point that into
+# the sandbox so no run reads or leaves state in the real temp dir.
+export TMPDIR="$SANDBOX/tmp"
+mkdir -p "$TMPDIR"
+
+pass=0; fail=0
+
+check() {
+  local want="$1" desc="$2" json="$3"
+  local out rc
+  out=$(printf '%s' "$json" | node "$GUARD" 2>&1); rc=$?
+  if [ "$rc" = "$want" ]; then
+    pass=$((pass+1)); printf 'ok    (%s) %s\n' "$rc" "$desc"
+  else
+    fail=$((fail+1)); printf 'FAIL  want=%s got=%s  %s\n      -> %s\n' "$want" "$rc" "$desc" "${out:0:140}"
+  fi
+}
+
+# Optional second argument: the session id (default S1). The stop fires once per
+# session, so a case that must see its own stop needs a session no earlier case
+# used.
+bash_input() { printf '{"tool_name":"Bash","tool_input":{"command":%s},"cwd":"%s","session_id":"%s"}' "$1" "$SANDBOX" "${2:-S1}"; }
+mcp_input() { printf '{"tool_name":"%s","cwd":"%s","session_id":"%s"}' "$1" "$SANDBOX" "$2"; }
+
+# The stop exits 0 like an allow, so exit codes cannot tell them apart. Classify
+# each main-agent call instead:
+#   stopped — exit 0 + deny JSON that names github-worker and never says "allow"
+#   blocked — exit 2 (some other gate denied it)
+#   silent  — exit 0 + nothing on stdout (the user's own permission rules decide)
+expect() {
+  local want="$1" desc="$2" json="$3"
+  local out rc got
+  out=$(printf '%s' "$json" | node "$GUARD" 2>/dev/null); rc=$?
+  if [ "$rc" = 2 ]; then got=blocked
+  elif [ "$rc" = 0 ] && [ -z "$out" ]; then got=silent
+  elif [ "$rc" = 0 ] && grep -q '"permissionDecision":"deny"' <<<"$out" \
+       && grep -q 'github-pr-toolkit:github-worker' <<<"$out" \
+       && ! grep -q '"permissionDecision":"allow"' <<<"$out"; then got=stopped
+  else got="unexpected(rc=$rc)"; fi
+  if [ "$got" = "$want" ]; then
+    pass=$((pass+1)); printf 'ok    (%s) %s\n' "$got" "$desc"
+  else
+    fail=$((fail+1)); printf 'FAIL  want=%s got=%s  %s\n      -> %s\n' "$want" "$got" "$desc" "${out:0:140}"
+  fi
+}
+
+# For SUBAGENT cases, exit 0 is ambiguous: it means either "actively granted" or
+# "no decision — fall through". Those differ in consequence. A non-interactive
+# subagent whose call falls through is auto-denied by the permission layer, so
+# "not granted" IS the denial for reviewers — but a test asserting rc=0 cannot
+# tell the two apart, and would pass just as happily if a grant leaked in.
+# So assert on the grant itself: granted emits allow JSON on stdout, not-granted
+# emits nothing.
+check_grant() {
+  local want="$1" desc="$2" json="$3"   # want: granted | not-granted
+  local out got
+  out=$(printf '%s' "$json" | node "$GUARD" 2>/dev/null)
+  if grep -q '"permissionDecision":"allow"' <<<"$out"; then got=granted; else got=not-granted; fi
+  if [ "$got" = "$want" ]; then
+    pass=$((pass+1)); printf 'ok    (%s) %s\n' "$got" "$desc"
+  else
+    fail=$((fail+1)); printf 'FAIL  want=%s got=%s  %s\n' "$want" "$got" "$desc"
+  fi
+}
+
+echo "=== once-per-session stop: every gh form is recognised (main agent, NO locks, fresh session each) ==="
+expect stopped 'gh pr create'                 "$(bash_input '"gh pr create --title x --body y"' g1)"
+expect stopped 'gh pr view (reads are covered too)' "$(bash_input '"gh pr view 5"' g2)"
+expect stopped 'gh api'                       "$(bash_input '"gh api repos/o/r/pulls"' g3)"
+expect stopped 'gh pr merge'                  "$(bash_input '"gh pr merge 5"' g4)"
+expect stopped 'gh auth token (prints PAT)'   "$(bash_input '"gh auth token"' g5)"
+expect stopped 'gh via absolute path'         "$(bash_input '"/usr/local/bin/gh pr list"' g6)"
+expect stopped 'gh in command substitution'   "$(bash_input '"PR=$(gh pr view --json number)"' g7)"
+expect stopped 'gh in backtick substitution'  "$(bash_input '"echo `gh pr list`"' g8)"
+expect stopped 'gh second in a pipeline'      "$(bash_input '"echo x | gh api --input -"' g9)"
+expect stopped 'gh after env prefix'          "$(bash_input '"GH_TOKEN=z gh pr list"' g10)"
+
+echo "=== carve-out: local diagnostics ==="
+expect silent 'gh auth status'               "$(bash_input '"gh auth status"' d1)"
+expect silent 'gh auth status + flags'       "$(bash_input '"gh auth status --hostname github.com"' d2)"
+expect silent 'gh auth status piped'         "$(bash_input '"gh auth status 2>&1 | head -1"' d3)"
+expect silent 'gh --version'                 "$(bash_input '"gh --version"' d4)"
+expect silent 'gh version'                   "$(bash_input '"gh version"' d5)"
+
+echo "=== no false positives (gh as TEXT, not a command) ==="
+expect silent 'grep for gh api in a file'    "$(bash_input '"grep -n \"gh api\" README.md"' n1)"
+expect silent 'rg with gh pattern'           "$(bash_input '"rg -n \\"gh pr create\\" hooks/"' n2)"
+expect silent 'echo mentioning gh'           "$(bash_input '"echo \"run gh auth first\""' n3)"
+expect silent 'filename containing gh'       "$(bash_input '"cat docs/gh-notes.md"' n4)"
+
+echo "=== wrapper heads must not walk past the stop (regression vs 0.23.0 regex) ==="
+expect stopped 'bash -c gh pr create'         "$(bash_input '"bash -c \"gh pr create\""' w1)"
+expect stopped 'sh -c gh api'                 "$(bash_input "\"sh -c 'gh api repos/o/r'\"" w2)"
+expect stopped 'eval gh pr create'            "$(bash_input '"eval \"gh pr create\""' w3)"
+expect stopped 'xargs gh pr create'           "$(bash_input '"xargs gh pr create"' w4)"
+expect stopped 'env gh pr list'               "$(bash_input '"env gh pr list"' w5)"
+expect stopped 'command gh pr view'           "$(bash_input '"command gh pr view 5"' w6)"
+expect stopped 'timeout 5 gh pr list'         "$(bash_input '"timeout 5 gh pr list"' w7)"
+expect silent 'bash -c with diagnostic only' "$(bash_input '"bash -c \"gh auth status\""' w8)"
+expect silent 'bash -c unrelated'            "$(bash_input '"bash -c \"npm test\""' w9)"
+
+echo "=== armed-only git tier: UNARMED, so allowed ==="
+check 0 'git commit unarmed'           "$(bash_input '"git commit -m wip"')"
+check 0 'git push unarmed'             "$(bash_input '"git push origin main"')"
+check 0 'git worktree unarmed'         "$(bash_input '"git worktree add /tmp/x"')"
+check 0 'git diff'                     "$(bash_input '"git diff origin/main"')"
+check 0 'npm test unarmed'             "$(bash_input '"npm test"')"
+
+echo "=== armed: outbound git blocked, fetch/diff allowed, gh gets the same stop ==="
+touch "$SANDBOX/.git/code-critic-S1.lock"
+check 2 'git commit ARMED'             "$(bash_input '"git commit -m wip"')"
+check 2 'git push ARMED'               "$(bash_input '"git push origin main"')"
+check 0 'git fetch ARMED'              "$(bash_input '"git fetch origin"')"
+check 0 'git diff ARMED'               "$(bash_input '"git diff origin/main"')"
+check 0 'gh auth status ARMED'         "$(bash_input '"gh auth status"')"
+# No earlier case ran a covered call in S1, so its one-shot is still unspent.
+expect stopped 'gh pr create ARMED'          "$(bash_input '"gh pr create"')"
+rm -f "$SANDBOX/.git/code-critic-S1.lock"
+
+echo "=== assessing gate ==="
+touch "$SANDBOX/.git/code-critic-S1.assessing"
+check 2 'npm test while assessing'     "$(bash_input '"npm test"')"
+check 0 'git diff while assessing'     "$(bash_input '"git diff"')"
+# gh is not a runner, so the assessment gate passes it and the stop applies.
+touch "$SANDBOX/.git/code-critic-as1.assessing"
+expect stopped 'gh pr view while assessing (own marker, no lock)' "$(bash_input '"gh pr view 5"' as1)"
+rm -f "$SANDBOX/.git/code-critic-as1.assessing"
+check 0 'non-runner passes'            "$(bash_input '"cp a.txt b.txt"')"
+check 0 'curl passes'                  "$(bash_input '"curl -s https://example.com"')"
+check 2 'pytest inside timeout'        "$(bash_input '"timeout 60 pytest -x"')"
+check 2 'runner in substitution'       "$(bash_input '"echo $(npm test)"')"
+check 2 'runner after cd'              "$(bash_input '"cd sub && cargo test"')"
+check 2 'relative script'              "$(bash_input '"./scripts/check.sh"')"
+check 2 'absolute interpreter'         "$(bash_input '"/usr/bin/python3 x.py"')"
+
+# One-time nudge: the identical command re-run goes through; a different one
+# is still nudged; removing the marker resets the record.
+check 2 'make nudged first time'       "$(bash_input '"make check"')"
+check 0 'make passes on re-run'        "$(bash_input '"make check"')"
+check 2 'different make still nudged'  "$(bash_input '"make lint"')"
+rm -f "$SANDBOX/.git/code-critic-S1.assessing"
+touch "$SANDBOX/.git/code-critic-S1.assessing"
+check 2 'nudge resets with marker'     "$(bash_input '"make check"')"
+
+# Peer-transport carve-out: msg.mjs new/list/index/route/global-scope and roster.mjs show/teams
+# touch only .claude/hierarchy/ files; herdr agent prompt/get/read/wait drive
+# another pane — read-only for gate purposes. The match is narrow; every hole
+# probed below is a hole an agent under a denied dispatch WILL eventually try.
+echo "=== assessing gate: peer transport carve-out ==="
+check 0 'msg new, literal path'        "$(bash_input '"node /x/agent-hierarchy/hooks/msg.mjs new --type request --to reviewer --from orchestrator --slug critic-pr-7 --eta large --cwd /x"')"
+check 0 'msg new, quoted path w/ space' "$(bash_input '"node \"/x/agent hierarchy/hooks/msg.mjs\" new --type request --to reviewer --from orchestrator --slug critic-pr-7 --cwd /x"')"
+check 0 'msg list open json'           "$(bash_input '"node /x/agent-hierarchy/hooks/msg.mjs list --open --json --cwd /x"')"
+check 0 'msg route (ah setup gate)'    "$(bash_input '"node /x/agent-hierarchy/hooks/msg.mjs route peers --session S1"')"
+check 0 'msg global-scope (ah gate)'   "$(bash_input '"node /x/agent-hierarchy/hooks/msg.mjs global-scope config allow --session S1"')"
+check 0 'roster show'                  "$(bash_input '"node /x/agent-hierarchy/hooks/roster.mjs show --cwd /x"')"
+check 0 'roster teams'                 "$(bash_input '"node /x/agent-hierarchy/hooks/roster.mjs teams"')"
+check 0 'herdr agent prompt'           "$(bash_input '"herdr agent prompt r \"Read /x/req.md; write /x/resp.md\" --wait --timeout 900000"')"
+check 0 'herdr agent get'              "$(bash_input '"herdr agent get r"')"
+check 0 'herdr agent read'             "$(bash_input '"herdr agent read r --source recent-unwrapped --lines 40"')"
+check 0 'herdr agent wait'             "$(bash_input '"herdr agent wait r --until blocked --timeout 60000"')"
+check 0 'single-quoted arg is data'    "$(bash_input '"node /x/hooks/msg.mjs new --slug s --cwd '\''/x; odd | chars'\''"')"
+check 2 'msg sweep is not transport'   "$(bash_input '"node /x/hooks/msg.mjs sweep --cwd /x"')"
+check 2 'roster alias is not transport' "$(bash_input '"node /x/hooks/roster.mjs alias --set x"')"
+check 2 'herdr pane close'             "$(bash_input '"herdr pane close 3"')"
+check 2 'herdr agent send-keys'        "$(bash_input '"herdr agent send-keys r Enter"')"
+check 2 'herdr agent spawn'            "$(bash_input '"herdr agent spawn r"')"
+check 2 'chained command after new'    "$(bash_input '"node /x/hooks/msg.mjs new --slug s --cwd /x; npm test"')"
+check 2 'piped command after show'     "$(bash_input '"node /x/hooks/roster.mjs show --cwd /x | sh"')"
+check 2 'expanding double-quoted arg'  "$(bash_input '"node /x/hooks/msg.mjs new --slug \"x $(rm -rf .)\""')"
+check 2 'redirect smuggled into list'  "$(bash_input '"node /x/hooks/msg.mjs list --open --json --cwd /x > /etc/passwd"')"
+check 2 'msg.mjs as a comment decoy'   "$(bash_input '"npm test # node /x/hooks/msg.mjs new"')"
+check 2 'msg.mjs not under hooks/'     "$(bash_input '"node /x/msg.mjs new --slug s"')"
+check 2 'msg.mjs with no verb'         "$(bash_input '"node /x/hooks/msg.mjs"')"
+check 2 'assignment idiom refused'     "$(bash_input '"AH=/x; node \"$AH/hooks/msg.mjs\" new --slug s"')"
+check 2 'heredoc refused'              "$(bash_input '"herdr agent prompt r <<'\''P'\''\nbody\nP"')"
+check 2 'node option token as path'    "$(bash_input '"node --title=x/hooks/msg.mjs index"')"
+check 2 'node option token, dquoted'   "$(bash_input '"node \"--title=x/hooks/msg.mjs\" index --foo"')"
+check 2 'relative path refused'        "$(bash_input '"node ./hooks/msg.mjs new --slug s"')"
+check 2 'newline before path'          "$(bash_input '"node\n/x/hooks/msg.mjs new --slug s"')"
+check 2 'newline before verb'          "$(bash_input '"node /x/hooks/msg.mjs\nlist"')"
+check 2 'newline inside herdr'         "$(bash_input '"herdr agent\nread r"')"
+check 2 'verb with suffix (msg)'       "$(bash_input '"node /x/hooks/msg.mjs new.x --slug s"')"
+check 2 'verb with suffix (herdr)'     "$(bash_input '"herdr agent prompt-x r"')"
+rm -f "$SANDBOX/.git/code-critic-S1.assessing"
+
+echo "=== MCP: same once-per-session stop for the main agent; workers granted ==="
+expect stopped 'main agent toolkit MCP'       "$(mcp_input mcp__plugin_github-pr-toolkit_github__pull_request_read m1)"
+expect stopped 'main agent bare github MCP'   "$(mcp_input mcp__github__create_pull_request m2)"
+check 0 'github-worker granted MCP'    "{\"tool_name\":\"mcp__plugin_github-pr-toolkit_github__create_pull_request\",\"agent_id\":\"a1\",\"agent_type\":\"github-worker\",\"cwd\":\"$SANDBOX\"}"
+check 0 'reviewer subagent read git'   "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git diff\"},\"agent_id\":\"a2\",\"agent_type\":\"code-reviewer-general\",\"cwd\":\"$SANDBOX\"}"
+check 0 'subagent gh not gated by hook' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr create\"},\"agent_id\":\"a3\",\"agent_type\":\"github-worker\",\"cwd\":\"$SANDBOX\"}"
+
+# The armed-window Bash rules must NOT reach the workers: critic-worker runs
+# `git worktree` / `git commit` during exactly that window, and if the outbound-git
+# tier caught it the worker would strand mid-review and present as a worktree bug,
+# nowhere near this file. The subagent branch exits before those tiers; these cases
+# keep that ordering from being refactored away.
+echo "=== workers must survive the armed-window Bash rules ==="
+# ARM FIRST — these cases are meaningless unarmed, and an unarmed pass would look
+# identical to a real one.
+touch "$SANDBOX/.git/code-critic-S1.lock"
+touch "$SANDBOX/.git/code-critic-S1.assessing"
+check 0 'critic-worker git commit ARMED'  "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m x\"},\"agent_id\":\"a4\",\"agent_type\":\"critic-worker\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+check 0 'reviewer git diff ASSESSING'     "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git diff\"},\"agent_id\":\"a5\",\"agent_type\":\"code-reviewer-general\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+# A CODE REVIEW MUST NOT ALTER CODE. The hook's half of that is refusing to GRANT a
+# mutating command — the platform then auto-denies the ungranted call. Asserted as
+# grant/no-grant, since rc=0 covers both and would hide a leaked grant.
+check_grant not-granted 'reviewer write via Bash not granted' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > src/app.ts\"},\"agent_id\":\"a6\",\"agent_type\":\"code-reviewer-all\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+check_grant not-granted 'reviewer sed -i not granted'         "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i s/a/b/ src/app.ts\"},\"agent_id\":\"a7\",\"agent_type\":\"code-reviewer-general\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+check_grant not-granted 'reviewer npm test not granted'       "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm test\"},\"agent_id\":\"a8\",\"agent_type\":\"code-reviewer-general\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+check_grant not-granted 'reviewer gh not granted'             "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr create\"},\"agent_id\":\"a9\",\"agent_type\":\"code-reviewer-general\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+check_grant granted     'reviewer read git IS granted'        "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git diff origin/main\"},\"agent_id\":\"b1\",\"agent_type\":\"code-reviewer-all\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+check_grant not-granted 'reviewer never granted GitHub MCP'   "{\"tool_name\":\"mcp__plugin_github-pr-toolkit_github__pull_request_read\",\"agent_id\":\"b2\",\"agent_type\":\"code-reviewer-general\",\"cwd\":\"$SANDBOX\",\"session_id\":\"S1\"}"
+
+# Documented limitation, asserted so it cannot drift silently: the assessing gate
+# treats every shell (`bash`, `sh` …) as a runner, so a wrapped read is nudged
+# during assessment even when its payload is harmless. That direction is the
+# safe one (a wrapper is exactly where a test run would hide), and the nudge is
+# one-time, so re-running it or dropping the wrapper both work.
+check 2 'wrapped read blocked ASSESSING (by design)' "$(bash_input '"bash -c \"git diff\""')"
+rm -f "$SANDBOX/.git/code-critic-S1.lock" "$SANDBOX/.git/code-critic-S1.assessing"
+
+# ---------------------------------------------------------------------------
+# ONCE-PER-SESSION STOP: session semantics. One one-shot per session, shared by gh
+# and MCP and by armed and unarmed calls; spent only by a call the stop actually
+# held. A stop that fails to record must stay silent, or every call would be held.
+TOOLKIT_MCP=mcp__plugin_github-pr-toolkit_github__pull_request_read
+echo "=== once-per-session stop: one shot per session ==="
+expect stopped 'A: first gh call held'              "$(bash_input '"gh pr list"' sA)"
+expect silent  'A: the unchanged re-run proceeds'   "$(bash_input '"gh pr list"' sA)"
+expect silent  'A: a different gh call proceeds'    "$(bash_input '"gh pr view 1"' sA)"
+expect silent  'A: MCP shares the same one shot'    "$(mcp_input "$TOOLKIT_MCP" sA)"
+expect stopped 'B: per session, not global'         "$(bash_input '"gh pr list"' sB)"
+expect silent  'C: diagnostic first'                "$(bash_input '"gh auth status"' sC)"
+expect stopped 'C: diagnostic did not consume'      "$(bash_input '"gh pr list"' sC)"
+expect silent  'D: gh as text first'                "$(bash_input '"grep -n \"gh api\" README.md"' sD)"
+expect stopped 'D: text did not consume'            "$(bash_input '"gh pr list"' sD)"
+NOSID="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr list\"},\"cwd\":\"$SANDBOX\"}"
+expect silent  'no session_id: silent'              "$NOSID"
+expect silent  'no session_id: still silent'        "$NOSID"
+: > "$SANDBOX/afile"
+SAVED_TMPDIR="$TMPDIR"; export TMPDIR="$SANDBOX/afile/x"
+expect silent  'unrecordable state: silent, exit 0 (not 1)' "$(bash_input '"gh pr list"' sU)"
+export TMPDIR="$SAVED_TMPDIR"
+
+echo "=== once-per-session stop: armed reviews share the one shot ==="
+touch "$SANDBOX/.git/code-critic-sE.lock"
+expect stopped 'E armed: first gh call held'        "$(bash_input '"gh pr list"' sE)"
+expect silent  'E armed: next gh call proceeds'     "$(bash_input '"gh pr view 1"' sE)"
+expect silent  'E armed: MCP proceeds'              "$(mcp_input "$TOOLKIT_MCP" sE)"
+expect blocked 'E armed: outbound git still blocked' "$(bash_input '"git push origin main"' sE)"
+rm -f "$SANDBOX/.git/code-critic-sE.lock"
+expect silent  'E unarmed: the armed stop spent the one shot' "$(bash_input '"gh pr list"' sE)"
+expect stopped 'K unarmed: first gh call held'      "$(bash_input '"gh pr list"' sK)"
+touch "$SANDBOX/.git/code-critic-sK.lock"
+expect silent  'K armed: unarmed stop spent the one shot' "$(bash_input '"gh pr create"' sK)"
+rm -f "$SANDBOX/.git/code-critic-sK.lock"
+touch "$SANDBOX/.git/code-critic-sL.lock"
+expect blocked 'L armed: gh + outbound git -> git gate wins' "$(bash_input '"gh pr create && git push"' sL)"
+expect stopped 'L armed: the git block did not spend the one shot' "$(bash_input '"gh pr list"' sL)"
+rm -f "$SANDBOX/.git/code-critic-sL.lock"
+touch "$SANDBOX/.git/code-critic.lock"
+expect stopped 'legacy lock: gh held once'          "$(bash_input '"gh pr list"' sLeg)"
+expect blocked 'legacy lock: outbound git blocked'  "$(bash_input '"git commit -m x"' sLeg)"
+rm -f "$SANDBOX/.git/code-critic.lock"
+
+echo "=== once-per-session stop: other gates and subagents do not spend it ==="
+touch "$SANDBOX/.git/code-critic-sH.assessing"
+expect blocked 'H assessing: runner gate wins'      "$(bash_input '"gh pr view 5 && npm test"' sH)"
+expect stopped 'H assessing: re-run reaches the stop' "$(bash_input '"gh pr view 5 && npm test"' sH)"
+expect silent  'H assessing: re-run again proceeds' "$(bash_input '"gh pr view 5 && npm test"' sH)"
+rm -f "$SANDBOX/.git/code-critic-sH.assessing"
+expect silent  'J: non-plugin subagent gh is not held' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr list\"},\"agent_id\":\"j1\",\"agent_type\":\"general-purpose\",\"cwd\":\"$SANDBOX\",\"session_id\":\"sJ\"}"
+expect stopped 'J: main agent still gets its stop'  "$(bash_input '"gh pr list"' sJ)"
+
+echo "=== once-per-session stop: exact output shape ==="
+STOP_REASON='github-pr-toolkit: held once, nothing is broken. PR work is cheaper through its Haiku worker: Agent tool, subagent_type "github-pr-toolkit:github-worker" (read, list, search, open, update, review-thread replies; it cannot merge). To run this yourself instead, re-run it unchanged; nothing will be held again this session.'
+STOP_NOTICE='github-pr-toolkit: held this one GitHub call to suggest its worker agent. Nothing is broken; re-running it proceeds.'
+shape_out=$(printf '%s' "$(bash_input '"gh pr list"' sShape)" | node "$GUARD" 2>/dev/null)
+if node -e '
+  const [out, reason, notice] = process.argv.slice(1);
+  const o = JSON.parse(out), h = o.hookSpecificOutput || {};
+  const keys = (x) => JSON.stringify(Object.keys(x).sort());
+  process.exit(
+    keys(o) === keys({ hookSpecificOutput: 0, systemMessage: 0 }) &&
+    keys(h) === keys({ hookEventName: 0, permissionDecision: 0, permissionDecisionReason: 0 }) &&
+    h.hookEventName === "PreToolUse" && h.permissionDecision === "deny" &&
+    h.permissionDecisionReason === reason && o.systemMessage === notice ? 0 : 1);
+' "$shape_out" "$STOP_REASON" "$STOP_NOTICE" 2>/dev/null; then
+  pass=$((pass+1)); printf 'ok    (shape) reason = redirect, systemMessage = calm notice, no additionalContext\n'
+else
+  fail=$((fail+1)); printf 'FAIL  stop output shape\n      -> %s\n' "${shape_out:0:200}"
+fi
+
+# ---------------------------------------------------------------------------
+# WORKER-SCOPED DESTRUCTION GATE (third tier). The two tiers above gate WHO runs
+# a command; this one gates WHAT it does, because delegation laundered them: the
+# orchestrator, blocked from `git worktree` by the armed tier, wrote
+# `git worktree remove --force <a worktree it did not create>` into a
+# critic-worker dispatch, where nothing reliably shows it to a human first. Every
+# case below is that failure or a variant of it.
+agent_input() { printf '{"tool_name":"Bash","tool_input":{"command":%s},"agent_id":"w1","agent_type":"%s","cwd":"%s","session_id":"S1"}' "$1" "$2" "$SANDBOX"; }
+LEDGER="$SANDBOX/.git/code-critic-worktrees"
+printf 'S1\t%s\n' "$SANDBOX/seeded/pr-1" > "$LEDGER"
+printf 'S1\t%s\n' "$SANDBOX/my wt/pr-2" >> "$LEDGER"
+
+echo "=== the exact failure: forced removal, and removal of what we did not create ==="
+check 2 'worker: worktree remove --force (recorded path — force is still denied)' "$(agent_input "\"git worktree remove --force $SANDBOX/seeded/pr-1\"" critic-worker)"
+check 2 'worker: worktree remove -f'            "$(agent_input "\"git worktree remove -f $SANDBOX/seeded/pr-1\"" critic-worker)"
+check 2 'worker: remove an UNRECORDED worktree' "$(agent_input "\"git worktree remove $SANDBOX/someone-elses-branch\"" critic-worker)"
+check 2 'worker: remove with no path'           "$(agent_input '"git worktree remove"' critic-worker)"
+check 2 'worker: remove a RELATIVE path'        "$(agent_input '"git worktree remove .claude/worktrees/pr-1"' critic-worker)"
+check 2 'worker: worktree prune'                "$(agent_input '"git worktree prune"' critic-worker)"
+check 2 'worker: force via git -C global opt'   "$(agent_input "\"git -C $SANDBOX worktree remove --force $SANDBOX/seeded/pr-1\"" critic-worker)"
+check 2 'worker: force inside bash -c wrapper'  "$(agent_input "\"bash -c \\\"git worktree remove --force $SANDBOX/seeded/pr-1\\\"\"" critic-worker)"
+check 2 'worker: rm -rf instead of git'         "$(agent_input "\"rm -rf $SANDBOX/seeded/pr-1\"" critic-worker)"
+check 2 'worker: rmdir'                         "$(agent_input "\"rmdir $SANDBOX/seeded/pr-1\"" critic-worker)"
+check 2 'worker: find -delete'                  "$(agent_input "\"find $SANDBOX/seeded -name pr-1 -delete\"" critic-worker)"
+
+echo "=== removal IS allowed for a worktree this plugin recorded creating ==="
+check 0 'worker: remove a recorded path'        "$(agent_input "\"git worktree remove $SANDBOX/seeded/pr-1\"" critic-worker)"
+check 0 'worker: remove a recorded path with a SPACE (quoted)' "$(agent_input "\"git worktree remove \\\"$SANDBOX/my wt/pr-2\\\"\"" critic-worker)"
+check 0 'worker: worktree add (the one creation)' "$(agent_input "\"git fetch origin pull/9/head:cc-pr-9 && git worktree add $SANDBOX/fresh/pr-9 cc-pr-9\"" critic-worker)"
+# THE LEDGER ROUND-TRIP: the add above must have recorded the path, so this
+# remove — identical in shape to the denied one two cases up — now passes. This is
+# the whole mechanism; if recording breaks, CLEANUP starts failing mid-review.
+grep -q "$SANDBOX/fresh/pr-9" "$LEDGER" \
+  && { pass=$((pass+1)); printf 'ok    (ledger) worktree add was recorded\n'; } \
+  || { fail=$((fail+1)); printf 'FAIL  worktree add was NOT recorded in the ledger\n'; }
+check 0 'worker: remove the path the add just recorded' "$(agent_input "\"git worktree remove $SANDBOX/fresh/pr-9\"" critic-worker)"
+
+echo "=== other destructive git, denied to this plugin's own agents ==="
+check 2 'worker: reset --hard'          "$(agent_input '"git reset --hard origin/main"' critic-worker)"
+check 2 'worker: clean -fd'             "$(agent_input '"git clean -fd"' critic-worker)"
+check 2 'worker: push --force'          "$(agent_input '"git push --force origin cc-pr-9"' critic-worker)"
+check 2 'worker: push --force-with-lease' "$(agent_input '"git push --force-with-lease origin cc-pr-9"' critic-worker)"
+check 2 'worker: push +refspec'         "$(agent_input '"git push origin +HEAD:refs/heads/main"' critic-worker)"
+check 2 'worker: push --delete'         "$(agent_input '"git push origin --delete cc-pr-9"' critic-worker)"
+check 2 'worker: commit --amend'        "$(agent_input '"git commit --amend -m x"' critic-worker)"
+check 2 'worker: branch -D'             "$(agent_input '"git branch -D cc-pr-9"' critic-worker)"
+check 2 'worker: checkout'              "$(agent_input '"git checkout main"' critic-worker)"
+check 2 'worker: restore (discards work)' "$(agent_input '"git restore src/app.ts"' critic-worker)"
+check 2 'worker: rebase'                "$(agent_input '"git rebase origin/main"' critic-worker)"
+check 2 'github-worker gets the same gate' "$(agent_input '"git reset --hard"' github-worker)"
+
+# The reviewer half. isReviewerSafeBash refuses outbound git and redirection, but
+# `git clean` / `git reset` sit inside its allowed heads — the same laundering
+# through a different door, so the gate covers reviewers too. Asserted as rc=2
+# (an active block), NOT merely not-granted, since not-granted would also pass if
+# the case fell through to the permission layer for an unrelated reason.
+echo "=== review subagents are covered too (they are this plugin's agents) ==="
+check 2 'reviewer: git clean -fd'       "$(agent_input '"git clean -fd"' code-reviewer-general)"
+check 2 'reviewer: git reset --hard'    "$(agent_input '"git reset --hard"' code-reviewer-all)"
+check 2 'reviewer: custom category too' "$(agent_input '"git clean -fdx"' code-reviewer-my-house-rules)"
+
+echo "=== the playbook must survive the gate (false positives cost a stranded review) ==="
+check 0 'worker: plain commit'          "$(agent_input '"git commit -m subject -m body"' critic-worker)"
+check 0 'worker: plain push -u'         "$(agent_input '"git push -u origin HEAD"' critic-worker)"
+check 0 'worker: fetch'                 "$(agent_input '"git fetch origin main"' critic-worker)"
+check 0 'worker: add -A'                "$(agent_input '"git add -A"' critic-worker)"
+check 0 'worker: rev-parse via -C'      "$(agent_input "\"git -C $SANDBOX/seeded/pr-1 rev-parse HEAD\"" critic-worker)"
+check 0 'worker: worktree list'         "$(agent_input '"git worktree list"' critic-worker)"
+# A commit message that TALKS about the denied flags is not a use of them.
+check 0 'worker: --force inside a commit message' "$(agent_input '"git commit -m \"deny worktree remove --force in the guard\""' critic-worker)"
+
+# SCOPE, asserted so it cannot drift into a surprise: this tier covers the agents
+# THIS PLUGIN defines. Any other subagent in the session is somebody else's
+# business and falls through exactly as before.
+check 0 'a non-plugin subagent is out of scope by design' "$(agent_input "\"git worktree remove --force $SANDBOX/someone-elses-branch\"" task-gopher)"
+rm -f "$LEDGER"
+
+# ---------------------------------------------------------------------------
+# FRONTMATTER ASSERTIONS. Everything above tests guard.mjs. But half of "a code
+# review cannot alter code" lives in the agent FILES, not the hook — and a
+# deny-list that silently loses its Write entry fails exactly as quietly as a
+# broken hook. These assert the declaration itself.
+echo "=== reviewer agent frontmatter (the other half of the guarantee) ==="
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+for f in "$REPO"/github-pr-toolkit/agents/code-reviewer-*.md \
+         "$REPO"/github-pr-toolkit/skills/add-review-category/template.md; do
+  name="$(basename "$f")"
+  fm="$(awk 'NR>1 && /^---$/{exit} {print}' "$f")"
+  if ! grep -q '^disallowedTools:' <<<"$fm"; then
+    fail=$((fail+1)); printf 'FAIL  %s: no disallowedTools in frontmatter\n' "$name"
+  elif ! grep -qE '(^|[[:space:],])Write[,[:space:]]*$' <<<"$fm"; then
+    fail=$((fail+1)); printf 'FAIL  %s: disallowedTools does not deny Write\n' "$name"
+  elif ! grep -qE '(^|[[:space:],])Edit[,[:space:]]*$' <<<"$fm"; then
+    fail=$((fail+1)); printf 'FAIL  %s: disallowedTools does not deny Edit\n' "$name"
+  elif grep -q '^tools:' <<<"$fm"; then
+    # An allow-list would re-narrow the inherited pool and drop memory servers,
+    # which is the whole reason these files went deny-list.
+    fail=$((fail+1)); printf 'FAIL  %s: has a tools: allow-list (should inherit)\n' "$name"
+  elif ! grep -q 'You do not alter anything' "$f"; then
+    # The THIRD layer, and the only one that covers a channel the other two miss.
+    # disallowedTools stops the file-edit tools; the guard stops mutating Bash — but
+    # the guard is keyed on `tool === "Bash"`, so a shell reached through any other
+    # tool is governed by prose alone. That sentence is deliberately written as
+    # "by any means", NOT nested under a Bash clause, because a prohibition that
+    # reads as being about Bash is exactly the one a non-Bash channel slips past.
+    fail=$((fail+1)); printf 'FAIL  %s: missing the channel-agnostic no-mutation rule\n' "$name"
+  else
+    pass=$((pass+1)); printf 'ok    %s: denies Write/Edit, no allow-list, prose ban present\n' "$name"
+  fi
+done
+
+echo
+printf 'pass=%d fail=%d\n' "$pass" "$fail"
+[ "$fail" = 0 ]

@@ -1,0 +1,17 @@
+{
+  "name": "comment-discipline",
+  "displayName": "Comment Discipline — No Ephemeral Comments",
+  "version": "0.5.0",
+  "description": "Blocks comments that only make sense next to the diff.",
+  "author": {
+    "name": "Jim Cline"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "comments",
+    "code-quality",
+    "review",
+    "hooks",
+    "authoring"
+  ]
+}

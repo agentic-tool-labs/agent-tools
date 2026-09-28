@@ -1,0 +1,145 @@
+{
+  "name": "agent-tools",
+  "owner": {
+    "name": "Jim Cline",
+    "url": "https://github.com/JimCline"
+  },
+  "metadata": {
+    "description": "Agent plugins by Jim Cline — role hierarchies, context-window discipline, compaction, and pull-request tooling.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "ah",
+      "source": "./agent-hierarchy",
+      "description": "Multi-agent role hierarchy, each on the right model. Optional herdr transport for pane-based teams.",
+      "version": "0.105.0",
+      "author": {
+        "name": "Jim Cline"
+      },
+      "license": "Apache-2.0",
+      "keywords": [
+        "subagent",
+        "delegation",
+        "orchestration",
+        "models",
+        "review",
+        "cost",
+        "herdr"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "comment-discipline",
+      "source": "./comment-discipline",
+      "description": "Blocks comments that only make sense next to the diff.",
+      "version": "0.5.0",
+      "author": {
+        "name": "Jim Cline"
+      },
+      "license": "Apache-2.0",
+      "keywords": [
+        "comments",
+        "code-quality",
+        "review",
+        "hooks",
+        "authoring"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "output-discipline",
+      "source": "./output-discipline",
+      "description": "Keeps command output from flooding the context window.",
+      "version": "0.2.0",
+      "author": {
+        "name": "Jim Cline"
+      },
+      "license": "Apache-2.0",
+      "keywords": [
+        "context-window",
+        "tokens",
+        "hooks",
+        "bash",
+        "cost"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "review-guide",
+      "source": "./review-guide",
+      "description": "Note-as-you-go PR walkthroughs: a ledger, a CLI, and a skill. Nothing is enforced.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Jim Cline"
+      },
+      "license": "Apache-2.0",
+      "keywords": [
+        "review",
+        "pr",
+        "github",
+        "documentation"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "task-gopher",
+      "source": "./task-gopher",
+      "description": "Delegates tool-heavy work to a cheap Haiku runner.",
+      "version": "0.22.0",
+      "author": {
+        "name": "Jim Cline"
+      },
+      "license": "Apache-2.0",
+      "keywords": [
+        "haiku",
+        "tokens",
+        "cost",
+        "delegation",
+        "subagent",
+        "context-window"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "github-pr-toolkit",
+      "source": "./github-pr-toolkit",
+      "description": "Pull-request toolkit — /resolve-pr-comments resolves the review threads reviewers opened; /code-critic authors an adversarial review of a local diff or a GitHub PR. A high-reasoning orchestrator delegates all GitHub and outbound-git work to Haiku workers over GitHub's hosted MCP server; one PAT config covers both commands. Replaces the former resolve-pr-comments and code-critic plugins.",
+      "version": "0.37.0",
+      "license": "Apache-2.0",
+      "author": {
+        "name": "Jim Cline"
+      }
+    },
+    {
+      "name": "idle-compactor",
+      "source": "./idle-compactor",
+      "version": "0.9.0",
+      "description": "Runs /compact automatically when a session goes idle, timed to land just before the Anthropic prompt cache expires — or, in keepalive mode, pings the cache instead of compacting.",
+      "license": "Apache-2.0",
+      "author": {
+        "name": "Jim Cline"
+      }
+    },
+    {
+      "name": "compaction-capture",
+      "source": "./compaction-capture",
+      "version": "0.2.0",
+      "description": "Saves each compaction summary to a file after compaction completes, so the context a session dropped is still on disk.",
+      "license": "Apache-2.0",
+      "author": {
+        "name": "Jim Cline"
+      }
+    },
+    {
+      "name": "compaction-guard",
+      "source": "./compaction-guard",
+      "version": "0.2.0",
+      "description": "Re-states your standing directives after every compaction, so rules the summary dropped are back in context before the next turn.",
+      "license": "Apache-2.0",
+      "author": {
+        "name": "Jim Cline"
+      }
+    }
+  ]
+}

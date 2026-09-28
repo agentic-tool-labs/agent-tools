@@ -1,0 +1,340 @@
+#!/bin/bash
+# agent-hierarchy — spec 0031: PreToolUse SendMessage response nudge, and its
+# Fix D prerequisite (extractPendingRecord widening in lib-peer.mjs) and
+# Fix D consequence guard (stop-orchestrator-liveness.mjs cede check).
+# HOME- and AGENT_HIERARCHY_DIR-redirected; real state untouched.
+# Usage: bash tests/test-sendmessage-response-nudge.sh   (exits 0 iff all cases pass)
+
+PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
+. "$PLUGIN/tests/lib-quiet-deny.sh"
+unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
+unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
+H="$PLUGIN/hooks"
+HOOK="$H/pretooluse-sendmessage-response.mjs"
+TRACK="$H/userpromptsubmit-peer-tracking.mjs"
+LIVENESS="$H/stop-orchestrator-liveness.mjs"
+MSG="$H/msg.mjs"
+SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-sendresp-test.XXXXXX")"
+trap 'rm -rf "$SANDBOX"' EXIT
+SANDBOX="$(cd "$SANDBOX" && pwd -P)"
+FAKEHOME="$SANDBOX/home"
+HD="$SANDBOX/hier"
+PROJ="$SANDBOX/myrepo"
+mkdir -p "$FAKEHOME/.claude" "$PROJ/.claude"
+PEER_STORE="$FAKEHOME/.claude/agent-hierarchy.peer-pending.jsonl"
+PASS=0; FAIL=0
+
+check() {
+  local name=$1; shift
+  if eval "$@"; then PASS=$((PASS+1)); echo "PASS: $name"; else FAIL=$((FAIL+1)); echo "FAIL: $name (RC=$RC OUT=${OUT:0:400})"; fi
+}
+
+cat > "$PROJ/.claude/agent-hierarchy.json" <<EOF
+{ "version": 1, "enabled": true, "roles": {} }
+EOF
+
+msg() { OUT=$(HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$MSG" --cwd "$PROJ" "$@" 2>&1); RC=$?; }
+field() { node -e 'process.stdout.write(String(JSON.parse(process.argv[1])[process.argv[2]]))' "$OUT" "$1"; }
+
+send_payload() { # <session_id> <role> <to> <message> [agent_id]
+  node -e 'const[s,r,t,m,a]=process.argv.slice(1);const o={session_id:s,cwd:process.env.PROJ,tool_name:"SendMessage",agent_type:r,tool_input:{to:t,message:m}};if(a)o.agent_id=a;process.stdout.write(JSON.stringify(o));' "$1" "$2" "$3" "$4" "$5"
+}
+hook() { OUT=$(PROJ="$PROJ" send_payload "$1" "$2" "$3" "$4" "$5" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$HOOK" 2>&1); RC=$?; }
+
+prompt_payload() { # <session_id> <first_line>
+  node -e 'const[s,l]=process.argv.slice(1);const o={session_id:s,cwd:process.env.PROJ,prompt:`<cross-session-message from="ct-orchestrator" from-name="ct-orchestrator">\n${l}\ntldr`};process.stdout.write(JSON.stringify(o));' "$1" "$2"
+}
+track() { OUT=$(PROJ="$PROJ" prompt_payload "$1" "$2" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$TRACK" 2>&1); RC=$?; }
+
+liveness_payload() { # <session_id>
+  node -e 'const[s]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:s,cwd:process.env.PROJ,stop_hook_active:false}));' "$1"
+}
+liveness() { OUT=$(PROJ="$PROJ" liveness_payload "$1" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$LIVENESS" 2>&1); RC=$?; }
+
+denied() { echo "$OUT" | grep -q '"permissionDecision":"deny"'; }
+allowed() { [ $RC -eq 0 ] && [ -z "$OUT" ]; }
+blocked() { echo "$OUT" | grep -q '"decision":"block"'; }
+
+# Latest non-turn peer-pending record for a session, or "null".
+latest_pending() {
+  node -e '
+    const fs=require("fs");
+    const [sid,path]=process.argv.slice(1);
+    if(!fs.existsSync(path)){process.stdout.write("null");process.exit(0);}
+    let last=null;
+    for (const l of fs.readFileSync(path,"utf8").split("\n")) {
+      if(!l.trim())continue;
+      let r; try{r=JSON.parse(l);}catch{continue;}
+      if(!r||r.type==="turn"||r.session_id!==sid)continue;
+      last=r;
+    }
+    process.stdout.write(JSON.stringify(last));
+  ' "$1" "$PEER_STORE"
+}
+
+seed() { echo "$1" >> "$PEER_STORE"; } # raw JSON line, caller supplies ts/status
+
+# ---- fixtures: a request to architect from orchestrator, and its response
+msg new --to architect --from orchestrator --slug arch-task
+ARCH_REQ=$(field path); ARCH_ID=$(field id)
+msg new --type response --id "$ARCH_ID"
+ARCH_RESP=$(field path)
+# Fill the response body so it is a real response file (content irrelevant here).
+
+# ==== 1-4: Fix D via the real userpromptsubmit-peer-tracking.mjs pipeline ====
+
+track "s1" "[hierarchy-msg $ARCH_REQ]"
+P1=$(latest_pending "s1" "$PEER_STORE")
+check "1: msg-token first line arms a pending record" '[ "$P1" != "null" ]'
+check "1: pending record msg = request path" 'echo "$P1" | grep -q "\"msg\":\"$ARCH_REQ\""'
+check "1: pending record reply_to = wrapper from" 'echo "$P1" | grep -q "\"reply_to\":\"ct-orchestrator\""'
+check "1: pending record armed_by = msg-token" 'echo "$P1" | grep -q "\"armed_by\":\"msg-token\""'
+
+track "s2" "some text\n[hierarchy-msg $ARCH_REQ]"
+P2=$(latest_pending "s2" "$PEER_STORE")
+check "2: token not on first non-blank line -> no record armed" '[ "$P2" = "null" ]'
+
+track "s3" "[hierarchy-msg $SANDBOX/does-not-exist--request.md]"
+P3=$(latest_pending "s3" "$PEER_STORE")
+check "3a: nonexistent path -> no record armed" '[ "$P3" = "null" ]'
+track "s3b" "[hierarchy-msg $ARCH_RESP]"
+P3b=$(latest_pending "s3b" "$PEER_STORE")
+check "3b: a --response.md path -> no record armed" '[ "$P3b" = "null" ]'
+
+track "s4" '[hierarchy-peer-brief reply-to="ct-orchestrator" task="x"]'
+P4=$(latest_pending "s4" "$PEER_STORE")
+check "4: sentinel form still arms" '[ "$P4" != "null" ]'
+check "4: sentinel-armed record armed_by = sentinel" 'echo "$P4" | grep -q "\"armed_by\":\"sentinel\""'
+
+# ==== 5-19: pretooluse-sendmessage-response.mjs, records seeded directly ====
+
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+seed_qualifying() { # <session_id>
+  seed "{\"session_id\":\"$1\",\"from\":\"ct-orchestrator\",\"from_name\":\"ct-orchestrator\",\"reply_to\":\"ct-orchestrator\",\"task\":\"arch-task\",\"msg\":\"$ARCH_REQ\",\"armed_by\":\"msg-token\",\"ts\":\"$TS\",\"status\":\"pending\",\"nudges\":0}"
+}
+
+# Report-sized (> ECHO_CAP) and addressed to the requester: the only shape the
+# token-less nudge applies to.
+REPORT_NOTOKEN="$(node -e 'process.stdout.write("done: report inline. ".padEnd(2500,"x"))')"
+
+seed_qualifying "s5"
+hook "s5" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "5: architect, pending msg record, report-sized, no token -> deny" 'denied'
+check "R3: inline-reply deny is quiet" 'quiet_deny "$AH_R3_CALM" "must reply with a response FILE"'
+check "5: deny reason carries --id and --to" "echo \"\$OUT\" | grep -q -- \"--id $ARCH_ID --to orchestrator\""
+
+hook "s5" "architect" "ct-orchestrator" "$REPORT_NOTOKEN retry"
+check "6: second attempt -> allow" 'allowed'
+GATES_FILE="$HD/gates.jsonl"
+check "6: send-nudge-unmet recorded" "grep -q '\"type\":\"send-nudge-unmet\",\"id\":\"$ARCH_ID\"' \"\$GATES_FILE\""
+
+hook "s7-noobligation" "architect" "ct-orchestrator" "hi"
+check "7: no pending record for this session -> allow" 'allowed'
+
+seed "{\"session_id\":\"s8\",\"from\":\"ct-orchestrator\",\"reply_to\":\"ct-orchestrator\",\"task\":\"x\",\"armed_by\":\"sentinel\",\"ts\":\"$TS\",\"status\":\"pending\",\"nudges\":0}"
+ERRLOG="$FAKEHOME/.claude/hierarchy/hook-errors.jsonl"
+hook_errors() { if [ -f "$ERRLOG" ]; then grep -c '"hook":"pretooluse-sendmessage-response.mjs"' "$ERRLOG"; else echo 0; fi; }
+E8=$(hook_errors)
+hook "s8" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "8: pending record with no msg -> allow" 'allowed'
+check "8: ... by the msg filter, not by failing open" '[ "$(hook_errors)" = "$E8" ]'
+
+seed_qualifying "s9-other"
+hook "s9" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "9: a different session's pending record -> allow" 'allowed'
+
+# Each allow below uses its own unnudged request and a report-sized message, so
+# only the guard under test stands between it and a deny.
+seed_fresh() { # <session_id>
+  msg new --to architect --from orchestrator --slug "fresh-$1"
+  seed "{\"session_id\":\"$1\",\"from\":\"ct-orchestrator\",\"from_name\":\"ct-orchestrator\",\"reply_to\":\"ct-orchestrator\",\"task\":\"fresh-$1\",\"msg\":\"$(field path)\",\"armed_by\":\"msg-token\",\"ts\":\"$TS\",\"status\":\"pending\",\"nudges\":0}"
+}
+
+seed_fresh "s10"
+hook "s10" "" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "10: no direct role attribution (Orchestrator) -> allow" 'allowed'
+
+seed_fresh "s11r"
+hook "s11r" "reviewer" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "11: reviewer with qualifying record -> allow" 'allowed'
+seed_fresh "s11u"
+hook "s11u" "ultra-advisor" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "11: ultra-advisor with qualifying record -> allow" 'allowed'
+
+seed_qualifying "s12"
+hook "s12" "architect" "ct-orchestrator" "[hierarchy-msg $ARCH_RESP]"
+check "12: valid response token whose id matches -> allow" 'allowed'
+
+# ---- 12b: echo cap (spec 0045 §9.2). Same rule on the peer route: the response
+# file carries the report, so a long inline copy after the pointer is denied
+# once per obligation.
+SHORT_ECHO="$(node -e 'process.stdout.write("- done: PASS. ".padEnd(300,"x"))')"
+LONG_ECHO="$(node -e 'process.stdout.write("- done: PASS. ".padEnd(2500,"x"))')"
+
+seed_qualifying "s12b"
+hook "s12b" "architect" "ct-orchestrator" "[hierarchy-msg $ARCH_RESP]
+$SHORT_ECHO"
+check "12b: 300 B after the pointer -> allow" 'allowed'
+
+seed_qualifying "s12c"
+hook "s12c" "architect" "ct-orchestrator" "[hierarchy-msg $ARCH_RESP]
+$LONG_ECHO"
+check "12c: 2500 B after the pointer -> deny" 'denied'
+check "R1: echo-cap deny is quiet" 'quiet_deny "$AH_R1_CALM" "after the pointer line (cap"'
+check "12c: reason names the cap" 'echo "$OUT" | grep -q "cap 2000"'
+check "12c: reason states the contract" 'echo "$OUT" | grep -q "one status bullet"'
+check "12c: recorded in gates.jsonl" 'grep -q "\"type\":\"send-echo-cap\"" "$HD/gates.jsonl"'
+
+hook "s12c" "architect" "ct-orchestrator" "[hierarchy-msg $ARCH_RESP]
+$LONG_ECHO"
+check "12c: second attempt for the same obligation -> allow (bounded)" 'allowed'
+
+msg new --to architect --from orchestrator --slug arch-other
+OTHER_ID=$(field id)
+msg new --type response --id "$OTHER_ID"
+OTHER_RESP=$(field path)
+seed_qualifying "s13"
+hook "s13" "architect" "ct-orchestrator" "[hierarchy-msg $OTHER_RESP]"
+check "13a: id-mismatched response file -> deny" 'denied'
+check "R2: invalid-pointer deny is quiet" 'quiet_deny "$AH_R2_CALM" "does not satisfy an open request"'
+hook "s13" "architect" "ct-orchestrator" "[hierarchy-msg $OTHER_RESP]"
+check "13a: deny again on retry (no one-round allowance)" 'denied'
+
+seed_qualifying "s13b"
+hook "s13b" "architect" "ct-orchestrator" "[hierarchy-msg $SANDBOX/missing--response.md]"
+check "13b: missing file -> deny" 'denied'
+
+seed_qualifying "s13c"
+hook "s13c" "architect" "ct-orchestrator" "[hierarchy-msg $ARCH_REQ]"
+check "13c: type:request file -> deny" 'denied'
+
+seed_qualifying "s13d"
+hook "s13d" "implementor" "ct-orchestrator" "[hierarchy-msg $ARCH_RESP]"
+check "13d: mismatched from: -> deny" 'denied'
+
+BEFORE=$(md5 -q "$PEER_STORE" 2>/dev/null || md5sum "$PEER_STORE" | awk '{print $1}')
+seed_qualifying "s14"
+hook "s14" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
+hook "s14" "architect" "ct-orchestrator" "$REPORT_NOTOKEN again"
+AFTER_STILL_HAS_S14=$(latest_pending "s14" "$PEER_STORE")
+check "14: peer-record store untouched by the hook (msg field present unmodified)" 'echo "$AFTER_STILL_HAS_S14" | grep -q "\"msg\":\"$ARCH_REQ\""'
+
+seed_fresh "s17"
+check "17: subagent context -> allow" '
+  hook "s17" "architect" "ct-orchestrator" "$REPORT_NOTOKEN" "sub1"
+  allowed
+'
+
+seed_fresh "s18a"
+seed_fresh "s18b"
+cat > "$PROJ/.claude/agent-hierarchy.json" <<EOF
+{ "version": 1, "enabled": false, "roles": {} }
+EOF
+hook "s18a" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "18a: hierarchy disabled -> allow" 'allowed'
+cat > "$PROJ/.claude/agent-hierarchy.json" <<EOF
+{ "version": 1, "enabled": true, "msgs": "off", "roles": {} }
+EOF
+hook "s18b" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
+check "18b: msgs:off -> allow" 'allowed'
+cat > "$PROJ/.claude/agent-hierarchy.json" <<EOF
+{ "version": 1, "enabled": true, "roles": {} }
+EOF
+
+OUT=$(echo "not json" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$HOOK" 2>&1); RC=$?
+check "19: malformed stdin fails open" 'allowed'
+
+check "the test script itself exercises the hook file" '[ -f "$HOOK" ]'
+
+# ==== token-less messages: the nudge applies only to a report-sized message
+# addressed to the requester. R's socket address differs from its from_name so
+# both spellings of "the requester" are exercised. ====
+
+PTU="$H/posttooluse-peer-resolve.mjs"
+STOP="$H/stop-peer-nudge.mjs"
+R="uds:/tmp/cc-socks/r-orch.sock"
+R_NAME="r-orch"
+seed_from_r() { # <session_id> <request path>
+  seed "{\"session_id\":\"$1\",\"from\":\"$R\",\"from_name\":\"$R_NAME\",\"reply_to\":\"$R\",\"task\":\"tl\",\"msg\":\"$2\",\"armed_by\":\"msg-token\",\"ts\":\"$TS\",\"status\":\"pending\",\"nudges\":0}"
+}
+new_req() { msg new --to architect --from orchestrator --slug "$1"; REQP=$(field path); REQID=$(field id); }
+bytes() { node -e 'process.stdout.write("inline: ".padEnd(Number(process.argv[1]),"x"))' "$1"; }
+no_gate() { ! grep -q "\"id\":\"$1\"" "$GATES_FILE" 2>/dev/null; }
+nudged() { grep -q "\"type\":\"send-nudge\",\"id\":\"$1\"" "$GATES_FILE"; }
+unmet() { grep -q "\"type\":\"send-nudge-unmet\",\"id\":\"$1\"" "$GATES_FILE"; }
+STATUS_NOTE=$'vet-spec-0063: IN PROGRESS, not the report.\n- 0063 read; 2 read-only gophers gathering …\n- Final [hierarchy-msg <response path>] follows when the gophers return …'
+
+new_req tl-1; ID1=$REQID; seed_from_r "b1" "$REQP"
+hook "b1" "architect" "$R" "$STATUS_NOTE"
+check "tl-1: status-sized note to the requester -> allow" 'allowed'
+check "tl-1: ... and no gate record" 'no_gate "$ID1"'
+
+OUT=$(PROJ="$PROJ" send_payload "b1" "architect" "$R" "$STATUS_NOTE" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$PTU" 2>&1); RC=$?
+check "tl-7: the resolver leaves the obligation pending after the note" 'latest_pending "b1" | grep -q "\"status\":\"pending\""'
+seed "{\"type\":\"turn\",\"session_id\":\"b1\",\"status\":\"armed\",\"ts\":\"$TS\"}"
+OUT=$(echo '{"session_id":"b1","stop_hook_active":false}' | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$STOP" 2>&1); RC=$?
+check "tl-7: ... and the Stop hook still blocks" 'blocked'
+
+hook "b1" "architect" "$R" "$(bytes 2001)"
+check "tl-5: after the note, a report-sized message is still denied once" 'denied'
+
+new_req tl-2; ID2=$REQID; seed_from_r "b2" "$REQP"
+hook "b2" "architect" "some-other-peer" "$(bytes 3000)"
+check "tl-2: report-sized message to someone else -> allow" 'allowed'
+check "tl-2: ... and no gate record" 'no_gate "$ID2"'
+
+new_req tl-3; ID3=$REQID; seed_from_r "b3" "$REQP"
+hook "b3" "architect" "$R" "$(bytes 2001)"
+check "tl-3: 2001 B to the requester -> deny" 'denied'
+check "tl-3: send-nudge recorded" 'nudged "$ID3"'
+hook "b3" "architect" "$R" "$(bytes 2001)"
+check "tl-3: identical resend -> allow" 'allowed'
+check "tl-3: send-nudge-unmet recorded" 'unmet "$ID3"'
+
+new_req tl-4; ID4=$REQID; seed_from_r "b4" "$REQP"
+hook "b4" "architect" "$R" "$(bytes 2000)"
+check "tl-4: exactly 2000 B to the requester -> allow" 'allowed && no_gate "$ID4"'
+
+new_req tl-6a; seed_from_r "b6a" "$REQP"
+hook "b6a" "architect" "$R_NAME" "$(bytes 2001)"
+check "tl-6: to = requester's from_name -> deny" 'denied'
+new_req tl-6b; seed_from_r "b6b" "$REQP"
+hook "b6b" "architect" "$R_NAME [1a2b]" "$(bytes 2001)"
+check "tl-6: to = \"<from_name> [ref]\" -> deny" 'denied'
+
+# ==== §4.1a: stop-peer-nudge already covers test 15 (existing mechanism, no
+# code changed there); stop-orchestrator-liveness.mjs guard (test 16) ====
+# Build an outstanding-past-threshold dispatch so ceding vs not-ceding
+# actually produces a different outcome (block vs allow), not two silent
+# allows for different reasons.
+
+msg new --to architect --from orchestrator --slug old-task
+OLD_REQ=$(field path); OLD_ID=$(field id)
+OLD_TS=$(node -e 'process.stdout.write(new Date(Date.now()-600000).toISOString())') # 10min ago > small(5min) threshold
+node -e '
+  const fs=require("fs");
+  const p=process.argv[1]; const ts=process.argv[2];
+  fs.writeFileSync(p, fs.readFileSync(p,"utf8").replace(/^created:.*$/m, "created: "+ts));
+' "$OLD_REQ" "$OLD_TS"
+dispatch_record() { # <session_id>
+  seed "{\"type\":\"dispatch\",\"session_id\":\"$1\",\"request_id\":\"$OLD_ID\",\"to\":\"architect\",\"created\":\"$TS\"}"
+}
+
+dispatch_record "s16a"
+seed "{\"session_id\":\"s16a\",\"from\":\"ct-orchestrator\",\"reply_to\":\"ct-orchestrator\",\"task\":\"x\",\"armed_by\":\"msg-token\",\"msg\":\"$ARCH_REQ\",\"ts\":\"$TS\",\"status\":\"pending\",\"nudges\":0}"
+liveness "s16a"
+check "16: msg-token-armed record does NOT cede -> outstanding dispatch still blocks" 'blocked'
+
+dispatch_record "s16b"
+seed "{\"session_id\":\"s16b\",\"from\":\"ct-orchestrator\",\"reply_to\":\"ct-orchestrator\",\"task\":\"x\",\"armed_by\":\"sentinel\",\"ts\":\"$TS\",\"status\":\"pending\",\"nudges\":0}"
+liveness "s16b"
+check "16: sentinel-armed record still cedes -> allow" 'allowed'
+
+dispatch_record "s16c"
+seed "{\"session_id\":\"s16c\",\"from\":\"ct-orchestrator\",\"reply_to\":\"ct-orchestrator\",\"task\":\"x\",\"ts\":\"$TS\",\"status\":\"pending\",\"nudges\":0}"
+liveness "s16c"
+check "16: legacy record with no armed_by still cedes -> allow" 'allowed'
+
+echo
+echo "passed: $PASS  failed: $FAIL"
+[ "$FAIL" -eq 0 ]

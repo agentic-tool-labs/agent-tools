@@ -1,0 +1,12 @@
+{
+  "name": "compaction-capture",
+  "version": "0.2.0",
+  "description": "Saves each compaction summary to a file after compaction completes, so the context a session dropped is still on disk.",
+  "author": {
+    "name": "Jim Cline",
+    "email": "jamescline@outlook.com"
+  },
+  "homepage": "https://github.com/agentic-tool-labs/agent-tools",
+  "repository": "https://github.com/agentic-tool-labs/agent-tools",
+  "license": "Apache-2.0"
+}
