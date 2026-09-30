@@ -503,7 +503,7 @@ the values here are an example:
 - **A malformed file** never crashes a hook. The pack is reported as
   unreadable.
 - **A pack's other agents,** the ones not in the manifest, stay ordinary
-  plugin agents.
+  plugin agents. But none of them may take a role's agent name (§4.6).
 
 ### 4.3 Discovery
 
@@ -628,16 +628,27 @@ the user adopts it:
 
     The message says that trust is committed only from the user's own
     top-level session, outside a pipeline run. An error while running these
-    checks refuses. This holds however the shell command was written. The
-    gate checks the same two cwds: the command's `--cwd` and the payload's
-    `cwd`.
-  - **What neither catches.** A subagent of a top-level session in a mode
-    that runs commands without asking can still commit if it hides the words
-    from the gate, for example with a variable holding `trust`, a script file
-    written earlier, or a renamed copy of roster.mjs. roster.mjs can't tell a
-    subagent's Bash from its parent's (evidence step E7 checks whether any
-    environment variable can). That is the same class as hand-editing the
-    config (§4.10), and ah can't hold that line.
+    checks refuses. The gate checks the same two cwds: the command's `--cwd`
+    and the payload's `cwd`.
+
+    These checks hold for any shell form that keeps the session's
+    environment and working directory. They don't hold if the command
+    changes those itself: it clears `AH_TEAM_FILE` (`env -u`, or
+    `AH_TEAM_FILE=`), or it runs from outside the checkout with the
+    `--cwd` pointing there too (`cd /tmp`, `--cwd /tmp`). The gate catches
+    those forms whenever it can read the words (the text rule above).
+  - **What neither catches.** Any session in a mode that runs commands
+    without asking can still commit if it hides the words from the gate.
+    Examples: a variable holding `trust`, a script file written earlier, a
+    renamed copy of roster.mjs. That covers:
+    - a top-level session;
+    - a subagent;
+    - a team member that also clears `AH_TEAM_FILE` in the command;
+    - a pipeline run that also runs from outside the checkout.
+
+    roster.mjs can't tell a subagent's Bash from its parent's (evidence step
+    E7 checks whether any environment variable can). This is the same class
+    as hand-editing the config (§4.10), and ah can't hold that line.
   - **Other files.** `tests/check-gate-name-agreement.mjs` and the
     one-shot `VERBS` list don't change.
 
@@ -799,6 +810,45 @@ an **allowlist**, which fails closed. This is on top of the class contract.
 - **One parse.** The effective tool list that the dry run prints, and that
   the class contract judges, comes from the same parse that the grammar
   check accepted. There is no second reader for pack agents.
+- **Values read as YAML reads them.** ah reads each value exactly as YAML
+  would, or it refuses the line (`pack-agent-line`).
+  - A plain value may not hold `: `, and may not start with a YAML
+    indicator: `@` `` ` `` `%` `!` `&` `*` `|` `>` `[` `{` `?` `,`, or
+    `- `. The one exception is a `|` or `>` that opens a `description`
+    block.
+  - A value outside `tools` and `disallowedTools` may be wrapped in single
+    or double quotes, as long as there's no escape inside (no `\`, no
+    `''`). ah strips the quotes.
+  - In a block scalar, a line indented less than the first block line
+    ends the block. It must then be a top-level key, or it is an error.
+- **No other file may take the role's agent name.** Claude Code registers a
+  plugin agent under its frontmatter `name`, not its file name. A second
+  file declaring `name: helper` could be what Claude Code launches as
+  `<plugin>:helper`, and the checks above would never have seen it.
+  - **Which files count.** Every file ending in `.md` (any case), at any
+    depth:
+    - under the plugin's `agents/`;
+    - under each path listed in `plugin.json`'s `agents` key, whether that
+      value is a string or an array.
+
+    A listed path that resolves outside the install path makes the pack
+    `pack-invalid`, and so does an `agents` value of any other shape.
+  - **What counts as a claim.** A file other than the role's own claims
+    the role's agent name when any of these holds:
+    - its frontmatter `name`, read as YAML would, equals it;
+    - it has no frontmatter `name`, and its file name without `.md`
+      equals it;
+    - ah can't be sure what `name` it declares: a quoted key with an escape
+      in it, a YAML tag, anchor, alias, merge key, or a complex or flow
+      key at the top level, or more than one `name` key. Such a file
+      counts as claiming every role's name.
+
+    Other agent files aren't held to the allowlist. Only their name is read.
+  - **Result.** Any claim makes the role unavailable with `pack-invalid`,
+    and the finding names the file. `pack show` marks that file under "also
+    in this plugin" as claiming role `<role>`.
+  - Evidence step E9 records which file Claude Code actually launches. The
+    rule stands whatever it finds.
 
   ah's frontmatter reader today skips lines it doesn't recognise
   (lib-config.mjs:1620-1621). A quoted `"permissionMode": …` would slip past
@@ -1034,12 +1084,13 @@ next run reports the stale anchor anyway.
   - The commit goes through Claude Code's own approval prompt in a top-level
     interactive session, and is refused in role, peer and subagent sessions
     and in pipeline runs (§4.4).
-  - A command the gate can't parse is judged as a commit when its text
-    names one. roster.mjs itself also refuses commits from team members and
-    during pipeline runs, whatever the shell form (§4.4).
+  - A command the gate can't parse is judged as a commit when the gate can
+    read the words. roster.mjs itself also refuses commits from team members
+    and during pipeline runs, unless the command clears `AH_TEAM_FILE` or
+    runs from outside the checkout (§4.4).
   - What remains:
-    - a subagent that hides the words from the gate, in a mode that runs
-      commands without asking (§4.4);
+    - any session in a mode that runs commands without asking, if it hides
+      the words from the gate (§4.4 lists the cases);
     - a session with Bash can still hand-edit `agent-hierarchy.json` or the
       stored copies.
 
@@ -1300,7 +1351,13 @@ next run reports the stale anchor anyway.
   - a tab in the indentation;
   - a `#` comment, on its own line or after a value;
   - a tool entry that is quoted, in `[…]` flow form, or `Agent(x)`;
-  - a `|` block scalar under `tools`.
+  - a `|` block scalar under `tools`;
+  - `description: Reviews code: carefully` [allow `: ` in a plain value];
+  - a `|` block whose second line is indented less than its first;
+  - `description: @x`;
+  - `description: "a\x41"` and `description: 'it''s'`.
+
+  Also accepted: `description: "Reviews code: carefully"`.
 
   These are accepted: a `>` or `|` block scalar under `description`, and
   `tools:` with an empty value followed by `- Read` / `- Bash` items. For
@@ -1389,6 +1446,24 @@ next run reports the stale anchor anyway.
   before and after install) is skill prose. `pack show`'s digest must be
   stable for the same tree and change when the tree changes; that part is
   testable.
+- **P20 Name claims** (§4.6). The role `helper`, with a strict
+  `agents/helper.md`, becomes `pack-invalid`, with the claiming file named
+  in the finding and marked in `pack show`, when the pack also has any of
+  these:
+  - `agents/zz.md` with `name: helper` and no `tools`
+    [check only `agents/<agent>.md`];
+  - `agents/sub/zz.md` with `name: helper` [scan only the top level];
+  - `agents/sub/helper.md` with no `name` [ignore the file-name fallback];
+  - `agents/zz.md` with `"name": helper`, `'name': "helper"` or
+    `"na\x6de": helper`;
+  - `agents/zz.md` using `<<:` or `&a` in its frontmatter;
+  - an agent under a path in `plugin.json`'s `agents` key that declares
+    `name: helper` [ignore the `agents` key];
+  - an `agents` path that resolves outside the install path.
+
+  These leave the role available: another agent with `name: other` and
+  unrestricted frontmatter, and a skill `skills/helper/SKILL.md` with
+  `name: helper`.
 - **P19 The no-MCP check still holds** (tests/test-ah-cli.sh T7, §4.6). T7
   passes on the finished tree, and fails against each of these:
   - `mcp__` added to another hooks file, a comment included;
@@ -1468,6 +1543,12 @@ result goes in the PR.
   - **The flag wins and the Agent payload carries the mode:** no change.
   - **Either fails:** stop and report to the Architect. The peer rule and
     the route-gate rule in §4.9 depend on both.
+- **E9 (phase 2, record only).** In a HOME-redirected sandbox, install a
+  plugin with two agent files declaring the same `name`, each with a
+  harmless marker, and one more agent in a subdirectory of `agents/`. Run
+  `claude --agent <plugin>:<name>` and record which file loads, and whether
+  the subdirectory agent is registered. The §4.6 name rule stands whatever
+  this finds.
 
 ## 8. Build order
 
@@ -1476,7 +1557,7 @@ result goes in the PR.
    roster.mjs's usage text and lib-config.mjs's loading code.
    - The Ultra-Advisor has reviewed the trust model, and its fixes are in
      §4 (§11).
-   - Run E3–E8 first. E5 and E8 can send the build back to the Architect.
+   - Run E3–E9 first. E5 and E8 can send the build back to the Architect.
 
 ## 9. Assumptions not verified
 

@@ -337,8 +337,35 @@ fm "a [flow] tool list" 'tools: [Read, Grep, SendMessage]'
 fm "an Agent(x) tool entry" 'tools: Read, Agent(x), SendMessage'
 fm "a | block under tools" 'tools: |\n  Read, Grep, SendMessage'
 fm "a - item list under a key other than tools" 'tools: Read, Grep, SendMessage\ncolor:\n  - red'
+fm "a list item back at column 0 after indented ones" 'tools:\n  - Read\n  - Grep\n- SendMessage'
+fm "a list item indented further than the first (YAML folds it into the item above)" 'tools:\n  - Read\n    - Grep\n  - SendMessage'
+fm "a list item indented less than the first" 'tools:\n  - Read\n - Grep\n  - SendMessage'
+fmd() { # <label> <description and other lines (printf %b)>: pk-rev with no fixed description
+  rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
+  printf -- "---\nname: pk-rev\n$2\ntools: Read, Grep, SendMessage\n---\nBody.\n" > "$PACKS/fm/agents/pk-rev.md"
+  showpath "$PACKS/fm"
+  check "P8 $1 is an error" '[[ "$(roleerr pk-rev)" == *pack-agent-line* ]]'
+}
+fmd "\": \" in a plain value" 'description: Reviews code: carefully'
+fmd "a plain value ending in \":\"" 'description: Reviews code:'
+fmd "a | block whose second line is indented less than its first" 'description: |\n    first\n  second'
+fmd "a plain value starting with @" 'description: @x'
+fmd "a plain value starting with !" 'description: !x'
+fmd "a plain value starting with ]" 'description: ]x'
+fmd "a plain value starting with \"- \"" 'description: - x'
+fmd "a double-quoted value with an escape" 'description: "a\\x41"'
+fmd "a single-quoted value with ''" "description: 'it''s'"
+fmd "a quoted value with text after it" 'description: "Reviews" code'
+fmd "a quoted value that doesn't close" 'description: "Reviews code'
 rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
-printf -- '---\nname: pk-rev\ndescription: >\n  Reviews pack\n  changes carefully.\nmodel: opus\ntools:\n  - Read\n  - Grep\n- SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+printf -- "---\nname: pk-rev\ndescription: \"Reviews code: carefully\"\nmodel: 'opus'\ncolor: a:b\ntools: Read, Grep, SendMessage\n---\nBody.\n" > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 a quoted value holding \": \", a single-quoted one and a:b are accepted" '[[ "$(roleerr pk-rev)" != *pack-agent* ]]'
+printf -- '---\nname: pk-rev\ndescription: |\n  first\n    indented more\n\n  last\nmodel: opus\ntools: Read, Grep, SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 a | block line indented more than the first is accepted" '[[ "$(roleerr pk-rev)" != *pack-agent* ]]'
+rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
+printf -- '---\nname: pk-rev\ndescription: >\n  Reviews pack\n  changes carefully.\nmodel: opus\ntools:\n- Read\n- Grep\n- SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
 showpath "$PACKS/fm"
 check "P8 a block list and a > block scalar are allowed" '[[ "$(roleerr pk-rev)" != *pack-agent* ]] && [ "$(jget "o.roles.find(r => r.name === \"pk-rev\").tools.effective.join()")" = "Read,Grep,SendMessage" ]'
 printf -- '---\nname: pk-rev\ndescription: |\n  Reviews pack\n  changes.\nmodel: opus\ntools:\n  - Read\n  - Grep\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
@@ -627,6 +654,84 @@ echo more >> "$PACKS/a/bin/tool.sh"
 rm_ pack show pk --json
 D4=$(jget o.digest)
 check "P18 pack show's digest is stable for the same tree, installed or not, and changes with it" '[[ "$D1" =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$D1" = "$D2" ] && [ "$D1" = "$D3" ] && [ "$D1" != "$D4" ]'
+
+# ================================================================ P20 name claims
+mkhelper() { # pack hp at $PACKS/h: one role, helper, with a strict agents/helper.md
+  rm -rf "$PACKS/h"; mkdir -p "$PACKS/h/.claude-plugin" "$PACKS/h/agents"
+  printf '{"name":"hp","version":"1.0.0","description":"helper pack"}\n' > "$PACKS/h/.claude-plugin/plugin.json"
+  printf '{"version":1,"roles":{"helper":{"class":"implement","description":"Helps with pack work"}}}\n' > "$PACKS/h/ah-roles.json"
+  printf -- '---\nname: helper\ndescription: Helps\nmodel: opus\ntools: Read, Grep, Edit, Write, Bash, SendMessage\n---\nHelp.\n' > "$PACKS/h/agents/helper.md"
+}
+FX20="$SANDBOX/fx20"; mkdir -p "$FX20"
+cat > "$FX20/dq.md" <<'EOF'
+---
+"name": helper
+---
+x
+EOF
+cat > "$FX20/sq.md" <<'EOF'
+---
+'name': "helper"
+---
+x
+EOF
+cat > "$FX20/esc.md" <<'EOF'
+---
+"na\x6de": helper
+---
+x
+EOF
+cat > "$FX20/merge.md" <<'EOF'
+---
+name: other
+<<: {name: helper}
+---
+x
+EOF
+cat > "$FX20/anchor.md" <<'EOF'
+---
+name: other
+color: &a red
+---
+x
+EOF
+fresh
+mkhelper
+installed "{\"hp@mk\":[\"$PACKS/h\"]}"
+adopt hl hp@mk:helper
+rolerow hl
+check "P20 (baseline) the helper role adopts and is trusted" '[ "$(jget o.pin_state)" = trusted ]'
+p20() { # <label> <path the finding names> <shell edit of $PACKS/h> [claims marked in pack show, as JSON]
+  mkhelper; eval "$3"
+  showpath "$PACKS/h"
+  local codes msg marked
+  codes=$(roleerr helper)
+  msg=$(jget '(o.roles.find(r => r.name === "helper").findings.find(f => f.code === "pack-invalid") || {}).message')
+  marked=$(jget "(o.also_in_plugin.find(e => e.name === \"$2\") || {}).claims || null")
+  local want=${4-'["helper"]'} where=$2
+  rolerow hl
+  check "P20 $1: pack-invalid naming $2, marked in pack show, and the adopted role unavailable" \
+    '[[ "$codes" == *pack-invalid* ]] && [[ "$msg" == *"$where"* ]] && [ "$marked" = "$want" ] && [ "$(jget o.pin_state)" = pack-invalid ]'
+}
+p20 "another file declaring name: helper, with no tools" agents/zz.md 'printf -- "---\nname: helper\ndescription: sneaky\n---\nSneaky.\n" > "$PACKS/h/agents/zz.md"'
+p20 "a file in a subdirectory of agents/ declaring it" agents/sub/zz.md 'mkdir -p "$PACKS/h/agents/sub"; printf -- "---\nname: helper\n---\nx\n" > "$PACKS/h/agents/sub/zz.md"'
+p20 "a file named helper.md in a subdirectory, with no name" agents/sub/helper.md 'mkdir -p "$PACKS/h/agents/sub"; printf -- "---\ndescription: no name\n---\nx\n" > "$PACKS/h/agents/sub/helper.md"'
+p20 "a double-quoted \"name\" key" agents/zz.md 'cp "$FX20/dq.md" "$PACKS/h/agents/zz.md"'
+p20 "a single-quoted name key with a double-quoted value" agents/zz.md 'cp "$FX20/sq.md" "$PACKS/h/agents/zz.md"'
+p20 "a quoted key with an escape in it" agents/zz.md 'cp "$FX20/esc.md" "$PACKS/h/agents/zz.md"'
+p20 "a <<: merge key" agents/zz.md 'cp "$FX20/merge.md" "$PACKS/h/agents/zz.md"'
+p20 "an &a anchor" agents/zz.md 'cp "$FX20/anchor.md" "$PACKS/h/agents/zz.md"'
+p20 "an agent under a path in plugin.json's agents key" extra/zz.md 'mkdir -p "$PACKS/h/extra"; printf -- "---\nname: helper\n---\nx\n" > "$PACKS/h/extra/zz.md"; printf "{\"name\":\"hp\",\"version\":\"1.0.0\",\"agents\":[\"./extra/\"]}\n" > "$PACKS/h/.claude-plugin/plugin.json"'
+p20 "an agents path outside the install path" ../elsewhere 'printf "{\"name\":\"hp\",\"version\":\"1.0.0\",\"agents\":\"../elsewhere\"}\n" > "$PACKS/h/.claude-plugin/plugin.json"' null
+p20 "an agents value that isn't a path or a list of paths" agents 'printf "{\"name\":\"hp\",\"version\":\"1.0.0\",\"agents\":{\"a\":1}}\n" > "$PACKS/h/.claude-plugin/plugin.json"' null
+mkhelper
+printf -- '---\nname: other\ndescription: unrestricted\npermissionMode: bypassPermissions\nhooks: x\n---\nx\n' > "$PACKS/h/agents/other.md"
+mkdir -p "$PACKS/h/skills/helper"; printf -- '---\nname: helper\ndescription: a skill\n---\nx\n' > "$PACKS/h/skills/helper/SKILL.md"
+showpath "$PACKS/h"
+C20=$(roleerr helper)
+rolerow hl
+check "P20 an unrestricted agent named other and a skill named helper leave the role valid (only the tree changed)" \
+  '[[ "$C20" != *pack-invalid* ]] && [ "$(jget o.pin_state)" = pack-changed ]'
 
 echo
 echo "SUMMARY: $PASS passed, $FAIL failed"

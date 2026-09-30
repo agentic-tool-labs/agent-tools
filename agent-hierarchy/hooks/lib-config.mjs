@@ -28,7 +28,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Cycle with lib-roster.mjs (which imports ROLES/VALID_MODELS_BY_ROLE from here): safe only
@@ -1949,6 +1949,146 @@ export function writeStoredCopy(pin, { row, agentText, files }) {
   return path;
 }
 
+/**
+ * The agent name a (non-pack-checked) agent file declares, read as YAML would: `{name}`, `{none}`
+ * (no `name`, or a null one, or no frontmatter) or `{unsure}` when ah can't be sure — an escape in a
+ * quoted key, a YAML tag, anchor, alias or merge key, a complex or flow key at the top level, more
+ * than one `name` key, or a `name` value that spans lines, is a flow collection or doesn't decode.
+ */
+function declaredAgentName(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines[0].replace(/^﻿/, "").trim() !== "---") return { none: true };
+  const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+  if (end === -1) return { none: true };
+  const unsure = { unsure: true };
+  let value;
+  let count = 0;
+  for (let i = 1; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const node = line.replace(/^\s*(?:-\s+)*/, "");
+    if (/^[&*!]/.test(node) || /^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s"'#][^:]*?)\s*:\s+[&*!]/.test(node) || /^<<\s*:/.test(node)) return unsure;
+    if (/^\s/.test(line) || /^-(\s|$)/.test(line)) continue;
+    if (/^(\?|[{[])/.test(line)) return unsure;
+    let m;
+    let key;
+    let rest;
+    if ((m = /^"((?:[^"\\]|\\.)*)"\s*:(?:\s+(.*))?$/.exec(line))) {
+      if (m[1].includes("\\")) return unsure;
+      [key, rest] = [m[1], m[2]];
+    } else if ((m = /^'((?:[^']|'')*)'\s*:(?:\s+(.*))?$/.exec(line))) {
+      if (m[1].includes("''")) return unsure;
+      [key, rest] = [m[1], m[2]];
+    } else if ((m = /^(.*?)\s*:(?:\s+(.*))?$/.exec(line))) [key, rest] = [m[1], m[2]];
+    else continue;
+    if (key !== "name") continue;
+    count += 1;
+    const next = lines.slice(i + 1, end).find((l) => l.trim() && !/^\s*#/.test(l));
+    if (next !== undefined && /^\s/.test(next)) return unsure;
+    const v = (rest || "").trim();
+    if (v[0] === '"') {
+      try {
+        value = JSON.parse(v.replace(/\s+#.*$/, ""));
+      } catch {
+        return unsure;
+      }
+    } else if (v[0] === "'") {
+      const q = /^'((?:[^']|'')*)'(?:\s+#.*)?$/.exec(v);
+      if (!q) return unsure;
+      value = q[1].replace(/''/g, "'");
+    } else if (/^[|>[{]/.test(v)) return unsure;
+    else {
+      const plain = v.replace(/\s+#.*$/, "");
+      value = plain === "" || /^(~|null|Null|NULL)$/.test(plain) ? null : plain;
+    }
+  }
+  if (count > 1) return unsure;
+  return value === null || value === undefined ? { none: true } : { name: String(value) };
+}
+
+/** The finding for agent files that take pack agent `agent`'s name. */
+export function packClaimMessage(plugin, agent, files) {
+  return `${files.map(escapeTerminal).join(", ")} also ${files.length > 1 ? "take" : "takes"} the agent name ${agent}, so Claude Code might launch ${files.length > 1 ? "one of them" : "it"} as ${escapeTerminal(plugin)}:${agent} instead of agents/${agent}.md`;
+}
+
+const packClaimsCache = new Map();
+
+/**
+ * Agent files that take a pack role's agent name. Claude Code registers a plugin agent under its
+ * frontmatter `name`, so any `.md` (any case, any depth) under `agents/` or under a path in
+ * plugin.json's `agents` could be what `<plugin>:<agent>` launches. A file other than the role's own
+ * claims the role when it declares that name, when it declares none and its file name is that name,
+ * or when ah can't be sure what it declares (then it claims every role). `{error, byRole, files}`:
+ * `error` is a message when plugin.json's `agents` isn't a path or a list of paths, or one resolves
+ * outside `dir`; `byRole` maps a role to the claiming files, and `files` a file to the roles it
+ * claims, both by `/`-separated path relative to `dir`.
+ */
+export function packNameClaims(dir, manifest) {
+  if (packClaimsCache.has(dir)) return packClaimsCache.get(dir);
+  const result = { error: null, byRole: new Map(), files: new Map() };
+  packClaimsCache.set(dir, result);
+  const found = new Set();
+  const walk = (p) => {
+    let st;
+    try {
+      st = lstatSync(p);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) for (const n of readdirSync(p)) walk(join(p, n));
+    else if (st.isFile() && /\.md$/i.test(p)) found.add(p);
+  };
+  walk(join(dir, "agents"));
+  let pj = null;
+  try {
+    pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+  } catch {}
+  if (pj && typeof pj === "object" && !Array.isArray(pj) && pj.agents !== undefined) {
+    const paths = typeof pj.agents === "string" ? [pj.agents] : Array.isArray(pj.agents) && pj.agents.every((p) => typeof p === "string") ? pj.agents : null;
+    if (!paths) {
+      result.error = "plugin.json's agents must be a path or a list of paths";
+      return result;
+    }
+    for (const p of paths) {
+      const rel = relative(dir, resolve(dir, p));
+      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        result.error = `plugin.json's agents path ${escapeTerminal(JSON.stringify(p))} resolves outside the plugin`;
+        return result;
+      }
+      walk(resolve(dir, p));
+    }
+  }
+  const sameFile = (a, b) => {
+    try {
+      const x = statSync(a);
+      const y = statSync(b);
+      return x.ino === y.ino && x.dev === y.dev;
+    } catch {
+      return false;
+    }
+  };
+  const roles = Object.entries((manifest && manifest.roles) || {}).filter(([, m]) => m && m.agent && !m.error);
+  for (const abs of [...found].sort()) {
+    let decl;
+    try {
+      const text = decodeUtf8(readFileSync(abs));
+      decl = text === null ? { unsure: true } : declaredAgentName(text);
+    } catch {
+      decl = { unsure: true };
+    }
+    const rel = relative(dir, abs).split(sep).join("/");
+    for (const [role, m] of roles) {
+      if (sameFile(abs, join(dir, "agents", `${m.agent}.md`))) continue;
+      if (!(decl.unsure || decl.name === m.agent || (decl.none && basename(abs).replace(/\.md$/i, "") === m.agent))) continue;
+      if (!result.byRole.has(role)) result.byRole.set(role, []);
+      result.byRole.get(role).push(rel);
+      if (!result.files.has(rel)) result.files.set(rel, []);
+      result.files.get(rel).push(role);
+    }
+  }
+  return result;
+}
+
 /** One install record's view of pack role `role`: status "ok" with the pin, or the reason it can't be used. */
 function packCandidate(record, role) {
   const base = { record, status: "ok", message: null, subcode: null, manifestRole: null, agentText: null, agentPath: null, files: null, pin: null };
@@ -1970,6 +2110,10 @@ function packCandidate(record, role) {
   if (agentText === null) return { ...base, status: "pack-invalid", message: `${agentPath} is not valid UTF-8`, manifestRole: r, agentPath };
   const hidden = hiddenCharAt(agentText);
   if (hidden) return { ...base, status: "pack-invalid", subcode: "pack-hidden-chars", message: `${agentPath} holds a hidden character (${hidden})`, manifestRole: r, agentPath };
+  const claims = packNameClaims(record.installPath, manifest);
+  if (claims.error) return { ...base, status: "pack-invalid", message: `${record.key}: ${claims.error}`, manifestRole: r, agentText, agentPath };
+  const claimedBy = claims.byRole.get(role);
+  if (claimedBy) return { ...base, status: "pack-invalid", message: packClaimMessage(record.plugin, r.agent, claimedBy), manifestRole: r, agentText, agentPath };
   const tree = packTree(record.installPath);
   if (tree.error) return { ...base, status: "pack-invalid", message: `${record.installPath} could not be read: ${tree.error}`, manifestRole: r, agentText, agentPath };
   if (tree.symlink) return { ...base, status: "pack-symlink", message: `${record.installPath} holds a symbolic link, ${tree.symlink}, and what it points at isn't pinned`, manifestRole: r, agentText, agentPath };
@@ -2043,11 +2187,29 @@ export function expandFromRow(entry) {
   return { raw, pack };
 }
 
+const indentOf = (line) => line.length - line.trimStart().length;
+
+/**
+ * Why YAML would refuse a one-line value, or read it as something other than its text; null when
+ * it reads as written. A quoted value must close at the end of the line with no escape inside. A
+ * plain one can't hold `: `, end in `:`, or start with a YAML indicator (`&`, `*` and `#` have
+ * their own findings).
+ */
+function yamlValueProblem(value) {
+  if (value[0] === '"' || value[0] === "'") {
+    return /^"[^"\\]*"$|^'[^']*'$/.test(value) ? null : "a quoted value must close at the end of the line, with no escape inside (no \\ or '')";
+  }
+  if (/:(\s|$)/.test(value)) return 'a plain value can\'t hold ": " or end in ":" (quote it)';
+  if (/^([@`%!|>[\]{},?]|-(\s|$))/.test(value)) return "a plain value can't start with a YAML indicator (quote it)";
+  return null;
+}
+
 /**
  * The one reader of a pack agent's frontmatter, strict so that it reads exactly what YAML would:
  * only `PACK_AGENT_KEYS`, each written once as an unquoted top-level key; a continuation only as a
  * `- item` under an empty-valued `tools` or `disallowedTools`, or as a line of a `|` / `>` block
- * scalar under `description`; no tab in indentation, no `#` comment, no YAML anchor, alias or merge
+ * scalar under `description`, list items at the first item's indentation and block lines at least
+ * at the first line's; a one-line value that YAML reads as written; no tab in indentation, no `#` comment, no YAML anchor, alias or merge
  * key, no line that can't be classified; `tools` required and non-empty, and every tool entry a
  * plain name. `{findings, fm}`: every finding is an error, and `fm` (the shape
  * `parseAgentFrontmatter` returns) is what the dry run shows and the class contract judges. It fails
@@ -2105,12 +2267,16 @@ export function packAgentParse(text, path = null) {
       if (!cur) err("pack-agent-line", `line ${JSON.stringify(line)} continues no key`);
       else if (cur.kind === "list") {
         const item = /^\s*-\s+(\S.*)$/.exec(line);
+        if (item) cur.indent ??= indentOf(line);
         if (!item) err("pack-agent-line", `line ${JSON.stringify(line)} isn't a "- item" of the list above`);
+        else if (indentOf(line) !== cur.indent) err("pack-agent-line", `line ${JSON.stringify(line)} isn't indented like the list's first item`);
         else if (/^[&*]/.test(item[1]) || /<<\s*:/.test(item[1])) err("pack-agent-yaml", `YAML anchor, alias or merge key: ${JSON.stringify(line.trim())}`);
         else cur.items.push(item[1].trim());
       } else if (cur.kind === "block") {
+        if (/^\s/.test(line)) cur.indent ??= indentOf(line);
         if (!/^\s/.test(line)) err("pack-agent-line", `line ${JSON.stringify(line)} isn't indented inside the block above`);
-        else cur.block.push(line.replace(/^\s+/, ""));
+        else if (indentOf(line) < cur.indent) err("pack-agent-line", `line ${JSON.stringify(line)} is indented less than the block's first line, which ends the block, yet it isn't a key`);
+        else cur.block.push(line.slice(cur.indent));
       } else {
         err("pack-agent-line", `line ${JSON.stringify(line)} continues a one-line value — use "- item" lines under an empty tools or disallowedTools, or a | or > block under description`);
       }
@@ -2144,7 +2310,11 @@ export function packAgentParse(text, path = null) {
         cur = { key, kind: "none", value: "" };
       }
     } else if (value === "" && toolKey) cur = { key, kind: "list", items: [] };
-    else cur = { key, kind: "none", value };
+    else {
+      const why = value && yamlValueProblem(value);
+      if (why) err("pack-agent-line", `line ${JSON.stringify(line)}: ${why}`);
+      cur = { key, kind: "none", value };
+    }
   }
   finish();
   if (!seen.has("tools")) err("pack-agent-tools", "tools is required: without it the agent inherits every tool, MCP tools and Agent included");
@@ -2194,6 +2364,9 @@ export function packExtras(dir, manifest) {
     agents = readdirSync(join(dir, "agents")).filter((n) => n.endsWith(".md")).sort();
   } catch {}
   for (const n of agents) if (!named.has(n.slice(0, -3))) extras.push({ kind: "agent", name: `agents/${n}` });
+  const claims = packNameClaims(dir, manifest).files;
+  for (const e of extras) if (e.kind === "agent" && claims.has(e.name)) e.claims = claims.get(e.name);
+  for (const [rel, roles] of claims) if (!extras.some((e) => e.kind === "agent" && e.name === rel)) extras.push({ kind: "agent", name: rel, claims: roles });
   return extras;
 }
 

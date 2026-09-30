@@ -270,11 +270,25 @@ one at a time. Roles only you use can stay where they are, in
   plain unquoted key. `tools` is required, and every tool entry is a plain
   name (no quotes, `[…]` list, or `Tool(scope)` form). A value continues onto
   more lines only as `- item` lines under an empty `tools` or
-  `disallowedTools`, or as a `|` or `>` block under `description`. Tabs in the
-  indentation, `#` comments, and anything else — `permissionMode`, `hooks`, MCP
-  server settings, `skills`, `memory`, a YAML anchor — are errors. ah reads the
-  file this strictly so that it sees exactly the tools YAML would grant. Your
-  own agent files aren't held to this.
+  `disallowedTools`, all at the first item's indentation, or as a `|` or `>`
+  block under `description`, whose lines are indented at least as far as its
+  first. A value holding `: `, or starting with a YAML indicator such as `@`,
+  `!`, `[` or `- `, must be quoted, and a quoted value can't hold an escape
+  (`\` or `''`). Tabs in the indentation, `#` comments, and anything else —
+  `permissionMode`, `hooks`, MCP server settings, `skills`, `memory`, a YAML
+  anchor — are errors. ah reads the file this strictly so that it sees exactly
+  what YAML would, tools included. Your own agent files aren't held to this.
+- No other agent file in the plugin may take the role's agent name, because
+  Claude Code registers a plugin agent under its frontmatter `name`, not its
+  file name. Every `.md` under `agents/` (at any depth) and under the paths in
+  `plugin.json`'s `agents` is checked. One that declares the role's agent
+  name, or declares none and is named `<agent>.md`, or whose name ah can't be
+  sure of (a quoted key with an escape, a YAML tag, anchor, alias or merge
+  key, more than one `name`), makes the role unavailable (`pack-invalid`), and
+  `pack show` marks it as claiming the role. An `agents` path outside the
+  plugin, or an `agents` value that isn't a path or a list of paths, does the
+  same for every role. Only these files' names are read; they aren't held to
+  the rules above.
 
 ### Installing, adopting and trusting
 
@@ -352,11 +366,14 @@ adopted or not, which is Claude Code's side.
 - Adopting and trusting need the exact pin, and your approval in your own
   session; role, peer and subagent sessions and pipeline runs are refused.
   A command that isn't one plain ah command is treated as a trust commit
-  when its text names one, and `roster.mjs` itself refuses a commit from a
-  team member or during a pipeline run, however the command was written.
-  What remains: a subagent in a mode that runs commands without asking could
-  hide the words from the gate, and a session with Bash could still edit the
-  config or the stored copies by hand.
+  when the gate can read the words, and `roster.mjs` itself refuses a commit
+  from a team member or during a pipeline run, unless the command clears
+  `AH_TEAM_FILE` or runs from outside the checkout. What remains: any
+  session in a mode that runs commands without asking could hide the words
+  from the gate — a top-level session, a subagent, a team member that also
+  clears `AH_TEAM_FILE`, a pipeline run that also leaves the checkout — and
+  a session with Bash could still edit the config or the stored copies by
+  hand.
 - Tool limits are role discipline, not a sandbox: a reviewer with Bash can
   still write files. The real boundary is the session's permission mode,
   which is why a pack role never runs with permission checks off.

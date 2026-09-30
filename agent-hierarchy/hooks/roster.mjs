@@ -158,7 +158,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packDigest, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
@@ -911,10 +911,14 @@ function packShow(target) {
   const manifest = readPackManifest(dir, plugin);
   const tree = packTree(dir);
   const reg = record ? registry() : null;
+  const claims = packNameClaims(dir, manifest);
   const roles = Object.entries(manifest.roles).map(([role, m]) => {
     const shown = { name: escapeTerminal(role), fields: shownFields(m.raw), agent: m.agent ? escapeTerminal(m.agent) : null, warnings: m.warnings.map(escapeTerminal), findings: [] };
     if (m.error) shown.findings.push({ level: "error", code: m.error.code, path: null, field: null, message: escapeTerminal(m.error.message), fix: [] });
     if (m.row) {
+      if (claims.error) shown.findings.push({ level: "error", code: "pack-invalid", path: null, field: null, message: claims.error, fix: [] });
+      const claimedBy = claims.byRole.get(role);
+      if (claimedBy) shown.findings.push({ level: "error", code: "pack-invalid", path: join(dir, claimedBy[0]), field: null, message: packClaimMessage(plugin || "?", m.agent, claimedBy), fix: [] });
       const agentPath = join(dir, "agents", `${m.agent}.md`);
       let text = null;
       try {
@@ -959,7 +963,7 @@ function packShow(target) {
     if (r.adopted && r.adopted.length) lines.push(`  adopted as ${r.adopted.map((a) => `${a.name} at ${a.level}, ${a.state}`).join("; ")}`);
   }
   lines.push(result.also_in_plugin.length ? "also in this plugin:" : "also in this plugin: nothing");
-  for (const e of result.also_in_plugin) lines.push(`  ${e.kind}: ${e.name}`);
+  for (const e of result.also_in_plugin) lines.push(`  ${e.kind}: ${e.name}${e.claims ? ` — claims role ${e.claims.join(", ")}` : ""}`);
   if (result.symlink) lines.push(`symbolic link: ${result.symlink}`);
   process.stdout.write(`${lines.join("\n")}\n`);
 }
