@@ -733,6 +733,31 @@ an **allowlist**, which fails closed. This is on top of the class contract.
   that gap.
 - **The dry run** (`role set --from`, `role trust`) prints the effective tool
   list and flags `Bash`, `Agent`, any `mcp__*` tool, `Write` and `Edit`.
+- **The MCP prefix and the no-MCP check.** tests/test-ah-cli.sh T7 (spec
+  0048) requires that no file under `agents/`, `skills/`, `commands/`,
+  `hooks/`, `README.md`, `docs/*.md` or `.claude-plugin/` contains
+  `mcp__`, `mcpServers`, `server.mjs` or `AH_MCP`. Its purpose is to prove
+  that ah ships no MCP server. Flagging MCP tools only reads a third-party
+  tool name, so it doesn't break that rule. But the prefix literal would
+  trip the grep. The rules:
+  - The literal `mcp__` appears in exactly one place in the scanned paths:
+    one constant declaration in `agent-hierarchy/hooks/lib-config.mjs`, on
+    a line of its own that holds nothing else. Every MCP-tool check goes
+    through that constant.
+  - T7 exempts exactly that line, matched by file plus the full line text,
+    whatever its line number. The exempt text is a literal in the test, so
+    changing either one fails T7 until both match. No other file or line is
+    exempt, and the other three patterns get no exemption.
+  - T7 gains one check: there is no `.mcp.json` at the plugin root. That
+    file is how a plugin ships an MCP server, and today's grep can't see it.
+    If it fails on the current tree, stop and report; don't delete anything.
+  - Docs and skill text (`docs/custom-roles.md`, `docs/cli-tools.md`,
+    `skills/agent-role/SKILL.md`) say "MCP tools" and "MCP server settings"
+    in words. They never write the prefix or the key.
+  - Rejected: building the literal out of pieces to get past the grep (it
+    hides the one real occurrence from the check that exists to see it);
+    narrowing T7 to ah's old server names (it weakens the check everywhere
+    to allow one line); and not flagging MCP tools (§4.6 requires it).
 
 A user's own bare-name files are unchanged, and so are existing
 `plugin:agent` rows without `from` (§10 Q6). Pack support for `skills` and
@@ -991,6 +1016,8 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
   covering the format, adopting, trust, install/update/uninstall, the
   pipeline limits (§4.9), and the security notes (§4.10), in plain words. `agent-hierarchy/docs/cli-tools.md`: rows.
 - New `agent-hierarchy/tests/test-role-packs.sh` (§6).
+- `agent-hierarchy/tests/test-ah-cli.sh`: T7, as §4.6 describes (the one
+  exempt line and the `.mcp.json` check). No other change to that file.
 - Version: the next ah minor, in both files.
 
 ## 6. Tests the change needs
@@ -1179,6 +1206,16 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
   before and after install) is skill prose. `pack show`'s digest must be
   stable for the same tree and change when the tree changes; that part is
   testable.
+- **P19 The no-MCP check still holds** (tests/test-ah-cli.sh T7, §4.6). T7
+  passes on the finished tree, and fails against each of these:
+  - `mcp__` added to another hooks file, a comment included;
+  - a second `mcp__` line added to `hooks/lib-config.mjs`;
+  - the exempt line copied, unchanged, into `skills/agent-role/SKILL.md`;
+  - the exempt line changed (for example, a second prefix added to it);
+  - `mcpServers` added to `.claude-plugin/plugin.json`;
+  - an empty `.mcp.json` at the plugin root.
+
+  [exempt the whole file instead of the one line]
 
 ## 7. Evidence steps for the Implementor
 

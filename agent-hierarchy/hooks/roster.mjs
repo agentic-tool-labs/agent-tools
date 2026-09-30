@@ -95,6 +95,16 @@
  *   roster.mjs whoami  [--team <T>] [--cwd <path>]
  *                       Read-only: which team member this session's pane is, and its
  *                       orchestrator's pid / liveness / best-effort reply address.
+ *   roster.mjs role set <name> --from <plugin>@<marketplace>:<role> [--label L] [--description D]
+ *                       [--routes R] [--model M] [--dispatch D] [--level L] (--dry-run | --pin sha256:…)
+ *                       Adopts one role from an installed role pack (a plugin carrying ah-roles.json).
+ *                       The dry run shows what is trusted and prints the pin; the commit needs that pin.
+ *   roster.mjs role trust <name> [--level L] (--dry-run | --pin sha256:…) [--cwd <path>]
+ *                       Shows what changed in an adopted role's pack since it was trusted, and re-pins it.
+ *   roster.mjs pack list [--json] [--cwd <path>]
+ *   roster.mjs pack show <plugin>[@<marketplace>] | --path <dir> [--json] [--cwd <path>]
+ *                       Read-only: installed role packs; one pack's roles, findings, what else the
+ *                       plugin carries, and its content digest.
  *   roster.mjs doctor [--cwd <path>] [--check]
  *                       Read-only self-check: one JSON object, one row per thing that can be
  *                       wrong. `--check` exits 1 when any row is red. Writes nothing, ever.
@@ -141,15 +151,15 @@
  * memory only (no write) — see docs/specs/0008-roster-relocate.md.
  */
 
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
-import { ageSecOf, appendRosterRecord, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentFindings, packDigest, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
@@ -263,7 +273,7 @@ function gitPorcelain(dir) {
 /** Read-only state report: rows a human or an agent can read in one pass. Writes nothing. */
 // ---------------------------------------------------------------- role verbs (custom roles)
 
-const ROLE_FLAGS = new Set(["class", "agent", "label", "description", "routes", "model", "dispatch", "level", "scaffold", "dry-run", "json", "cwd"]);
+const ROLE_FLAGS = new Set(["class", "agent", "label", "description", "routes", "model", "dispatch", "level", "scaffold", "from", "pin", "dry-run", "json", "cwd"]);
 
 /** resolveConfig's scope names → roster level names. */
 function levelOfScope(scope) {
@@ -309,8 +319,15 @@ function roleRows() {
       status,
       path: v ? v.file.found : null,
       findings: v ? v.findings : [],
+      // Adopted from a pack (a built-in included, whose agent the pack then overrides).
+      ...(entry.from ? { from: entry.from, pin_state: packPinState(entry.pack), ...(builtin ? { pack_override: true } : {}) } : {}),
     };
   });
+}
+
+/** `trusted` for an adopted role whose pack checks pass, else its pack reason. */
+function packPinState(pack) {
+  return !pack || pack.status === "ok" ? "trusted" : pack.status;
 }
 
 function roleList() {
@@ -319,7 +336,7 @@ function roleList() {
   const excluded = reg.excludedRoles.map((e) => ({ name: e.name, level: levelOfScope(e.scope), path: e.path, reason: e.reason }));
   if (opts.json === true) return out({ roles, excluded });
   const lines = roles.map(
-    (r) => `${r.name.padEnd(20)} ${r.builtin ? "built-in" : "custom  "} ${r.class.padEnd(9)} ${r.agent.padEnd(26)} ${String(r.model).padEnd(8)} ${String(r.level).padEnd(9)} ${r.placement} — ${r.status}${r.description ? ` — "${r.description}" (${r.description_source})` : ""}`
+    (r) => `${r.name.padEnd(20)} ${r.builtin ? "built-in" : "custom  "} ${r.class.padEnd(9)} ${r.agent.padEnd(26)} ${String(r.model).padEnd(8)} ${String(r.level).padEnd(9)} ${r.placement} — ${r.status}${r.description ? ` — "${r.from ? escapeTerminal(r.description) : r.description}" (${r.description_source})` : ""}${r.from ? ` — from ${r.from} (${r.pin_state})` : ""}`
   );
   for (const e of excluded) lines.push(`EXCLUDED ${e.name} (${e.level}, ${e.path}): ${e.reason}`);
   process.stdout.write(`${lines.join("\n")}\n`);
@@ -329,7 +346,7 @@ function roleList() {
 function seedRow(name, entry) {
   const seed = {};
   for (const [k, v] of Object.entries(entry)) {
-    if (k === "effectiveDescription") continue;
+    if (k === "effectiveDescription" || k === "pack") continue;
     if (k === "dispatch" && v === "peer") continue;
     if (k === "peer" && v === "auto") continue;
     if (!isBuiltinRole(name) && k === "agent" && v === name) continue;
@@ -362,6 +379,8 @@ function scaffoldText(agent, cls, label, description, routes) {
 
 function roleSet(name) {
   if (typeof name !== "string" || !name) fail("role set needs a role name: role set <name> [flags]");
+  if (opts.from !== undefined) return roleSetFrom(name);
+  if (opts.pin !== undefined) fail(`role set ${name}: --pin goes with --from; to re-trust an adopted role, use \`role trust ${name}\``);
   const reg = registry();
   const builtin = isBuiltinRole(name);
   const dry = opts["dry-run"] === true;
@@ -384,6 +403,10 @@ function roleSet(name) {
   const data = readLevelFile(path);
   const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : null;
   const atLevel = layerRoles && layerRoles[name] && typeof layerRoles[name] === "object" && !Array.isArray(layerRoles[name]) ? layerRoles[name] : null;
+  if (atLevel && isFromRow(atLevel)) return roleSetAdoptedFields(name, { level, path, data, layerRoles, atLevel, given, dry, builtin });
+  if (!atLevel && reg.roles[name] && reg.roles[name].from) {
+    fail(`role set ${name}: it is adopted from a pack (${reg.roles[name].from}) at level "${defined}" — edit it there with --level ${defined}`);
+  }
   const row = atLevel ? { ...atLevel } : reg.roles[name] ? seedRow(name, reg.roles[name]) : {};
   for (const k of ["class", "agent", "label", "model", "dispatch"]) if (typeof given[k] === "string") row[k] = given[k];
   for (const k of ["description", "routes"]) {
@@ -530,8 +553,13 @@ function roleRemove(name) {
   const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : null;
   if (!layerRoles || !layerRoles[name]) fail(`role remove ${name}: no row for it at level "${level}" (${path})`);
   if (builtin) {
-    if (layerRoles[name].agent === undefined) fail(`role remove ${name}: a built-in role cannot be removed, and it has no agent override at level "${level}"`);
+    const adopted = isFromRow(layerRoles[name]);
+    if (layerRoles[name].agent === undefined && !adopted) fail(`role remove ${name}: a built-in role cannot be removed, and it has no agent override at level "${level}"`);
     delete layerRoles[name].agent;
+    if (adopted) {
+      delete layerRoles[name].from;
+      delete layerRoles[name].pin;
+    }
     // An empty row would still shadow a wider level's row for this role under whole-row precedence.
     if (!Object.keys(layerRoles[name]).length) delete layerRoles[name];
   } else {
@@ -539,6 +567,377 @@ function roleRemove(name) {
   }
   writeLevelFile(path, data);
   return { removed: name, level, path, override_only: builtin };
+}
+
+// ---------------------------------------------------------------- role packs (adopt, trust, inspect)
+
+/** A pack's fields as the user reviews them: verbatim, with every hidden character shown escaped. */
+function shownFields(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === "string" ? escapeTerminal(v) : v]));
+}
+
+/** The row an adopted role resolves to: the pack's fields with the user's `overlay` laid over them. */
+function adoptedRaw(state, overlay) {
+  const raw = {};
+  for (const k of ["class", "label", "description", "routes", "model", "dispatch"]) if (state.manifestRole.raw[k] !== undefined) raw[k] = state.manifestRole.raw[k];
+  raw.agent = `${state.from.plugin}:${state.manifestRole.agent}`;
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) {
+    if (overlay[k] === undefined) continue;
+    if (overlay[k] === "" && (k === "routes" || k === "description")) delete raw[k];
+    else raw[k] = overlay[k];
+  }
+  return raw;
+}
+
+/** A pack reason as a finding, for a dry run or a refusal. */
+function packStateFinding(state) {
+  return { level: "error", code: state.status, path: state.agentPath || null, field: null, message: `${state.message}${state.subcode && state.subcode !== state.status ? ` [${state.subcode}]` : ""}`, fix: [] };
+}
+
+/**
+ * Everything a person reviews before trusting pack role `state` as `name`: the effective row, the
+ * contract findings and pack-agent findings, the tools, what else the plugin carries, and whether
+ * it takes unattended pipeline work. `{raw, cls, findings, warnings, review}`.
+ */
+function packReview(name, state, overlay) {
+  const builtin = isBuiltinRole(name);
+  const findings = [];
+  const warnings = [];
+  if (state.status !== "ok") findings.push(packStateFinding(state));
+  const raw = adoptedRaw(state, overlay);
+  let cls = raw.class;
+  if (builtin) {
+    cls = roleClass(name, null);
+    if (raw.class !== cls) fail(`role set ${name}: the pack role's class is ${raw.class}, but ${name} is a ${cls} role — a pack role can override a built-in only of its own class`);
+  } else {
+    const c = checkCustomRow(name, raw);
+    if (c.error) fail(`role set ${name}: ${c.error}`);
+    warnings.push(...c.warnings);
+  }
+  const v = validateAgentContract({ role: name, cls, agent: raw.agent, description: builtin ? null : raw.description || null, builtin, cwd });
+  findings.push(...packAgentFindings(state.agentText, state.agentPath), ...v.findings);
+  const manifest = readPackManifest(state.record.installPath, state.from.plugin);
+  const effectiveRoutes = builtin ? null : raw.routes;
+  return {
+    raw,
+    cls,
+    findings,
+    warnings,
+    review: {
+      from: `${state.from.plugin}@${state.from.marketplace}:${state.from.role}`,
+      install_path: state.record.installPath,
+      fields: shownFields(state.manifestRole.raw),
+      agent_file: state.agentPath,
+      tools: packToolReport(state.agentText),
+      also_in_plugin: packExtras(state.record.installPath, manifest).map((e) => ({ ...e, name: escapeTerminal(e.name) })),
+      ...(cls === "implement" && effectiveRoutes ? { unattended: UNATTENDED_LINE } : {}),
+    },
+  };
+}
+
+/**
+ * `role set <name> --from <plugin>@<marketplace>:<role>`: adopt one pack role. The dry run prints
+ * what the user is trusting and the pin; the commit needs exactly that pin, so what is trusted is
+ * what was shown, and stores only `from`, `pin` and the flags passed.
+ */
+function roleSetFrom(name) {
+  const dry = opts["dry-run"] === true;
+  for (const k of ["class", "agent", "scaffold"]) {
+    if (opts[k] !== undefined) fail(`role set ${name}: --${k} can't be used with --from — a pack role's ${k === "scaffold" ? "agent file" : k} comes from the pack. To change it, remove the role and define your own`);
+  }
+  for (const k of ["from", "pin", "label", "description", "routes", "model", "dispatch", "level"]) {
+    if (opts[k] === true) fail(`role set: --${k} needs a value`);
+  }
+  if (!dry && typeof opts.pin !== "string") fail(`role set ${name} --from: committing needs --pin <the pin the dry run printed> — run it with --dry-run first`);
+  const builtin = isBuiltinRole(name);
+  if (builtin) {
+    for (const k of ["label", "description", "routes"]) if (opts[k] !== undefined) fail(`role set ${name}: --${k} does not apply to a built-in role — only --model and --dispatch`);
+  } else {
+    const why = roleNameError(name);
+    if (why) fail(`role set ${name}: ${why}`);
+  }
+  const f = parseFrom(opts.from);
+  if (!f) fail(`role set ${name}: --from must be <plugin>@<marketplace>:<role>, got ${JSON.stringify(opts.from)}`);
+  let marketplace = f.marketplace;
+  if (!marketplace) {
+    const offering = [...new Set(installRecords().filter((r) => r.plugin === f.plugin).map((r) => r.marketplace))];
+    if (!offering.length) fail(`role set ${name}: plugin ${f.plugin} is not installed`);
+    if (offering.length > 1) fail(`role set ${name}: plugin ${f.plugin} is offered by ${offering.length} marketplaces (${offering.join(", ")}) — name one: --from ${f.plugin}@<marketplace>:${f.role}`);
+    marketplace = offering[0];
+  }
+  const from = `${f.plugin}@${marketplace}:${f.role}`;
+  const state = packRoleState(from, null);
+  if (!state.manifestRole || state.manifestRole.error || typeof state.agentText !== "string") {
+    fail(`role set ${name} --from ${from}: ${state.status}: ${state.message}${state.subcode && state.subcode !== state.status ? ` [${state.subcode}]` : ""}`);
+  }
+
+  const reg = registry();
+  const defined = levelOfScope(reg.sources[name]);
+  const level = typeof opts.level === "string" ? requireLevel(opts.level) : defined && defined !== "shipped" ? defined : "global";
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : {};
+  const atLevel = layerRoles[name];
+  if (atLevel && !(isFromRow(atLevel) && atLevel.from === from)) {
+    fail(`role set ${name}: ${name} is already defined at level "${level}" (${path}) ${isFromRow(atLevel) ? `from ${atLevel.from}` : "by a row of its own"} — pick another name or remove it first`);
+  }
+  const row = { from, ...(atLevel ? Object.fromEntries(Object.entries(atLevel).filter(([k]) => k !== "from" && k !== "pin")) : {}) };
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) if (typeof opts[k] === "string") row[k] = opts[k];
+  if (row.dispatch !== undefined && !DISPATCH_MODES.includes(row.dispatch)) fail(`role set ${name}: --dispatch must be one of ${DISPATCH_MODES.join(", ")}`);
+  if (builtin && row.model !== undefined && !CLASSES[roleClass(name, null)].models.includes(row.model)) {
+    fail(`role set ${name}: model ${JSON.stringify(row.model)} is not allowed for ${name} (allowed: ${CLASSES[roleClass(name, null)].models.join(", ")})`);
+  }
+  const { raw, findings, warnings, review } = packReview(name, state, row);
+  const owner = registryRoles(reg).find((r) => r !== name && roleAgent(r, reg.roles[r]) === raw.agent);
+  if (owner) fail(`role set ${name}: agent ${JSON.stringify(raw.agent)} is already the ${owner} role's agent — an agent maps to exactly one role`);
+  if (findings.length) process.stderr.write(`${escapeTerminal(formatFindings(findings))}\n`);
+  if (review.unattended) process.stderr.write(`roster.mjs: ${name} ${review.unattended}\n`);
+  for (const w of warnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
+  const result = { level, path, role: name, from, row: { ...row, pin: state.pin }, pack: review, findings, warnings, pin: state.pin };
+  if (dry) return { dry_run: true, ...result };
+  if (opts.pin !== state.pin) {
+    fail(`role set ${name} --from: --pin ${opts.pin} doesn't match what is installed now (${state.pin}) — nothing was written. Run --dry-run again and review what changed`);
+  }
+  if (hasContractErrors(findings)) fail(`role set ${name} --from: errors stand (above) — nothing was written`);
+  writeStoredCopy(state.pin, { row: state.manifestRole.raw, agentText: state.agentText, files: state.files });
+  writeLevelFile(path, { ...data, version: data.version || CONFIG_VERSION, roles: { ...layerRoles, [name]: { ...row, pin: state.pin } } });
+  return { written: true, ...result };
+}
+
+/** `role set` on a row already adopted from a pack: only the user's own fields change, and the pin
+    stays, since the pack's content doesn't. */
+function roleSetAdoptedFields(name, { level, path, data, layerRoles, atLevel, given, dry, builtin }) {
+  for (const k of ["class", "agent", "scaffold"]) {
+    if (given[k] !== undefined) fail(`role set ${name}: --${k} can't change a role adopted from a pack (${atLevel.from}) — remove it and define your own role to change that`);
+  }
+  const row = { ...atLevel };
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) if (typeof given[k] === "string") row[k] = given[k];
+  if (row.dispatch !== undefined && !DISPATCH_MODES.includes(row.dispatch)) fail(`role set ${name}: --dispatch must be one of ${DISPATCH_MODES.join(", ")}`);
+  const expanded = expandFromRow(row);
+  if (expanded.error) fail(`role set ${name}: ${expanded.error}`);
+  if (builtin) {
+    const cls = roleClass(name, null);
+    if (row.model !== undefined && !CLASSES[cls].models.includes(row.model)) fail(`role set ${name}: model ${JSON.stringify(row.model)} is not allowed for ${name} (allowed: ${CLASSES[cls].models.join(", ")})`);
+  } else {
+    const c = checkCustomRow(name, expanded.raw);
+    if (c.error) fail(`role set ${name}: ${c.error}`);
+  }
+  const result = { level, path, role: name, row };
+  if (dry) return { dry_run: true, ...result };
+  writeLevelFile(path, { ...data, version: data.version || CONFIG_VERSION, roles: { ...layerRoles, [name]: row } });
+  return { written: true, ...result };
+}
+
+/** A line diff of two texts: the system `diff -u` when there is one, else both texts in full. */
+function textDiff(before, after) {
+  if (before === after) return "";
+  const dir = mkdtempSync(join(tmpdir(), "ah-trust-"));
+  try {
+    const a = join(dir, "trusted");
+    const b = join(dir, "installed");
+    writeFileSync(a, before, "utf8");
+    writeFileSync(b, after, "utf8");
+    try {
+      execFileSync("diff", ["-u", a, b], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      return "";
+    } catch (err) {
+      if (err && typeof err.stdout === "string" && err.status === 1) return err.stdout;
+      return `--- trusted\n${before}\n+++ installed\n${after}`;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `role trust <name>`: review what changed in an adopted role's pack since it was trusted, against
+ * this machine's stored copy, and re-pin it. The commit needs exactly the pin the dry run printed,
+ * and keeps the user's own fields.
+ */
+function roleTrust(name) {
+  if (typeof name !== "string" || !name) fail("role trust needs a role name: role trust <name> (--dry-run | --pin sha256:…)");
+  const dry = opts["dry-run"] === true;
+  if (opts.pin === true) fail("role trust: --pin needs a value");
+  if (!dry && typeof opts.pin !== "string") fail(`role trust ${name}: committing needs --pin <the pin the dry run printed> — run it with --dry-run first`);
+  const reg = registry();
+  const excluded = reg.excludedRoles.find((e) => e.name === name);
+  const defined = levelOfScope(reg.sources[name] || (excluded && excluded.scope));
+  const level = typeof opts.level === "string" ? requireLevel(opts.level) : defined && defined !== "shipped" ? defined : fail(`role trust ${name}: it is not defined at any level`);
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : {};
+  const row = layerRoles[name];
+  if (!isFromRow(row)) fail(`role trust ${name}: it isn't adopted from a pack at level "${level}" (${path}) — role trust works only on a row set with --from`);
+  const state = packRoleState(row.from, null);
+  if (!state.manifestRole || state.manifestRole.error || typeof state.agentText !== "string") {
+    fail(`role trust ${name}: ${state.status}: ${state.message}${state.subcode && state.subcode !== state.status ? ` [${state.subcode}]` : ""}`);
+  }
+  const { findings, review } = packReview(name, state, row);
+  const stored = readStoredCopy(row.pin);
+  let changes;
+  if (stored) {
+    const now = state.manifestRole.raw;
+    const fields = [...new Set([...Object.keys(stored.row), ...Object.keys(now)])].sort()
+      .filter((k) => JSON.stringify(stored.row[k]) !== JSON.stringify(now[k]))
+      .map((k) => ({ field: k, trusted: shownFields({ v: stored.row[k] }).v ?? null, installed: shownFields({ v: now[k] }).v ?? null }));
+    const before = new Map(stored.files);
+    const after = new Map(state.files);
+    changes = {
+      stored_copy: true,
+      fields_changed: fields,
+      agent_diff: escapeTerminal(textDiff(stored.agentText, state.agentText)),
+      files: {
+        added: [...after.keys()].filter((p) => !before.has(p)).map(escapeTerminal),
+        removed: [...before.keys()].filter((p) => !after.has(p)).map(escapeTerminal),
+        changed: [...after.keys()].filter((p) => before.has(p) && before.get(p) !== after.get(p)).map(escapeTerminal),
+      },
+    };
+  } else {
+    changes = {
+      stored_copy: false,
+      note: "no stored copy of what was trusted is on this machine, so the whole agent file and every file are shown",
+      fields: shownFields(state.manifestRole.raw),
+      agent_text: escapeTerminal(state.agentText),
+      files: { all: state.files.map(([p]) => escapeTerminal(p)) },
+    };
+  }
+  if (findings.length) process.stderr.write(`${escapeTerminal(formatFindings(findings))}\n`);
+  const result = { level, path, role: name, from: row.from, pinned: row.pin || null, ...changes, pack: review, findings, pin: state.pin };
+  if (dry) return { dry_run: true, ...result };
+  if (opts.pin !== state.pin) fail(`role trust ${name}: --pin ${opts.pin} doesn't match what is installed now (${state.pin}) — nothing was written. Run --dry-run again and review what changed`);
+  if (hasContractErrors(findings)) fail(`role trust ${name}: errors stand (above) — nothing was written`);
+  writeStoredCopy(state.pin, { row: state.manifestRole.raw, agentText: state.agentText, files: state.files });
+  writeLevelFile(path, { ...data, version: data.version || CONFIG_VERSION, roles: { ...layerRoles, [name]: { ...row, pin: state.pin } } });
+  return { written: true, ...result };
+}
+
+/** The registry rows adopted from `from`, as `{name, level, state}` with state `trusted` or the pack reason. */
+function adoptionsOf(reg, from) {
+  return registryRoles(reg)
+    .filter((r) => reg.roles[r].from === from)
+    .map((r) => ({ name: r, level: levelOfScope(reg.sources[r]), state: packPinState(reg.roles[r].pack) }));
+}
+
+/** The version a plugin at `dir` declares in its plugin.json, else `fallback`. */
+function pluginVersionAt(dir, fallback) {
+  try {
+    const pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+    if (pj && typeof pj.version === "string") return pj.version;
+  } catch {}
+  return fallback;
+}
+
+/** One manifest role as `pack list` shows it. */
+function packRoleSummary(role, m) {
+  const src = m.row || (m.raw && typeof m.raw === "object" ? m.raw : {});
+  return { name: escapeTerminal(role), class: src.class ?? null, agent: m.agent ? escapeTerminal(m.agent) : null, routes: typeof src.routes === "string" ? escapeTerminal(src.routes) : null, ...(m.error ? { error: m.error.code } : {}) };
+}
+
+/** `pack list [--json]`: every installed pack, its roles, their adoptions, and a count of what else it carries. */
+function packList() {
+  const reg = registry();
+  const packs = packRecords().map((r) => {
+    const manifest = readPackManifest(r.installPath, r.plugin);
+    return {
+      plugin: r.plugin,
+      marketplace: r.marketplace,
+      version: pluginVersionAt(r.installPath, r.version),
+      path: r.installPath,
+      ...(manifest.error ? { manifest_error: manifest.error } : {}),
+      roles: Object.entries(manifest.roles).map(([role, m]) => ({ ...packRoleSummary(role, m), adopted: adoptionsOf(reg, `${r.plugin}@${r.marketplace}:${role}`) })),
+      also_in_plugin: packExtras(r.installPath, manifest).length,
+    };
+  });
+  if (opts.json === true) return out({ packs });
+  const lines = [];
+  for (const p of packs) {
+    lines.push(`${p.plugin}@${p.marketplace} ${p.version || "?"} — ${p.path}${p.manifest_error ? ` — ${p.manifest_error.code}: ${escapeTerminal(p.manifest_error.message)}` : ""}${p.also_in_plugin ? ` — also carries ${p.also_in_plugin} other thing${p.also_in_plugin > 1 ? "s" : ""} (pack show)` : ""}`);
+    for (const role of p.roles) {
+      const adopted = role.adopted.map((a) => `${a.name} at ${a.level}, ${a.state}`).join("; ");
+      lines.push(`  ${role.name} · ${role.class ?? "?"} · ${role.agent ?? "?"}${role.routes ? ` · routes "${role.routes}"` : ""}${role.error ? ` · ${role.error}` : ""}${adopted ? ` — adopted as ${adopted}` : ""}`);
+    }
+  }
+  process.stdout.write(lines.length ? `${lines.join("\n")}\n` : "no role packs installed\n");
+}
+
+/**
+ * `pack show <plugin>[@<marketplace>]` or `pack show --path <dir>` (a plugin not installed yet): one
+ * pack in full — manifest findings, each role's fields verbatim with its findings, what else the
+ * plugin carries, and the content digest that tells the same tree before and after install.
+ */
+function packShow(target) {
+  let dir;
+  let plugin;
+  let record = null;
+  if (typeof opts.path === "string") {
+    if (target !== undefined) fail("pack show: pass a plugin name or --path <dir>, not both");
+    dir = resolve(cwd, opts.path);
+    if (!existsSync(dir)) fail(`pack show --path: ${dir} does not exist`);
+    plugin = pluginNameAt(dir);
+  } else {
+    if (typeof target !== "string" || !target) fail("usage: roster.mjs pack show <plugin>[@<marketplace>] | pack show --path <dir> [--json]");
+    const [name, marketplace] = target.split("@");
+    const matches = packRecords().filter((r) => r.plugin === name && (!marketplace || r.marketplace === marketplace));
+    if (!matches.length) fail(`pack show: no installed role pack ${target} — pack list shows the installed ones, and pack show --path <dir> reads one that isn't installed`);
+    if (matches.length > 1) fail(`pack show: ${target} has ${matches.length} install records (${matches.map((r) => `${r.key} at ${r.installPath}`).join(", ")}) — name the marketplace, or use --path`);
+    record = matches[0];
+    dir = record.installPath;
+    plugin = record.plugin;
+  }
+  const manifest = readPackManifest(dir, plugin);
+  const tree = packTree(dir);
+  const reg = record ? registry() : null;
+  const roles = Object.entries(manifest.roles).map(([role, m]) => {
+    const shown = { name: escapeTerminal(role), fields: shownFields(m.raw), agent: m.agent ? escapeTerminal(m.agent) : null, warnings: m.warnings.map(escapeTerminal), findings: [] };
+    if (m.error) shown.findings.push({ level: "error", code: m.error.code, path: null, field: null, message: escapeTerminal(m.error.message), fix: [] });
+    if (m.row) {
+      const agentPath = join(dir, "agents", `${m.agent}.md`);
+      let text = null;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(agentPath));
+      } catch (err) {
+        shown.findings.push({ level: "error", code: "pack-invalid", path: agentPath, field: null, message: existsSync(agentPath) ? `${agentPath} is not valid UTF-8` : `no agents/${m.agent}.md`, fix: [] });
+      }
+      if (text !== null) {
+        const hidden = hiddenCharAt(text);
+        if (hidden) shown.findings.push({ level: "error", code: "pack-hidden-chars", path: agentPath, field: null, message: `${agentPath} holds a hidden character (${hidden})`, fix: [] });
+        shown.findings.push(...packAgentFindings(text, agentPath));
+        const v = validateAgentContract({ role, cls: m.row.class, agent: m.row.agent, description: m.row.description || null, cwd, inMemory: { path: agentPath, text } });
+        shown.findings.push(...v.findings.map((x) => ({ ...x, message: escapeTerminal(x.message) })));
+        shown.tools = packToolReport(text);
+      }
+    }
+    if (record) shown.adopted = adoptionsOf(reg, `${record.plugin}@${record.marketplace}:${role}`);
+    return shown;
+  });
+  const result = {
+    plugin,
+    marketplace: record ? record.marketplace : null,
+    installed: Boolean(record),
+    version: pluginVersionAt(dir, record ? record.version : null),
+    path: dir,
+    manifest: { error: manifest.error ? { ...manifest.error, message: escapeTerminal(manifest.error.message) } : null, warnings: manifest.warnings.map(escapeTerminal) },
+    roles,
+    also_in_plugin: packExtras(dir, manifest).map((e) => ({ ...e, name: escapeTerminal(e.name) })),
+    digest: tree.error ? null : packDigest(tree.files),
+    ...(tree.symlink ? { symlink: escapeTerminal(tree.symlink) } : {}),
+  };
+  if (opts.json === true) return out(result);
+  const lines = [`${plugin}${result.marketplace ? `@${result.marketplace}` : ""} ${result.version || "?"} — ${dir}${result.installed ? "" : " (not installed)"}`, `digest ${result.digest}`];
+  if (result.manifest.error) lines.push(`manifest: ${result.manifest.error.code}: ${result.manifest.error.message}`);
+  for (const w of result.manifest.warnings) lines.push(`manifest warning: ${w}`);
+  for (const r of roles) {
+    lines.push(`role ${r.name}: ${JSON.stringify(r.fields)}`);
+    if (r.tools) lines.push(`  tools: ${r.tools.effective.join(", ") || "(none)"}${r.tools.flagged.length ? ` — flagged: ${r.tools.flagged.join(", ")}` : ""}`);
+    for (const x of r.findings) lines.push(`  ${x.level.toUpperCase()} ${x.code}: ${x.message}`);
+    for (const w of r.warnings) lines.push(`  warning: ${w}`);
+    if (r.adopted && r.adopted.length) lines.push(`  adopted as ${r.adopted.map((a) => `${a.name} at ${a.level}, ${a.state}`).join("; ")}`);
+  }
+  lines.push(result.also_in_plugin.length ? "also in this plugin:" : "also in this plugin: nothing");
+  for (const e of result.also_in_plugin) lines.push(`  ${e.kind}: ${e.name}`);
+  if (result.symlink) lines.push(`symbolic link: ${result.symlink}`);
+  process.stdout.write(`${lines.join("\n")}\n`);
 }
 
 // ---------------------------------------------------------------- named rosters (list/copy/delete/use)
@@ -2233,6 +2632,8 @@ function registry() {
  * custom role is refused; a failing built-in override falls back to the shipped `ah:<role>`.
  */
 function spawnValidation(member) {
+  const packRefusal = packSpawnRefusal(member);
+  if (packRefusal) return { refuse: packRefusal, findings: [] };
   if (resolveKind(member) !== KIND_DEFAULT) return null;
   const reg = registry();
   const entry = reg.roles && reg.roles[member.role];
@@ -2246,6 +2647,27 @@ function spawnValidation(member) {
   }
   if (failed) return { refuse: `role ${member.role}: agent ${entry.agent} fails the ${entry.class} contract, so ${member.name} was not launched:\n${formatFindings(result.findings)}`, findings: result.findings };
   return { agent: entry.agent, findings: result.findings, notice: null };
+}
+
+/**
+ * Why a member whose role is adopted from a pack (a built-in overridden by one included) must not
+ * launch, or null. Never under `bypassPermissions`: the session's permission mode is the only
+ * boundary on what a granted tool does. And while a pipeline run is live here, `spawn-one` and
+ * `spawn-ad-hoc` never start one as a reviewer or designer: those are the run's checks, and a pack
+ * must not supply both the code and its check.
+ */
+function packSpawnRefusal(member) {
+  const reg = registry();
+  const entry = reg.roles && reg.roles[member.role];
+  if (!entry || !entry.from) return null;
+  if (member.autoMode === "bypassPermissions") {
+    return `role ${member.role} is adopted from a pack (${entry.from}), and a pack role never runs with auto-mode bypassPermissions — ${member.name} was not launched. Pick another mode (auto is the hands-off one) with \`roster.mjs edit --member ${member.name} --auto-mode auto\`.`;
+  }
+  const slot = roleClass(member.role, reg);
+  if ((cmd === "spawn-one" || cmd === "spawn-ad-hoc") && (slot === "review" || slot === "design") && pipelineRunLive(cwd)) {
+    return `role ${member.role} is adopted from a pack (${entry.from}) and is ${slot}-class, and a pipeline run is live in this checkout — its reviewer and designer are always first-party, so ${member.name} was not launched. Use the built-in ${roleLabel(classBuiltin(slot), reg)} for the run.`;
+  }
+  return null;
 }
 
 /** `spawnShape` behind the spawn-seam revalidation; findings and any fallback notice ride on `validation`. */
@@ -6435,13 +6857,26 @@ try {
     case "role": {
       for (const key of Object.keys(opts)) {
         if (key === "_") continue;
-        if (!ROLE_FLAGS.has(key)) fail(`role: unrecognized flag --${key} (use --class, --agent, --label, --description, --routes, --model, --dispatch, --level, --scaffold, --dry-run, --json, --team, --cwd)`);
+        if (!ROLE_FLAGS.has(key)) fail(`role: unrecognized flag --${key} (use --class, --agent, --label, --description, --routes, --model, --dispatch, --level, --scaffold, --from, --pin, --dry-run, --json, --team, --cwd)`);
       }
       const sub = opts._[0];
       if (sub === "list") roleList();
       else if (sub === "set") out(roleSet(opts._[1]));
       else if (sub === "remove") out(roleRemove(opts._[1]));
-      else fail("usage: roster.mjs role list [--json] | role set <name> [--class C] [--agent A] [--label L] [--description D] [--routes R] [--model M] [--dispatch peer|model] [--level L] [--scaffold repo|user] [--dry-run] | role remove <name> [--level L]  (all with --cwd <abs cwd>)");
+      else if (sub === "trust") out(roleTrust(opts._[1]));
+      else fail("usage: roster.mjs role list [--json] | role set <name> [--class C] [--agent A] [--label L] [--description D] [--routes R] [--model M] [--dispatch peer|model] [--level L] [--scaffold repo|user] [--dry-run] | role set <name> --from <plugin>@<marketplace>:<role> [--label L] [--description D] [--routes R] [--model M] [--dispatch …] [--level L] (--dry-run | --pin sha256:…) | role trust <name> [--level L] (--dry-run | --pin sha256:…) | role remove <name> [--level L]  (all with --cwd <abs cwd>)");
+      break;
+    }
+
+    case "pack": {
+      const allowed = new Set(["json", "path", "cwd"]);
+      for (const key of Object.keys(opts)) {
+        if (key !== "_" && !allowed.has(key)) fail(`pack: unrecognized flag --${key} (use --json, --path, --cwd)`);
+      }
+      const sub = opts._[0];
+      if (sub === "list") packList();
+      else if (sub === "show") packShow(opts._[1]);
+      else fail("usage: roster.mjs pack list [--json] | pack show <plugin>[@<marketplace>] [--json] | pack show --path <dir> [--json]  (all with --cwd <abs cwd>)");
       break;
     }
 
@@ -6467,7 +6902,7 @@ try {
     }
 
     default:
-      fail(`usage: roster.mjs show|init|add|edit|remove|roster|create|next-split|layout-splits|disband|resync|move|spawn-one|spawn-ad-hoc|adopt|untrack|teams|reap|history|checkin|whoami|doctor [--commit] [--level global|repo|repo-user] [--team <name>] [--cwd <path>]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
+      fail(`usage: roster.mjs show|init|add|edit|remove|roster|role|pack|create|next-split|layout-splits|disband|resync|move|spawn-one|spawn-ad-hoc|adopt|untrack|teams|reap|history|checkin|whoami|doctor [--commit] [--level global|repo|repo-user] [--team <name>] [--cwd <path>]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
   }
 } catch (err) {
   fail(err && err.message ? err.message : String(err));

@@ -224,6 +224,117 @@ once and answer its question.
   layout is not offered or sent (it fails closed): the brief comes back
   `blocked` with `harness-prompt` and no options, and you answer in the pane.
 
+## 6. Role packs
+
+A role pack is how you share roles with someone else. It is an ordinary
+Claude Code plugin that also has an `ah-roles.json` at its root. Claude Code
+installs, updates and removes it; ah finds it and lets you adopt its roles
+one at a time. Roles only you use can stay where they are, in
+`~/.claude/agents/` or a repo's `.claude/agents/`.
+
+### The format
+
+```json
+{
+  "version": 1,
+  "roles": {
+    "godot-implementor": {
+      "class": "implement",
+      "agent": "godot-implementor",
+      "label": "Godot Implementor",
+      "description": "Builds Godot 4 features in GDScript",
+      "routes": "Godot scenes, GDScript and shaders",
+      "model": "opus"
+    }
+  }
+}
+```
+
+- `version` must be 1, or the whole pack is unreadable.
+- Each role takes the custom-role fields: `class` (required), `agent`,
+  `label`, `description`, `routes`, `model` and `dispatch`. They follow the
+  same rules as your own rows, and built-in names are refused. `peer` isn't
+  allowed, because it is a local setting. Unknown keys are warned about and
+  ignored.
+- `agent` names a file in the plugin, `agents/<agent>.md`, and defaults to the
+  role's name. It can't point at another plugin's agent or at a path.
+- No hidden text: control characters other than newline and tab, invisible
+  formatting characters (bidirectional controls, zero-width characters) and
+  Unicode tag characters are refused, in the fields and in the agent file. The
+  agent file must be valid UTF-8.
+- A pack agent's frontmatter may hold only `name`, `description`, `model`,
+  `tools`, `disallowedTools`, `color`, `effort` and `maxTurns`, each once, as a
+  plain unquoted key. `tools` is required: a non-empty list with no wildcard.
+  Anything else — `permissionMode`, `hooks`, MCP server settings, `skills`, `memory`,
+  a YAML anchor — is an error. Your own agent files aren't held to this.
+
+### Installing, adopting and trusting
+
+`/ah:agent-role install <source>` takes a git URL, `owner/repo` or a local
+directory. It shows you the pack's roles and everything else the plugin
+carries before anything is installed, installs it, checks that what got
+installed is what you reviewed, and offers its roles.
+
+Nothing from a pack routes work, dispatches or spawns until you adopt it:
+
+    roster.mjs role set <name> --from <plugin>@<marketplace>:<role> --dry-run
+
+The dry run prints the pack's fields exactly as they will reach your
+sessions, the agent's tools with the risky ones flagged, what else the plugin
+carries, and a pin. You commit with that pin (`--pin sha256:…`), and approve
+it in Claude Code's own prompt. The row keeps only `from`, `pin` and your own
+fields; everything else is read from the pack each time. You pick the local
+name, so two packs can offer the same one. A built-in's name replaces that
+built-in's agent, if the pack role has the built-in's class.
+
+The pin covers the whole plugin, not just the agent file: its hooks,
+scripts and skills too. If anything in the plugin changes, even after a
+plain `claude plugin update`, every role adopted from it becomes unavailable
+(`pack-changed`) until you look at the change:
+
+    roster.mjs role trust <name> --dry-run
+
+shows the field changes, a diff of the agent file, and every file added,
+removed or changed since you trusted it. Commit it with the pin it prints.
+ah keeps a copy of what you trusted in `~/.claude/agent-hierarchy/trusted/`,
+and a role is available only when this machine has one. So a repo-level row
+committed by someone else stays unavailable (`pack-untrusted-here`) until you
+trust it yourself.
+
+`/ah:agent-role update <plugin>` and `uninstall <plugin>` drive Claude
+Code's own plugin commands and walk you through re-trusting or removing the
+adopted roles. `roster.mjs pack list` and `pack show` inspect packs at any
+time.
+
+### Pipeline runs
+
+`/ah:pipeline` never merges: it pushes branches and opens draft PRs, and a
+person merges them, relying on the Reviewer's verdict. So a pack role can
+implement work in an unattended run (its dry run says so), but it never fills
+the reviewer or designer slot there: those stay first-party, and while a run
+is live the spawn verbs refuse a pack reviewer or designer. If the built-in
+Reviewer or Architect itself is overridden by a pack role, the run halts
+before it starts. A pack role never runs with auto mode `bypassPermissions`.
+
+### What this does and doesn't protect
+
+- Installing a plugin is Claude Code's trust decision. Once installed, its
+  agents are available in every session and its hooks and MCP servers run in
+  every session, whatever ah does. That's why ah shows all of it before
+  install, and why packs that carry only roles are best.
+- Nothing runs in the hierarchy until you adopt it, one role at a time.
+- The pin is a tripwire, not a gate: it makes a changed role unavailable
+  until you review it, but it can't stop the plugin's own hooks or MCP
+  servers from running the new content.
+- Adopting and trusting need the exact pin, and your approval in your own
+  session; role, peer and subagent sessions and pipeline runs are refused. A
+  session with Bash could still edit the config or the stored copies by hand.
+- Tool limits are role discipline, not a sandbox: a reviewer with Bash can
+  still write files. The real boundary is the session's permission mode.
+- The fields that reach every session's context keep the one-line,
+  160-character, no-backtick limits, and you see them verbatim before you
+  trust them.
+
 ## Where to go next
 
 - [cli-tools.md](./cli-tools.md) — every verb and flag.

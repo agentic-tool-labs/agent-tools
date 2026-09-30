@@ -73,7 +73,12 @@ Seven steps, in order:
    `bypassPermissions`, and do not defer to per-member config.
    **Practical consequence:** if a member never checks in after spawn, run
    `roster.mjs doctor`.
-2. **Resolve the roster**.
+2. **Resolve the roster**. Then check that the run's checks are first-party:
+   if `roster.mjs role list --json` shows the built-in `reviewer` or
+   `architect` row with `pack_override` (its agent comes from a role pack),
+   no first-party role can fill that slot. Halt here, before any work, and
+   say which override to remove — `roster.mjs role remove <reviewer|architect>`
+   restores the shipped agent — or suggest running the items interactively.
 3. **Resolve the active dispatch route** (`msg.mjs route`): `peers` unless
    the user opted into `subagents` or `prefer-peers`. It determines liveness coverage (§ Liveness) and is one of the four
    facts the run-start notification carries.
@@ -146,6 +151,15 @@ queue time, and record them in the item's state:
 
 The routed role owns the item and its rework. Gates, the review loop and the
 caps apply to it exactly as to the built-in it stands in for.
+
+**Gate slots stay first-party.** A role adopted from a role pack (its
+`role list --json` row has `from`) may be an item's implementer, but never
+its reviewer or designer: those are the run's checks, and a pack must not
+supply both the code and its only check. When any step above would pick a
+`from` role as the reviewer or the designer (the user's pick, a spec's
+`Reviewer:` line, or the routing rule), use the built-in instead, and say so
+in the run summary. The spawn verbs refuse a pack reviewer or designer while
+this run's anchor is open, so skipping this rule fails at spawn.
 
 Design and Escalate are routed the same way, by the same precedence (the user,
 then the routing rule, then the built-in — the spec header names only the

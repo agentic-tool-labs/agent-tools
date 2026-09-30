@@ -25,7 +25,8 @@
  * the current working directory — that is what `/hierarchy status` uses.
  */
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1357,6 +1358,26 @@ function resolveTeamScope(cwd, opts) {
   return { name: null, home: null, via: null };
 }
 
+/**
+ * A built-in's `from` row: the pack supplies only its agent (the row keeps its own `model`,
+ * `dispatch` and `peer`), and the pack role's class must be the built-in's. When nothing on this
+ * machine says what the role is, the agent is guessed from `from` so the override still shows, and
+ * fails, as unavailable.
+ */
+function builtinFromRow(role, entry) {
+  const expanded = expandFromRow(entry);
+  const f = parseFrom(entry.from);
+  const guess = f ? `${f.plugin}:${f.role}` : `ah:${role}`;
+  if (expanded.error) {
+    const status = expanded.error.slice(0, expanded.error.indexOf(":"));
+    return { ...entry, agent: guess, pack: { status, message: expanded.error.slice(status.length + 2), subcode: null, from: entry.from, agentText: null, agentPath: null, pinNow: null } };
+  }
+  const pack = expanded.raw.class === BUILTIN_CLASS[role]
+    ? expanded.pack
+    : { ...expanded.pack, status: "pack-invalid", message: `the pack role's class, ${expanded.raw.class}, isn't the ${role}'s class, ${BUILTIN_CLASS[role]}` };
+  return { ...entry, agent: expanded.raw.agent, pack };
+}
+
 /** The selection for a session whose team scope is `team` (null: the default team) in `teamHome`. */
 function scopedRosterSelection(resolvedCwd, opts, team, teamHome) {
   return rosterSelection(resolvedCwd, {
@@ -1507,7 +1528,7 @@ export function resolveConfig(cwd, opts = {}) {
       }
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
       // Shallow replacement: the whole role object is swapped, not merged key-by-key.
-      roles[role] = { ...entry };
+      roles[role] = isFromRow(entry) ? builtinFromRow(role, entry) : { ...entry };
       sources[role] = layer.scope;
       (definedBy[role] ||= []).push(layer.scope);
     }
@@ -1550,13 +1571,18 @@ export function resolveConfig(cwd, opts = {}) {
   const customRows = {};
   for (const name of Object.keys(customRaw).sort()) {
     const info = customRaw[name];
-    const checked = checkCustomRow(name, info.raw);
+    const expanded = isFromRow(info.raw) ? expandFromRow(info.raw) : null;
+    if (expanded && expanded.error) {
+      exclude(name, info, expanded.error);
+      continue;
+    }
+    const checked = checkCustomRow(name, expanded ? expanded.raw : info.raw);
     if (checked.error) {
       exclude(name, info, checked.error);
       continue;
     }
     for (const w of checked.warnings) warnings.push(`ah: custom role "${name}": ${w}`);
-    customRows[name] = checked.row;
+    customRows[name] = expanded ? { ...checked.row, from: info.raw.from, pin: info.raw.pin, pack: expanded.pack } : checked.row;
   }
   // An agent maps to exactly one role: a custom row whose agent a built-in already owns is invalid
   // (built-ins win), and custom rows sharing one agent are all invalid — neither can own it.
@@ -1675,19 +1701,425 @@ export function locateAgentFile(ref, cwd) {
   }
   const plugin = ref.slice(0, colon);
   const agent = ref.slice(colon + 1);
-  let records = [];
-  try {
-    const data = JSON.parse(readFileSync(installedPluginsPath(), "utf8"));
-    const plugins = data && data.plugins && typeof data.plugins === "object" ? data.plugins : {};
-    for (const [key, list] of Object.entries(plugins)) {
-      if (key.split("@")[0] === plugin && Array.isArray(list)) records.push(...list);
-    }
-  } catch {
-    records = [];
+  const records = [];
+  for (const [key, list] of installedPluginEntries()) {
+    if (key.split("@")[0] === plugin) records.push(...list);
   }
   const candidates = records.filter((r) => r && typeof r.installPath === "string").map((r) => join(r.installPath, "agents", `${agent}.md`));
   const path = candidates.find((p) => existsSync(p)) || null;
   return { kind: "plugin", path, level: path ? "plugin" : null, shadowed: null, error: path ? null : "plugin-unresolvable", records: records.length, candidates };
+}
+
+/** installed_plugins.json's `plugins` entries as `[key, records]`, each record list an array: the one
+    reader of that file here. Empty when it can't be read. */
+function installedPluginEntries() {
+  try {
+    const data = JSON.parse(readFileSync(installedPluginsPath(), "utf8"));
+    const plugins = data && data.plugins && typeof data.plugins === "object" ? data.plugins : {};
+    return Object.entries(plugins).filter(([, list]) => Array.isArray(list));
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------- role packs
+
+/**
+ * A role pack is an installed Claude Code plugin whose root holds `ah-roles.json`. Nothing from a pack
+ * reaches the registry until a user adopts one of its roles with `role set <name> --from
+ * <plugin>@<marketplace>:<role>`, which stores only `from`, `pin` and the user's own fields; the
+ * rest is read from the pack each time the row resolves. The pin covers the whole plugin tree, and
+ * a role is available only while the installed tree still hashes to it and this machine holds a
+ * stored copy of what the user trusted.
+ */
+export const PACK_MANIFEST = "ah-roles.json";
+const PACK_ROLE_FIELDS = ["class", "agent", "label", "description", "routes", "model", "dispatch"];
+/** The frontmatter keys a pack agent may use. Anything else could grant more than its tools do. */
+export const PACK_AGENT_KEYS = ["name", "description", "model", "tools", "disallowedTools", "color", "effort", "maxTurns"];
+/** Keys a pack's plugin.json may hold without being listed among what else the plugin carries. */
+const PLUGIN_JSON_PLAIN_KEYS = ["name", "version", "description", "author", "homepage", "repository", "license", "keywords"];
+/** The dry run's line for an implement-class pack role that routes work. */
+export const UNATTENDED_LINE = "takes work in unattended /ah:pipeline runs (pushes draft PRs, does not merge)";
+/** Tools the dry runs flag in a pack agent's effective list, besides every MCP tool. */
+const FLAGGED_TOOLS = ["Bash", "Agent", "Write", "Edit"];
+/** The name prefix Claude Code gives a tool an MCP server provides. The no-MCP check exempts this
+    one line, by its exact text, so every MCP-tool check must go through it. */
+const MCP_TOOL_PREFIX = "mcp__";
+export const PIN_RE = /^sha256:[0-9a-f]{64}$/;
+const FROM_RE = /^([A-Za-z0-9][A-Za-z0-9_.-]*)(?:@([^:@\s]+))?:([^:@\s]+)$/;
+/** Control characters other than newline and tab, Unicode format characters (category Cf, the
+    bidirectional controls and zero-width characters among them) and the tag block. */
+const HIDDEN_CHAR_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u{E0000}-\u{E007F}]/u;
+const HIDDEN_CHAR_RE_G = new RegExp(HIDDEN_CHAR_RE.source, "gu");
+
+/** Every install record with an install path: `{key, plugin, marketplace, installPath, version, scope}`. */
+export function installRecords() {
+  const out = [];
+  for (const [key, list] of installedPluginEntries()) {
+    const at = key.indexOf("@");
+    const plugin = at === -1 ? key : key.slice(0, at);
+    const marketplace = at === -1 ? null : key.slice(at + 1);
+    for (const r of list) {
+      if (!r || typeof r.installPath !== "string") continue;
+      out.push({ key, plugin, marketplace, installPath: r.installPath, version: typeof r.version === "string" ? r.version : null, scope: typeof r.scope === "string" ? r.scope : null });
+    }
+  }
+  return out;
+}
+
+/** Install records whose install path holds a pack manifest. */
+export function packRecords() {
+  return installRecords().filter((r) => existsSync(join(r.installPath, PACK_MANIFEST)));
+}
+
+/** `<plugin>@<marketplace>:<role>` (marketplace optional) → `{plugin, marketplace, role}`, or null. */
+export function parseFrom(from) {
+  const m = typeof from === "string" ? FROM_RE.exec(from) : null;
+  return m ? { plugin: m[1], marketplace: m[2] || null, role: m[3] } : null;
+}
+
+/** Whether a config row adopts a pack role. */
+export function isFromRow(raw) {
+  return !!raw && typeof raw === "object" && !Array.isArray(raw) && typeof raw.from === "string";
+}
+
+/** The first hidden character in `text`, as `U+XXXX`, or null. */
+export function hiddenCharAt(text) {
+  const m = HIDDEN_CHAR_RE.exec(String(text));
+  return m ? `U+${m[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}` : null;
+}
+
+/** Pack text made safe to print: every hidden character (ANSI escapes included) shown as `\u{…}`. */
+export function escapeTerminal(text) {
+  return String(text).replace(HIDDEN_CHAR_RE_G, (c) => `\\u{${c.codePointAt(0).toString(16)}}`);
+}
+
+function sha256Hex(data) {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+/** UTF-8 text of `buf`, keeping a byte-order mark as text; null when the bytes aren't valid UTF-8. */
+function decodeUtf8(buf) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buf);
+  } catch {
+    return null;
+  }
+}
+
+/** A plugin's name at `dir`: its plugin.json `name`, else the directory's basename. */
+export function pluginNameAt(dir) {
+  try {
+    const pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+    if (pj && typeof pj.name === "string" && pj.name) return pj.name;
+  } catch {}
+  return basename(resolve(dir));
+}
+
+function checkPackRole(name, raw, plugin) {
+  const warnings = [];
+  const bad = (code, message) => ({ raw, agent: null, row: null, error: { code, message }, warnings });
+  const nameErr = roleNameError(name);
+  if (nameErr) return bad("pack-invalid", `role ${JSON.stringify(name)}: ${nameErr}`);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return bad("pack-invalid", `role ${name}: must be an object`);
+  if (raw.peer !== undefined) return bad("pack-invalid", `role ${name}: peer is a local setting, not allowed in a pack`);
+  for (const k of Object.keys(raw)) if (!PACK_ROLE_FIELDS.includes(k)) warnings.push(`role ${name}: unknown key ${JSON.stringify(k)} is ignored`);
+  for (const k of PACK_ROLE_FIELDS) {
+    const at = typeof raw[k] === "string" ? hiddenCharAt(raw[k]) : null;
+    if (at) return bad("pack-hidden-chars", `role ${name}: ${k} holds a hidden character (${at})`);
+  }
+  const agent = raw.agent === undefined ? name : raw.agent;
+  if (typeof agent !== "string" || !agent || /[:/\\]|\.\./.test(agent)) {
+    return bad("pack-invalid", `role ${name}: agent ${JSON.stringify(agent)} must name an agent in this plugin, with no ":", "/", "\\" or ".."`);
+  }
+  const fields = Object.fromEntries(PACK_ROLE_FIELDS.filter((k) => raw[k] !== undefined).map((k) => [k, raw[k]]));
+  const checked = checkCustomRow(name, { ...fields, agent: `${plugin}:${agent}` });
+  if (checked.error) return bad("pack-invalid", `role ${name}: ${checked.error}`);
+  warnings.push(...checked.warnings.map((w) => `role ${name}: ${w}`));
+  return { raw, agent, row: checked.row, error: null, warnings };
+}
+
+/**
+ * A pack's `ah-roles.json` at `dir`, read and checked. Never throws. `{error, warnings, roles}`:
+ * `error` (`{code, message}`) when the whole pack is unreadable — code `pack-missing`, `pack-invalid`
+ * or `pack-version`. Each role is `{raw, agent, row, error, warnings}`: `raw` the row as written,
+ * `agent` its agent's name in the plugin, `row` the checked custom row (agent `<plugin>:<agent>`),
+ * `error` a `{code, message}` when the role can't be used.
+ */
+export function readPackManifest(dir, plugin) {
+  const path = join(dir, PACK_MANIFEST);
+  const unreadable = (code, message) => ({ error: { code, message }, warnings: [], roles: {} });
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return unreadable("pack-missing", `no ${PACK_MANIFEST} in ${dir}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return unreadable("pack-invalid", `${path} is not valid JSON`);
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return unreadable("pack-invalid", `${path} must hold a JSON object`);
+  if (data.version !== 1) return unreadable("pack-version", `${path}: version must be 1, got ${JSON.stringify(data.version)}`);
+  if (!data.roles || typeof data.roles !== "object" || Array.isArray(data.roles)) return unreadable("pack-invalid", `${path}: roles must be an object`);
+  const warnings = Object.keys(data).filter((k) => k !== "version" && k !== "roles").map((k) => `unknown key ${JSON.stringify(k)} is ignored`);
+  const roles = {};
+  for (const [name, raw] of Object.entries(data.roles)) roles[name] = checkPackRole(name, raw, plugin);
+  return { error: null, warnings, roles };
+}
+
+const packTreeCache = new Map();
+
+/**
+ * Every regular file under `root` as `[relpath, sha256hex]` pairs sorted by path (`/` separators, a
+ * top-level .git skipped), with the first symbolic link met (never followed) as `symlink`. Cached
+ * for the life of the process, since every adopted role from one plugin reads the same tree.
+ */
+export function packTree(root) {
+  if (packTreeCache.has(root)) return packTreeCache.get(root);
+  const files = [];
+  let symlink = null;
+  const walk = (dir, rel) => {
+    for (const name of readdirSync(dir)) {
+      if (!rel && name === ".git") continue;
+      const p = join(dir, name);
+      const r = rel ? `${rel}/${name}` : name;
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) symlink ||= r;
+      else if (st.isDirectory()) walk(p, r);
+      else if (st.isFile()) files.push([r, sha256Hex(readFileSync(p))]);
+    }
+  };
+  let result;
+  try {
+    walk(root, "");
+    files.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    result = { files, symlink, error: null };
+  } catch (err) {
+    result = { files: [], symlink: null, error: err && err.message ? err.message : String(err) };
+  }
+  packTreeCache.set(root, result);
+  return result;
+}
+
+/** The pin: `sha256:` over `JSON.stringify([1, row, agentText, files])`, `row`'s keys sorted. This
+    form is permanent: every stored pin depends on it. */
+export function packPin(row, agentText, files) {
+  const sorted = Object.fromEntries(Object.keys(row).sort().map((k) => [k, row[k]]));
+  return `sha256:${sha256Hex(Buffer.from(JSON.stringify([1, sorted, agentText, files]), "utf8"))}`;
+}
+
+/** A tree's content digest: `sha256:` over `JSON.stringify(files)`. */
+export function packDigest(files) {
+  return `sha256:${sha256Hex(Buffer.from(JSON.stringify(files), "utf8"))}`;
+}
+
+function storedCopyPath(pin) {
+  return join(homedir(), ".claude", "agent-hierarchy", "trusted", `${pin.slice("sha256:".length)}.json`);
+}
+
+/** This machine's stored copy for `pin` — `{row, agentText, files}` — only when it re-hashes to `pin`. */
+export function readStoredCopy(pin) {
+  if (typeof pin !== "string" || !PIN_RE.test(pin)) return null;
+  try {
+    const c = JSON.parse(readFileSync(storedCopyPath(pin), "utf8"));
+    if (c && c.row && typeof c.row === "object" && typeof c.agentText === "string" && Array.isArray(c.files) && packPin(c.row, c.agentText, c.files) === pin) return c;
+  } catch {}
+  return null;
+}
+
+/** Store what `pin` was computed from, keyed by the pin so every repo on this machine shares it. */
+export function writeStoredCopy(pin, { row, agentText, files }) {
+  const path = storedCopyPath(pin);
+  mkdirSync(dirname(path), { recursive: true });
+  const sorted = Object.fromEntries(Object.keys(row).sort().map((k) => [k, row[k]]));
+  writeFileSync(path, `${JSON.stringify({ row: sorted, agentText, files })}\n`, "utf8");
+  return path;
+}
+
+/** One install record's view of pack role `role`: status "ok" with the pin, or the reason it can't be used. */
+function packCandidate(record, role) {
+  const base = { record, status: "ok", message: null, subcode: null, manifestRole: null, agentText: null, agentPath: null, files: null, pin: null };
+  const manifest = readPackManifest(record.installPath, record.plugin);
+  if (manifest.error) {
+    return { ...base, status: manifest.error.code === "pack-missing" ? "pack-missing" : "pack-invalid", subcode: manifest.error.code, message: manifest.error.message };
+  }
+  const r = manifest.roles[role];
+  if (!r) return { ...base, status: "pack-missing", message: `${record.key} offers no role ${role}` };
+  if (r.error) return { ...base, status: "pack-invalid", subcode: r.error.code, message: r.error.message, manifestRole: r };
+  const agentPath = join(record.installPath, "agents", `${r.agent}.md`);
+  let buf;
+  try {
+    buf = readFileSync(agentPath);
+  } catch {
+    return { ...base, status: "pack-invalid", message: `${record.key} has no agents/${r.agent}.md`, manifestRole: r, agentPath };
+  }
+  const agentText = decodeUtf8(buf);
+  if (agentText === null) return { ...base, status: "pack-invalid", message: `${agentPath} is not valid UTF-8`, manifestRole: r, agentPath };
+  const hidden = hiddenCharAt(agentText);
+  if (hidden) return { ...base, status: "pack-invalid", subcode: "pack-hidden-chars", message: `${agentPath} holds a hidden character (${hidden})`, manifestRole: r, agentPath };
+  const tree = packTree(record.installPath);
+  if (tree.error) return { ...base, status: "pack-invalid", message: `${record.installPath} could not be read: ${tree.error}`, manifestRole: r, agentText, agentPath };
+  if (tree.symlink) return { ...base, status: "pack-symlink", message: `${record.installPath} holds a symbolic link, ${tree.symlink}, and what it points at isn't pinned`, manifestRole: r, agentText, agentPath };
+  return { ...base, manifestRole: r, agentText, agentPath, files: tree.files, pin: packPin(r.raw, agentText, tree.files) };
+}
+
+/**
+ * Pack role `from` as installed now, checked against `pin` (null skips the pin and stored-copy
+ * checks, for a first adoption). Every install record of the plugin's name is a candidate, since
+ * Claude Code resolves `<plugin>:<agent>` by that name alone. `status` is "ok" or the first that
+ * applies of: pack-missing, pack-invalid, pack-ambiguous, pack-symlink, pack-changed,
+ * pack-untrusted-here. The rest is the candidate for the recorded marketplace (else the first).
+ */
+export function packRoleState(from, pin = null) {
+  const f = parseFrom(from);
+  if (!f || !f.marketplace) return { status: "pack-invalid", message: `from ${JSON.stringify(from)} must be <plugin>@<marketplace>:<role>`, from: f, records: [] };
+  const records = installRecords().filter((r) => r.plugin === f.plugin);
+  if (!records.length) return { status: "pack-missing", message: `plugin ${f.plugin} is not installed`, from: f, records: [] };
+  const candidates = records.map((r) => packCandidate(r, f.role));
+  const chosen = candidates.find((c) => c.record.marketplace === f.marketplace) || candidates[0];
+  const state = { ...chosen, from: f, records: records.map((r) => `${r.key} (${r.installPath})`) };
+  if (chosen.status === "pack-missing" || chosen.status === "pack-invalid") return state;
+  if (new Set(candidates.map((c) => c.pin || c.status)).size > 1) {
+    return { ...state, status: "pack-ambiguous", message: `${records.length} install records of ${f.plugin} differ, and which one Claude Code loads can't be known: ${state.records.join(", ")}` };
+  }
+  if (chosen.status !== "ok" || pin === null) return state;
+  if (chosen.pin !== pin) return { ...state, status: "pack-changed", message: `${f.plugin} changed since this role was trusted (pinned ${String(pin).slice(0, 19)}…, now ${chosen.pin.slice(0, 19)}…)` };
+  if (!readStoredCopy(pin)) return { ...state, status: "pack-untrusted-here", message: `this machine holds no stored copy of what ${pin.slice(0, 19)}… pinned, so nobody here has trusted it` };
+  return state;
+}
+
+/**
+ * A `from` row expanded into the full row resolution checks: the pack's own fields (from the
+ * installed manifest, else from this machine's stored copy for the row's pin), with the row's own
+ * `label`, `description`, `routes`, `model` and `dispatch` laid over them; an empty `routes` or
+ * `description` removes the field, so `--routes ""` makes a side role. `{raw, pack}`, or `{error}`
+ * when nothing on this machine says what the role is.
+ */
+export function expandFromRow(entry) {
+  const state = packRoleState(entry.from, typeof entry.pin === "string" ? entry.pin : "");
+  const f = state.from;
+  let source = state.manifestRole && !state.manifestRole.error ? state.manifestRole.raw : null;
+  if (!source) {
+    const copy = readStoredCopy(entry.pin);
+    if (copy) source = copy.row;
+  }
+  if (!f || !source) return { error: `${state.status}: ${state.message}` };
+  const raw = {};
+  for (const k of PACK_ROLE_FIELDS) if (source[k] !== undefined) raw[k] = source[k];
+  raw.agent = `${f.plugin}:${source.agent === undefined ? f.role : source.agent}`;
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) {
+    if (entry[k] === undefined) continue;
+    if (entry[k] === "" && (k === "routes" || k === "description")) delete raw[k];
+    else raw[k] = entry[k];
+  }
+  const pack = {
+    status: state.status,
+    message: state.message,
+    subcode: state.subcode || null,
+    from: entry.from,
+    agentText: state.agentText,
+    agentPath: state.agentPath,
+    pinNow: state.pin,
+  };
+  return { raw, pack };
+}
+
+/**
+ * The frontmatter a pack agent may have: only `PACK_AGENT_KEYS`, each written once as an unquoted
+ * top-level key, `tools` an explicit non-empty list with no wildcard, no YAML anchor, alias or merge
+ * key, and no line that can't be classified. It fails closed: a quoted `"permissionMode":` is valid
+ * YAML to Claude Code even though ah's lenient reader skips it. A user's own files aren't held to it.
+ */
+export function packAgentFindings(text, path = null) {
+  const out = [];
+  const err = (code, message) =>
+    out.push(finding("error", code, path, null, message, [{ kind: "edit-frontmatter", detail: `a pack agent's frontmatter may hold only ${PACK_AGENT_KEYS.join(", ")}, as plain unquoted keys` }]));
+  const lines = String(text).split("\n");
+  const end = lines[0] === "---" ? lines.findIndex((l, i) => i > 0 && l === "---") : -1;
+  if (end === -1) {
+    err("pack-agent-frontmatter", "no --- frontmatter block");
+    return out;
+  }
+  const seen = new Set();
+  let open = false;
+  for (const line of lines.slice(1, end)) {
+    if (!line.trim()) continue;
+    if (/^\s/.test(line) || /^-(\s|$)/.test(line)) {
+      if (!open) err("pack-agent-line", `line ${JSON.stringify(line)} continues no key`);
+      else if (/^\s*(-\s+)?[&*]/.test(line) || /(^|\s)<<\s*:/.test(line)) err("pack-agent-yaml", `YAML anchor, alias or merge key: ${JSON.stringify(line.trim())}`);
+      continue;
+    }
+    if (/^<<\s*:/.test(line)) {
+      err("pack-agent-yaml", `YAML merge key: ${JSON.stringify(line)}`);
+      open = false;
+      continue;
+    }
+    if (/^["']/.test(line)) {
+      err("pack-agent-quoted-key", `quoted key: ${JSON.stringify(line)}`);
+      open = false;
+      continue;
+    }
+    const m = /^([A-Za-z][A-Za-z0-9_-]*):(?:\s(.*)|$)/.exec(line);
+    if (!m) {
+      err("pack-agent-line", `line ${JSON.stringify(line)} can't be classified`);
+      open = false;
+      continue;
+    }
+    const key = m[1];
+    if (!PACK_AGENT_KEYS.includes(key)) err("pack-agent-key", `key ${key} isn't allowed in a pack agent`);
+    if (seen.has(key)) err("pack-agent-duplicate-key", `key ${key} appears twice`);
+    seen.add(key);
+    if (/^[&*]/.test((m[2] || "").trim())) err("pack-agent-yaml", `YAML anchor or alias: ${JSON.stringify(line)}`);
+    open = true;
+  }
+  const fm = parseAgentFrontmatter(text);
+  if (!seen.has("tools")) err("pack-agent-tools", "tools is required: without it the agent inherits every tool, MCP tools and Agent included");
+  else if (!Array.isArray(fm.tools) || !fm.tools.length) err("pack-agent-tools", "tools must be a non-empty list");
+  else if (fm.tools.some((t) => t.includes("*"))) err("pack-agent-tools", "tools must not hold a wildcard");
+  return out;
+}
+
+/** A pack agent's effective tools (its `tools` less `disallowedTools`) and the ones worth flagging. */
+export function packToolReport(text) {
+  const fm = parseAgentFrontmatter(text);
+  const disallowed = fm.disallowedTools || [];
+  const effective = (fm.tools || []).filter((t) => !disallowed.some((d) => d === t || t.startsWith(`${d}(`)));
+  const flagged = effective.filter((t) => FLAGGED_TOOLS.includes(t.replace(/\(.*$/, "")) || t.startsWith(MCP_TOOL_PREFIX));
+  return { effective, flagged };
+}
+
+/**
+ * What a plugin at `dir` carries besides its roles, found by exclusion so a new kind of component is
+ * listed without a code change: root entries other than the manifest, `agents/`, `.claude-plugin/`
+ * and README, LICENSE or CHANGELOG files; plugin.json keys beyond the descriptive ones; and agent
+ * files the manifest doesn't name.
+ */
+export function packExtras(dir, manifest) {
+  const extras = [];
+  let entries = [];
+  try {
+    entries = readdirSync(dir).sort();
+  } catch {}
+  for (const name of entries) {
+    if ([PACK_MANIFEST, "agents", ".claude-plugin"].includes(name) || /^(README|LICENSE|CHANGELOG)(\..*)?$/i.test(name)) continue;
+    extras.push({ kind: "root", name });
+  }
+  try {
+    const pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+    if (pj && typeof pj === "object" && !Array.isArray(pj)) {
+      for (const k of Object.keys(pj)) if (!PLUGIN_JSON_PLAIN_KEYS.includes(k)) extras.push({ kind: "plugin.json", name: k });
+    }
+  } catch {}
+  const named = new Set(Object.values((manifest && manifest.roles) || {}).map((r) => r.agent).filter(Boolean));
+  let agents = [];
+  try {
+    agents = readdirSync(join(dir, "agents")).filter((n) => n.endsWith(".md")).sort();
+  } catch {}
+  for (const n of agents) if (!named.has(n.slice(0, -3))) extras.push({ kind: "agent", name: `agents/${n}` });
+  return extras;
 }
 
 const TOOL_TOKEN_RE = /^(\*|[A-Za-z_][A-Za-z0-9_.-]*(\([^()]*\))?)$/;
@@ -1963,11 +2395,31 @@ export function formatFindings(findings) {
 export function validateRole(role, resolved) {
   const entry = resolved && resolved.roles && resolved.roles[role];
   if (!entry) return null;
+  let result;
   if (isBuiltinRole(role)) {
     if (!isOverride(role, entry)) return null;
-    return validateAgentContract({ role, cls: BUILTIN_CLASS[role], agent: roleAgent(role, entry), builtin: true, cwd: resolved.cwd });
+    result = validateAgentContract({ role, cls: BUILTIN_CLASS[role], agent: roleAgent(role, entry), builtin: true, cwd: resolved.cwd });
+  } else {
+    result = validateAgentContract({ role, cls: entry.class, agent: entry.agent, description: entry.description || null, cwd: resolved.cwd });
   }
-  return validateAgentContract({ role, cls: entry.class, agent: entry.agent, description: entry.description || null, cwd: resolved.cwd });
+  return entry.pack ? { ...result, findings: [...packFindings(role, entry.pack), ...result.findings] } : result;
+}
+
+/** An adopted role's pack findings: its pack reason when it isn't "ok", then the pack-agent
+    frontmatter checks. Every one is an error, so the role is unavailable through the usual path. */
+export function packFindings(role, pack) {
+  const out = [];
+  if (pack.status !== "ok") {
+    const fix =
+      pack.status === "pack-changed" || pack.status === "pack-untrusted-here"
+        ? [{ kind: "trust", detail: `review it with \`roster.mjs role trust ${role} --dry-run\`, then commit with the pin it prints` }]
+        : pack.status === "pack-ambiguous"
+          ? [{ kind: "uninstall", detail: "uninstall all but one install of the plugin" }]
+          : [{ kind: "remove", detail: `\`roster.mjs role remove ${role}\`, or reinstall the pack` }];
+    out.push(finding("error", pack.status, pack.agentPath, null, `${role} (from ${pack.from}): ${pack.message}${pack.subcode && pack.subcode !== pack.status ? ` [${pack.subcode}]` : ""}`, fix));
+  }
+  if (typeof pack.agentText === "string") out.push(...packAgentFindings(pack.agentText, pack.agentPath));
+  return out;
 }
 
 /** The subagent_type to dispatch for a role: its agent (`roleAgent`), or task-runner's `delegate` when its agent is not overridden. */

@@ -188,3 +188,14 @@ export const CLOSE_VERBS = ["dismiss", "disband"];
 export function isCloseCommand(parsed) {
   return !!parsed && parsed.script === "roster" && CLOSE_VERBS.includes(parsed.verb) && parsed.flags.close === true;
 }
+
+/**
+ * A commit that trusts role-pack content: `role set <name> --from …` or `role trust <name>`, without
+ * `--dry-run`. The roster skill gate asks the user about exactly these, and the allow hook stays
+ * silent on them so that `ask` is the only decision in play.
+ */
+export function isTrustCommit(parsed) {
+  if (!parsed || parsed.script !== "roster" || parsed.verb !== "role" || parsed.flags["dry-run"] === true) return false;
+  const sub = parsed.positional[0];
+  return (sub === "set" && parsed.flags.from !== undefined) || sub === "trust";
+}

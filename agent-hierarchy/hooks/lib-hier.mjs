@@ -21,7 +21,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realp
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { availabilityView, chainRoles, customTierText, hierarchyDir, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, tierOf } from "./lib-config.mjs";
+import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, tierOf } from "./lib-config.mjs";
 import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
 
 export { hierarchyDir };
@@ -500,6 +500,19 @@ export function openExchanges(dir, team) {
     const tag = (parsed && parsed.fm && parsed.fm.team) || null;
     return tag === (team || null);
   });
+}
+
+/** The slug an autonomous pipeline run's anchor exchange carries while the run is live. */
+export const PIPELINE_ANCHOR_SLUG = "pipeline-run-anchor";
+
+/**
+ * Whether a pipeline run is live in this checkout: an open run-anchor exchange in its hierarchy
+ * dir (from a worktree, the main checkout's too), whichever team wrote it. A stale open anchor
+ * counts as live; the next run reports it anyway.
+ */
+export function pipelineRunLive(cwd) {
+  const dirs = [...new Set([hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean))];
+  return dirs.some((dir) => openExchanges(dir).some((e) => e.slug === PIPELINE_ANCHOR_SLUG));
 }
 
 /** Frontmatter `created` if parseable, else file mtime, as epoch ms. */

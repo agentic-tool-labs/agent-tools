@@ -180,9 +180,21 @@ check "T2: every rejected form is silent at the hook (never allowed on a partial
 # ---------------------------------------------------------------------------
 # T7 — the no-MCP invariant
 # ---------------------------------------------------------------------------
-HITS=$(cd "$PLUGIN" && grep -rl 'mcp__\|mcpServers\|server\.mjs\|AH_MCP' agents/ skills/ commands/ hooks/ README.md docs/*.md .claude-plugin/ 2>/dev/null)
+# Line-level hits. Exactly one is exempt: the MCP-tool name prefix that role-pack checks read
+# third-party tool names with, matched by its file and full line text, whatever its line number.
+T7_EXEMPT_FILE="hooks/lib-config.mjs"
+T7_EXEMPT_LINE='const MCP_TOOL_PREFIX = "mcp__";'
+HITS=$(cd "$PLUGIN" && grep -rn 'mcp__\|mcpServers\|server\.mjs\|AH_MCP' agents/ skills/ commands/ hooks/ README.md docs/*.md .claude-plugin/ 2>/dev/null | {
+  exempted=0
+  while IFS= read -r hit; do
+    file=${hit%%:*}; rest=${hit#*:}; text=${rest#*:}
+    if [ $exempted = 0 ] && [ "$file" = "$T7_EXEMPT_FILE" ] && [ "$text" = "$T7_EXEMPT_LINE" ]; then exempted=1; continue; fi
+    printf '%s\n' "$hit"
+  done
+})
 OUT="$HITS"
 check "T7: no mcp__/mcpServers/server.mjs/AH_MCP reference outside docs/specs and tests" '[ -z "$HITS" ]'
+check "T7: no .mcp.json at the plugin root" '[ ! -e "$PLUGIN/.mcp.json" ]'
 check "T7: the mcp/ directory is gone" '[ ! -d "$PLUGIN/mcp" ]'
 check "T7: no MCP matcher survives in hooks.json" '! grep -q "mcp__" "$PLUGIN/hooks/hooks.json"'
 check "T7: docs/cli-tools.md replaced docs/mcp-tools.md" '[ -f "$PLUGIN/docs/cli-tools.md" ] && [ ! -f "$PLUGIN/docs/mcp-tools.md" ]'
