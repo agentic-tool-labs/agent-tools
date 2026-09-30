@@ -294,6 +294,21 @@ check "M12 the lead line and the directive's default-team label and commands sho
 AHCLI_ROSTER="node \"$H/roster.mjs\" spawn-one reviewer --team @default --dry-run --cwd $PROJ"
 OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"m12",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$AHCLI_ROSTER" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/pretooluse-ah-cli.mjs" 2>&1)
 check "M12 pretooluse-ah-cli allows a roster.mjs command with --team @default" '[[ "$OUT" == *"\"permissionDecision\":\"allow\""* ]]'
+CLOSE_DEFAULT="node \"$H/roster.mjs\" disband --team @default --close --confirm --plan-token t --cwd $PROJ"
+OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"m12",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$CLOSE_DEFAULT" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/pretooluse-disband-close-gate.mjs" 2>&1)
+check "M12 the close gate's confirmation for --team @default names the default team's members" \
+  '[[ "$OUT" == *"\"permissionDecision\":\"ask\""* ]] && [[ "$OUT" == *"myrepo-reviewer"* ]]'
+node "$SANDBOX/own.js" "$HD" "$OWNER"
+run_msg new --team @default --to reviewer --from orchestrator --slug d1
+D1P=$(jget o.path)
+run_msg new --team foo --to reviewer --from orchestrator --slug f1
+run_msg list --team @default
+check "M12 msg.mjs new and list --team @default reach only the default team, with two owned" \
+  'grep -q "^team: null$" "$D1P" && grep -q "^team_file: $HD/team.json$" "$D1P" && [ "$(jget "o.map(r => r.slug).join()")" = d1 ]'
+cp "$HD/teams/foo.json" "$HD/teams/@default.json"
+eval_lib "R.listTeamNames('$HD').sort().join()"
+check "M12 a hand-made teams/@default.json isn't listed as a team" '[ "$OUT" = foo ]'
+rm -f "$HD/teams/@default.json"
 
 # ================================================================ M13 route gate, no live peer, several teams
 fresh; config

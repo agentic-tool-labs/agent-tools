@@ -818,7 +818,7 @@ export function rosterMemberNames(members, repoBasename) {
  */
 export function validateTeamAlias(alias, resolved = null) {
   if (typeof alias !== "string" || !alias) return { ok: false, why: "alias must be a non-empty string" };
-  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(alias)) {
+  if (!isTeamAliasShape(alias)) {
     return {
       ok: false,
       why: "alias must start with a letter or digit, be 1-32 characters, and contain only letters, digits, and -",
@@ -832,6 +832,12 @@ export function validateTeamAlias(alias, resolved = null) {
     };
   }
   return { ok: true };
+}
+
+/** Whether `name` has a team name's shape: 1-32 letters, digits and `-`, starting with a letter or
+    digit. The role-token check in `validateTeamAlias` comes on top of this. */
+export function isTeamAliasShape(name) {
+  return typeof name === "string" && /^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(name);
 }
 
 /** Convenience boolean wrapper over `validateTeamAlias`. */

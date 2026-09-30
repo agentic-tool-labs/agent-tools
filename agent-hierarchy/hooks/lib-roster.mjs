@@ -19,7 +19,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 
 import { homedir } from "node:os";
 
-import { checkoutRoot, CLASSES, declaredTier, isValidTeamAlias, KIND_DEFAULT, KIND_RE, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
+import { checkoutRoot, CLASSES, declaredTier, isTeamAliasShape, isValidTeamAlias, KIND_DEFAULT, KIND_RE, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
 
 // Spec 0043 §1.1/§1.5: `kind`/`route`-shape helpers are DEFINED in lib-config.mjs (the leaf) and
 // re-exported here so the member schema still reads as one module. Defining them here instead
@@ -850,14 +850,16 @@ export function teamMembersForRole(dir, role, team = null) {
   return t.members.filter((m) => m.role === role && routeHasPane(m.route));
 }
 
-/** Basenames (sans `.json`) of every named team under `dir/teams/` — does NOT include the default team. */
+/** Basenames (sans `.json`) of every named team under `dir/teams/` — does NOT include the default
+    team. A file whose base name no `--team` could give (`@default.json`, say) isn't a team. */
 export function listTeamNames(dir) {
   const teamsDir = join(dir, "teams");
   if (!existsSync(teamsDir)) return [];
   try {
     return readdirSync(teamsDir)
       .filter((f) => f.endsWith(".json"))
-      .map((f) => f.slice(0, -5));
+      .map((f) => f.slice(0, -5))
+      .filter(isTeamAliasShape);
   } catch {
     return [];
   }
