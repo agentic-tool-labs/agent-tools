@@ -340,6 +340,14 @@ fm "a - item list under a key other than tools" 'tools: Read, Grep, SendMessage\
 fm "a list item back at column 0 after indented ones" 'tools:\n  - Read\n  - Grep\n- SendMessage'
 fm "a list item indented further than the first (YAML folds it into the item above)" 'tools:\n  - Read\n    - Grep\n  - SendMessage'
 fm "a list item indented less than the first" 'tools:\n  - Read\n - Grep\n  - SendMessage'
+fm "tools: null" 'tools: null'
+fm "tools: True" 'tools: True'
+fm "tools: yes" 'tools: yes'
+fm "a - null tool item" 'tools:\n  - Read\n  - null\n  - SendMessage'
+fm "a - ~ tool item" 'tools:\n  - Read\n  - ~\n  - SendMessage'
+fm "an inline False tool entry" 'tools: Read, False, SendMessage'
+fm "maxTurns: 1e3" 'tools: Read, Grep, SendMessage\nmaxTurns: 1e3'
+fm "maxTurns: 0x10" 'tools: Read, Grep, SendMessage\nmaxTurns: 0x10'
 fmd() { # <label> <description and other lines (printf %b)>: pk-rev with no fixed description
   rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
   printf -- "---\nname: pk-rev\n$2\ntools: Read, Grep, SendMessage\n---\nBody.\n" > "$PACKS/fm/agents/pk-rev.md"
@@ -357,6 +365,15 @@ fmd "a double-quoted value with an escape" 'description: "a\\x41"'
 fmd "a single-quoted value with ''" "description: 'it''s'"
 fmd "a quoted value with text after it" 'description: "Reviews" code'
 fmd "a quoted value that doesn't close" 'description: "Reviews code'
+fmd "a plain value YAML reads as a boolean" 'description: yes'
+fmd "a plain value YAML reads as null" 'description: ~'
+rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
+printf -- '---\nname: pk-rev\ndescription: "yes"\nmodel: opus\ntools: Read, Grep, SendMessage, NotebookEdit, Nontool\nmaxTurns: 5\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 a quoted \"yes\", tool names that only start with no or n, and maxTurns: 5 are accepted" '[[ "$(roleerr pk-rev)" != *pack-agent* ]]'
+printf -- '---\nname: false\ndescription: Reviews\nmodel: opus\ntools: Read, Grep, SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 name: false is an error" '[[ "$(roleerr pk-rev)" == *pack-agent-line* ]]'
 rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
 printf -- "---\nname: pk-rev\ndescription: \"Reviews code: carefully\"\nmodel: 'opus'\ncolor: a:b\ntools: Read, Grep, SendMessage\n---\nBody.\n" > "$PACKS/fm/agents/pk-rev.md"
 showpath "$PACKS/fm"
@@ -721,6 +738,9 @@ p20 "a single-quoted name key with a double-quoted value" agents/zz.md 'cp "$FX2
 p20 "a quoted key with an escape in it" agents/zz.md 'cp "$FX20/esc.md" "$PACKS/h/agents/zz.md"'
 p20 "a <<: merge key" agents/zz.md 'cp "$FX20/merge.md" "$PACKS/h/agents/zz.md"'
 p20 "an &a anchor" agents/zz.md 'cp "$FX20/anchor.md" "$PACKS/h/agents/zz.md"'
+p20 "another file declaring name: Helper" agents/zz.md 'printf -- "---\nname: Helper\n---\nx\n" > "$PACKS/h/agents/zz.md"'
+p20 "another file declaring name: HELPER" agents/zz.md 'printf -- "---\nname: HELPER\n---\nx\n" > "$PACKS/h/agents/zz.md"'
+p20 "agents/sub/HELPER.md with no name" agents/sub/HELPER.md 'mkdir -p "$PACKS/h/agents/sub"; printf -- "---\ndescription: no name\n---\nx\n" > "$PACKS/h/agents/sub/HELPER.md"'
 p20 "an agent under a path in plugin.json's agents key" extra/zz.md 'mkdir -p "$PACKS/h/extra"; printf -- "---\nname: helper\n---\nx\n" > "$PACKS/h/extra/zz.md"; printf "{\"name\":\"hp\",\"version\":\"1.0.0\",\"agents\":[\"./extra/\"]}\n" > "$PACKS/h/.claude-plugin/plugin.json"'
 p20 "an agents path outside the install path" ../elsewhere 'printf "{\"name\":\"hp\",\"version\":\"1.0.0\",\"agents\":\"../elsewhere\"}\n" > "$PACKS/h/.claude-plugin/plugin.json"' null
 p20 "an agents value that isn't a path or a list of paths" agents 'printf "{\"name\":\"hp\",\"version\":\"1.0.0\",\"agents\":{\"a\":1}}\n" > "$PACKS/h/.claude-plugin/plugin.json"' null

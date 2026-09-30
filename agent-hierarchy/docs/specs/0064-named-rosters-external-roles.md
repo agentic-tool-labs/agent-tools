@@ -821,6 +821,11 @@ an **allowlist**, which fails closed. This is on top of the class contract.
     `''`). ah strips the quotes.
   - In a block scalar, a line indented less than the first block line
     ends the block. It must then be a top-level key, or it is an error.
+  - YAML's null and boolean words, in any case, are refused as a tool
+    entry (inline or `- item`) and as any plain value: `null`, `~`, `true`,
+    `false`, `yes`, `no`, `on`, `off`, `y`, `n`. YAML reads `tools: null`
+    as no tools, and no tools means every tool. `maxTurns` must be a plain
+    decimal integer.
 - **No other file may take the role's agent name.** Claude Code registers a
   plugin agent under its frontmatter `name`, not its file name. A second
   file declaring `name: helper` could be what Claude Code launches as
@@ -842,6 +847,14 @@ an **allowlist**, which fails closed. This is on top of the class contract.
       in it, a YAML tag, anchor, alias, merge key, or a complex or flow
       key at the top level, or more than one `name` key. Such a file
       counts as claiming every role's name.
+
+    "Equals" ignores case: both sides are lowercased with the
+    locale-independent Unicode mapping (JavaScript's `toLowerCase`) before
+    they are compared, for the declared name and for the file name. It
+    isn't known whether Claude Code looks names up case-insensitively, and
+    on a case-insensitive filesystem (macOS's default) the file-name
+    fallback may be. Ignoring case costs only a pack with two agents whose
+    names differ by case, and those are rare.
 
     Other agent files aren't held to the allowlist. Only their name is read.
   - **Result.** Any claim makes the role unavailable with `pack-invalid`,
@@ -1357,7 +1370,11 @@ next run reports the stale anchor anyway.
   - `description: @x`;
   - `description: "a\x41"` and `description: 'it''s'`.
 
-  Also accepted: `description: "Reviews code: carefully"`.
+  - `tools: null`, `tools: True`, `tools: yes`, `- null`, `- ~`, and a
+    `name: false` [admit YAML's null and boolean words];
+  - `maxTurns: 1e3` and `maxTurns: 0x10`.
+
+  Also accepted: `description: "Reviews code: carefully"` and `maxTurns: 5`.
 
   These are accepted: a `>` or `|` block scalar under `description`, and
   `tools:` with an empty value followed by `- Read` / `- Bash` items. For
@@ -1459,7 +1476,9 @@ next run reports the stale anchor anyway.
   - `agents/zz.md` using `<<:` or `&a` in its frontmatter;
   - an agent under a path in `plugin.json`'s `agents` key that declares
     `name: helper` [ignore the `agents` key];
-  - an `agents` path that resolves outside the install path.
+  - an `agents` path that resolves outside the install path;
+  - `agents/zz.md` with `name: Helper` or `name: HELPER`, and
+    `agents/sub/HELPER.md` with no `name` [compare with case].
 
   These leave the role available: another agent with `name: other` and
   unrestricted frontmatter, and a skill `skills/helper/SKILL.md` with
@@ -1547,8 +1566,9 @@ result goes in the PR.
   plugin with two agent files declaring the same `name`, each with a
   harmless marker, and one more agent in a subdirectory of `agents/`. Run
   `claude --agent <plugin>:<name>` and record which file loads, and whether
-  the subdirectory agent is registered. The §4.6 name rule stands whatever
-  this finds.
+  the subdirectory agent is registered. Also record whether
+  `claude --agent <plugin>:helper` loads a file that declares
+  `name: Helper`. The §4.6 name rule stands whatever this finds.
 
 ## 8. Build order
 

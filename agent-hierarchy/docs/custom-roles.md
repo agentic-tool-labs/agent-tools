@@ -274,7 +274,10 @@ one at a time. Roles only you use can stay where they are, in
   block under `description`, whose lines are indented at least as far as its
   first. A value holding `: `, or starting with a YAML indicator such as `@`,
   `!`, `[` or `- `, must be quoted, and a quoted value can't hold an escape
-  (`\` or `''`). Tabs in the indentation, `#` comments, and anything else —
+  (`\` or `''`). A value or tool entry that YAML reads as null or a boolean
+  (`null`, `~`, `true`, `false`, `yes`, `no`, `on`, `off`, `y`, `n`, in any
+  case) is refused: `tools: null` would mean every tool. `maxTurns` must be a
+  plain decimal integer. Tabs in the indentation, `#` comments, and anything else —
   `permissionMode`, `hooks`, MCP server settings, `skills`, `memory`, a YAML
   anchor — are errors. ah reads the file this strictly so that it sees exactly
   what YAML would, tools included. Your own agent files aren't held to this.
@@ -282,7 +285,8 @@ one at a time. Roles only you use can stay where they are, in
   Claude Code registers a plugin agent under its frontmatter `name`, not its
   file name. Every `.md` under `agents/` (at any depth) and under the paths in
   `plugin.json`'s `agents` is checked. One that declares the role's agent
-  name, or declares none and is named `<agent>.md`, or whose name ah can't be
+  name, or declares none and is named `<agent>.md` (either ignoring case), or
+  whose name ah can't be
   sure of (a quoted key with an escape, a YAML tag, anchor, alias or merge
   key, more than one `name`), makes the role unavailable (`pack-invalid`), and
   `pack show` marks it as claiming the role. An `agents` path outside the

@@ -1747,8 +1747,11 @@ const FLAGGED_TOOLS = ["Bash", "Agent", "Write", "Edit"];
 const MCP_TOOL_PREFIX = "mcp__";
 export const PIN_RE = /^sha256:[0-9a-f]{64}$/;
 const FROM_RE = /^([A-Za-z0-9][A-Za-z0-9_.-]*)(?:@([^:@\s]+))?:([^:@\s]+)$/;
+/** A word YAML (1.1 or 1.2) reads as null or a boolean rather than a string, in any case. */
+const YAML_NULL_BOOL_RE = /^(~|null|true|false|yes|no|on|off|y|n)$/i;
 /** A pack agent's tool entry: a plain name, so no quoting, flow list or `Tool(scope)` form. */
 const PACK_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+const isPackToolName = (e) => PACK_TOOL_NAME_RE.test(e) && !YAML_NULL_BOOL_RE.test(e);
 /** Characters that hide text: control characters other than newline and tab, Unicode format
     characters (category Cf: the bidirectional controls and zero-width characters among them), the
     tag block, variation selectors (a known way to carry an invisible payload, so an emoji written
@@ -2017,8 +2020,9 @@ const packClaimsCache = new Map();
  * Agent files that take a pack role's agent name. Claude Code registers a plugin agent under its
  * frontmatter `name`, so any `.md` (any case, any depth) under `agents/` or under a path in
  * plugin.json's `agents` could be what `<plugin>:<agent>` launches. A file other than the role's own
- * claims the role when it declares that name, when it declares none and its file name is that name,
- * or when ah can't be sure what it declares (then it claims every role). `{error, byRole, files}`:
+ * claims the role when it declares that name, when it declares none and its file name is that name
+ * (both compared ignoring case, since whether Claude Code does isn't known), or when ah can't be
+ * sure what it declares (then it claims every role). `{error, byRole, files}`:
  * `error` is a message when plugin.json's `agents` isn't a path or a list of paths, or one resolves
  * outside `dir`; `byRole` maps a role to the claiming files, and `files` a file to the roles it
  * claims, both by `/`-separated path relative to `dir`.
@@ -2079,7 +2083,8 @@ export function packNameClaims(dir, manifest) {
     const rel = relative(dir, abs).split(sep).join("/");
     for (const [role, m] of roles) {
       if (sameFile(abs, join(dir, "agents", `${m.agent}.md`))) continue;
-      if (!(decl.unsure || decl.name === m.agent || (decl.none && basename(abs).replace(/\.md$/i, "") === m.agent))) continue;
+      const agent = m.agent.toLowerCase();
+      if (!(decl.unsure || (decl.name !== undefined && decl.name.toLowerCase() === agent) || (decl.none && basename(abs).replace(/\.md$/i, "").toLowerCase() === agent))) continue;
       if (!result.byRole.has(role)) result.byRole.set(role, []);
       result.byRole.get(role).push(rel);
       if (!result.files.has(rel)) result.files.set(rel, []);
@@ -2200,6 +2205,7 @@ function yamlValueProblem(value) {
     return /^"[^"\\]*"$|^'[^']*'$/.test(value) ? null : "a quoted value must close at the end of the line, with no escape inside (no \\ or '')";
   }
   if (/:(\s|$)/.test(value)) return 'a plain value can\'t hold ": " or end in ":" (quote it)';
+  if (YAML_NULL_BOOL_RE.test(value)) return "a plain value YAML reads as null or a boolean (quote it)";
   if (/^([@`%!|>[\]{},?]|-(\s|$))/.test(value)) return "a plain value can't start with a YAML indicator (quote it)";
   return null;
 }
@@ -2233,9 +2239,9 @@ export function packAgentParse(text, path = null) {
   // `- item` lines), "block" (description's `|` or `>` block: indented text) or "none".
   let cur = null;
   const toolEntries = (key, entries) => {
-    const bad = entries.filter((e) => !PACK_TOOL_NAME_RE.test(e));
-    for (const e of bad) err("pack-agent-tools", `${key} entry ${JSON.stringify(e)} isn't a plain tool name (letters, digits, _ and -)`);
-    fm[key] = entries.filter((e) => PACK_TOOL_NAME_RE.test(e));
+    const bad = entries.filter((e) => !isPackToolName(e));
+    for (const e of bad) err("pack-agent-tools", `${key} entry ${JSON.stringify(e)} isn't a plain tool name (letters, digits, _ and -, and not a word YAML reads as null or a boolean)`);
+    fm[key] = entries.filter(isPackToolName);
   };
   const finish = () => {
     if (!cur) return;
@@ -2311,7 +2317,8 @@ export function packAgentParse(text, path = null) {
       }
     } else if (value === "" && toolKey) cur = { key, kind: "list", items: [] };
     else {
-      const why = value && yamlValueProblem(value);
+      let why = value ? yamlValueProblem(value) : null;
+      if (!why && key === "maxTurns" && !/^-?(0|[1-9][0-9]*)$/.test(value)) why = "maxTurns must be a plain decimal integer";
       if (why) err("pack-agent-line", `line ${JSON.stringify(line)}: ${why}`);
       cur = { key, kind: "none", value };
     }
