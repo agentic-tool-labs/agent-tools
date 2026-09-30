@@ -148,7 +148,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, TIER, userConfigPath } from "./lib-config.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
 import { ageSecOf, appendRosterRecord, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
@@ -655,8 +655,11 @@ function rosterCopy(src, dst) {
   const level = rosterLevelOpt() || win.level;
   const path = rosterLevelPaths(cwd)[level];
   const data = readLevelFile(path);
-  if (data.rosters && typeof data.rosters === "object" && Object.prototype.hasOwnProperty.call(data.rosters, dst)) {
-    fail(`roster copy: rosters.${dst} is already defined at level "${level}" (${path}) — pick another name, or delete it first with \`roster.mjs roster delete ${dst} --level ${level}\``);
+  // Any file at this level counts: from a worktree, the main checkout's would be shadowed by the copy.
+  const taken = rosterDefinitions(dst).find((d) => d.level === level);
+  if (taken) {
+    const from = taken.path === path ? "" : ` --cwd ${checkoutRoot(cwd)}`;
+    fail(`roster copy: rosters.${dst} is already defined at level "${level}" (${taken.path}) — pick another name, or delete it first with \`roster.mjs roster delete ${dst} --level ${level}${from}\``);
   }
   const block = JSON.parse(JSON.stringify(win.block.route === undefined ? { members: win.members } : { route: win.block.route, members: win.members }));
   const dryRun = opts["dry-run"] === true;
@@ -684,6 +687,14 @@ function rosterDelete(name) {
   const path = rosterLevelPaths(cwd)[level];
   const data = readLevelFile(path);
   if (!existsSync(path) || !data.rosters || typeof data.rosters !== "object" || !Object.prototype.hasOwnProperty.call(data.rosters, name)) {
+    // From a worktree, the block may live only in the main checkout's file at this level.
+    const elsewhere = rosterDefinitions(name).find((d) => d.level === level && d.path !== path);
+    if (elsewhere) {
+      fail(
+        `roster delete ${name}: rosters.${name} at level "${level}" is in the main checkout's file (${elsewhere.path}), not this worktree's (${path}) — nothing was deleted. ` +
+          `Delete it from the main checkout: \`roster.mjs roster delete ${name} --level ${level} --cwd ${checkoutRoot(cwd)}\``
+      );
+    }
     fail(`roster delete ${name}: no rosters.${name} at level "${level}" (${path})`);
   }
   const users = teamsByRosterKey().get(name) || [];
@@ -723,24 +734,33 @@ function rosterUse(name) {
   const warnings = [];
   if (clear) {
     const had = (levelFileData(path) || {}).activeRoster !== undefined;
+    let fileRemoved = false;
     if (had) {
       const data = readLevelFile(path);
       delete data.activeRoster;
-      writeLevelFile(path, data);
+      // A file left holding only `version` existed for the selection alone; kept, it would make an
+      // unconfigured setup read as configured.
+      if (Object.keys(data).every((k) => k === "version")) {
+        unlinkSync(path);
+        fileRemoved = true;
+      } else {
+        writeLevelFile(path, data);
+      }
     }
-    return out({ level, path, activeRoster: null, cleared: had, selection: selectionView(rosterSelection(cwd)) });
+    return out({ level, path, activeRoster: null, cleared: had, ...(fileRemoved ? { file_removed: true } : {}), selection: selectionView(rosterSelection(cwd)) });
   }
   if (name !== DEFAULT_ROSTER) {
     const defined = selectableRosters(cwd);
     if (!defined.includes(name)) {
       fail(`roster use ${name}: no level defines roster "${name}" (defined: ${defined.join(", ") || "none"}) — make it with \`roster.mjs init --roster ${name}\` or \`roster.mjs roster copy <src> ${name}\``);
     }
-    if (level === "global") {
-      const global = levelFileData(rosterLevelPaths(cwd).global);
-      const globalRosters = global && global.rosters && typeof global.rosters === "object" ? global.rosters : {};
-      if (!Object.prototype.hasOwnProperty.call(globalRosters, name)) {
-        warnings.push(`roster "${name}" is not defined in the global file, so other repos will see this selection as missing — select it at repo-user or repo level instead`);
-      }
+    // Whoever reads the target level must be able to see the roster; repo-user's only reader sees every level.
+    if (level !== "repo-user" && !rosterDefinitions(name).some((d) => d.level === level)) {
+      warnings.push(
+        level === "global"
+          ? `roster "${name}" is not defined in the global file, so other repos will see this selection as missing — select it at repo-user or repo level instead`
+          : `roster "${name}" is defined only in your own files (repo-user or global), so others working in this repo will see this selection as missing — define it at repo level, or select it at repo-user instead`
+      );
     }
   }
   const data = readLevelFile(path);
@@ -899,7 +919,7 @@ function doctorReport(cwd) {
   const stale = staleTeamKeys(cwd, registry()).warnings;
   if (stale.length) rows.push({ name: "stale-config-keys", status: "warn", detail: stale.join(" ") });
   // Only when broken: every template verb and `create` refuses such a selection until it is fixed.
-  const selectionProblem = rosterSelectionProblem(cwd, rosterSelection(cwd));
+  const selectionProblem = rosterSelectionProblem(cwd, sessionRosterSelection(cwd, { pid: ownOrchestratorPid() }));
   if (selectionProblem) rows.push({ name: "roster-selection", status: "red", detail: selectionProblem });
   return { cwd, rows, red: rows.filter((r) => r.status === "red").map((r) => r.name) };
 }

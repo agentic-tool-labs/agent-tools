@@ -1092,11 +1092,17 @@ export function selectionView(selection) {
  */
 export function rosterSelectionProblem(cwd, selection) {
   if (!["flag", "env", "activeRoster"].includes(selection.source) || selection.key === null) return null;
+  if (typeof selection.key !== "string" || selection.key === "") {
+    return (
+      `activeRoster at ${selection.level} in ${selection.path} must be a roster name, got ${JSON.stringify(selection.key)}. ` +
+      `Fix with \`roster.mjs roster use <name> --level ${selection.level}\` or \`roster.mjs roster use --clear --level ${selection.level}\`.`
+    );
+  }
   const defined = selectableRosters(cwd);
   if (defined.includes(selection.key)) return null;
   const source =
     selection.source === "flag" ? "--roster" : selection.source === "env" ? "AH_ROSTER" : `activeRoster at ${selection.level} in ${selection.path}`;
-  const name = typeof selection.key === "string" ? selection.key : JSON.stringify(selection.key);
+  const name = selection.key;
   return (
     `${source} selects roster "${name}", but there is no rosters.${name} block at any level (defined: ${defined.join(", ") || "none"}). ` +
     `Fix with \`roster.mjs roster use default\`, \`roster.mjs roster use <other>\`, or \`roster.mjs init --roster ${name}\`.`
@@ -1351,6 +1357,22 @@ function resolveTeamScope(cwd, opts) {
   return { name: null, home: null, via: null };
 }
 
+/** The selection for a session whose team scope is `team` (null: the default team) in `teamHome`. */
+function scopedRosterSelection(resolvedCwd, opts, team, teamHome) {
+  return rosterSelection(resolvedCwd, {
+    flag: opts.roster === null ? DEFAULT_ROSTER : opts.roster,
+    team: { dir: teamHome || hierarchyDir(resolvedCwd), name: team },
+  });
+}
+
+/** The roster selection `resolveConfig(cwd, opts)` uses, with the session's team scope resolved the
+    same way, so a CLI report (doctor) and the hooks agree on it. */
+export function sessionRosterSelection(cwd, opts = {}) {
+  const resolvedCwd = resolve(typeof cwd === "string" && cwd ? cwd : process.cwd());
+  const { name: team, home: teamHome } = resolveTeamScope(resolvedCwd, opts);
+  return scopedRosterSelection(resolvedCwd, opts, team, teamHome);
+}
+
 /**
  * Resolve the effective hierarchy for a session.
  *
@@ -1381,7 +1403,13 @@ export function resolveConfig(cwd, opts = {}) {
 
   // Least specific first: repo-user is the new highest-precedence layer. A global file holding only
   // the stored team layout is a create's side effect, not hierarchy config, so it configures nothing.
-  const preferenceOnly = (layer) => layer.scope === "user" && Object.keys(layer.data).every((k) => PREFERENCE_ONLY_KEYS.has(k));
+  // Choosing a roster never makes a setup look configured either: a repo or repo-user file holding
+  // only `activeRoster` (and `version`) configures nothing, though its selection still applies.
+  const preferenceOnly = (layer) => {
+    const keys = Object.keys(layer.data);
+    if (layer.scope === "user") return keys.every((k) => PREFERENCE_ONLY_KEYS.has(k));
+    return keys.includes("activeRoster") && keys.every((k) => k === "version" || k === "activeRoster");
+  };
   const layers = [user, project, repoUser].filter(Boolean).filter((layer) => !preferenceOnly(layer));
   warnings.push(...teamLayoutPreference().warnings);
 
@@ -1552,10 +1580,7 @@ export function resolveConfig(cwd, opts = {}) {
 
   // The block is the team's recorded template (or an explicit `opts.roster`, else the selection);
   // the names are the team's own. A selection naming no defined roster is warned about, never thrown.
-  const selection = rosterSelection(resolvedCwd, {
-    flag: opts.roster === null ? DEFAULT_ROSTER : opts.roster,
-    team: { dir: teamHome || hierarchyDir(resolvedCwd), name: team },
-  });
+  const selection = scopedRosterSelection(resolvedCwd, opts, team, teamHome);
   const selectionProblem = rosterSelectionProblem(resolvedCwd, selection);
   if (selectionProblem) warnings.push(`ah: ${selectionProblem} Using the default roster block until then.`);
   const rosterKey = selectionProblem ? null : selection.key;

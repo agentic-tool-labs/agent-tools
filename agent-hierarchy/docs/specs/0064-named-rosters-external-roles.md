@@ -174,8 +174,17 @@ A named roster stays a `rosters.<name>` block. There is one new top-level key.
   applies in that checkout's linked worktrees. If `resolveConfig`'s layer
   merge doesn't read main-checkout candidates today, the selection must read
   them anyway.
-- **Preference-only.** A global file holding only `activeRoster` (with or
-  without the other preference-only keys) still counts as unconfigured.
+- **Preference-only, at every level.** Choosing a roster must never make an
+  unconfigured setup look configured, or injection would change when nothing
+  is really selected.
+  - A global file holding only `activeRoster` (with or without the other
+    preference-only keys) still counts as unconfigured.
+  - A repo or repo-user file whose only keys are `version` and `activeRoster`
+    also counts as unconfigured.
+  - The `activeRoster` in such a file still applies to the selection (§3.2).
+  - Nothing else changes about what counts as configured. A repo-level file
+    holding only `version` counts exactly as it does today.
+  - `activeRoster` is a new key, so no existing file changes meaning.
 - **Writes.** `writeLevelFile` and `migrateStaleKeys` (roster.mjs:1310-1384)
   keep the key.
 
@@ -256,6 +265,15 @@ even one with no members.
 
 All three use the one check.
 
+Two details the existing suite fixes:
+- **Wording.** The refusal keeps the phrase `no rosters.<name> block`, which
+  existing tests and scripts search for. It reads `<source> selects roster
+  "<name>", but there is no rosters.<name> block at any level (defined: …).
+  Fix with …`.
+- **Order.** It runs after the refusal to edit the roster while the session
+  owns a live team. When both apply, the ownership message comes first; the
+  set of commands refused is the same.
+
 ### 3.5 Teams
 
 - **`create`** records the selected key in the team file's `roster` field
@@ -314,6 +332,9 @@ Document it in docs/cli-tools.md.
     - a name that `activeRoster` in the same file selects.
   - It warns and goes ahead when `activeRoster` at another level selects the
     name.
+  - From a linked worktree, if the block resolves only from the main
+    checkout's file, it refuses and names that path. It never reports success
+    for a no-op at the worktree's own path.
   - roster.mjs:1606-1608's comment mentions a `remove … --all` form. If a
     whole-block erase still exists, it and `roster delete` share one
     implementation and the same refusals.
@@ -321,10 +342,22 @@ Document it in docs/cli-tools.md.
   **`roster use --clear [--level L]`** removes it.
   - `--level` defaults to `repo-user` inside a git repo, else `global`.
   - It refuses a name that no visible level defines, except `default`.
-  - With `--level global` and a name only this repo defines, it warns that
-    other repos will see the selection as missing.
+  - It warns, and still writes, when the target level's readers can't see
+    the roster, meaning the roster isn't defined at the target level itself:
+    - with `--level global`, other repos will see the selection as missing;
+    - with `--level repo`, other people working in the repo will see it as
+      missing, because the roster lives only in this user's files (repo-user
+      or global);
+    - with `--level repo-user`, it never warns, because only this user in
+      this repo reads that file and they can see every level.
+  - `--clear` removes the key. If the file would then hold nothing but
+    `version`, it deletes the file, so a file that existed only to hold a
+    selection doesn't linger and make the setup read as configured (§3.1).
   - It prints the resulting selection, worked out by the §3.2 rule.
 - **`show`** adds `selection` to its output.
+- **`create --plan`** carries `selection` only when a roster is selected
+  (source other than `default`). A plan without it is built from the default
+  block, so plans stay byte-identical when nothing is selected.
 - **`create`, `init`, `add`, `edit`, `remove` and `show`,** when given no
   `--roster`, use the selection (§3.2). With nothing selected they behave as
   today, including `add`'s bootstrap when nothing resolves.
@@ -1019,6 +1052,19 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
 - **S12** From a linked worktree, the main checkout's repo-level
   `activeRoster` applies.
 - **S13** `AH_ROSTER=""` counts as unset.
+- **S15 Nothing configured.** In a sandbox with no configuration at any
+  level:
+  - `roster use default` keeps `resolveConfig().configured` false and
+    SessionStart's injection byte-identical to before;
+  - `roster use --clear` then leaves no repo-user file;
+  - a repo-user file holding `version`, `activeRoster` and a roster block
+    still counts as configured.
+
+  [treat the file as configured whenever it exists]
+- **S16 Audience warning.** `roster use X --level repo` warns when X is
+  defined only at repo-user or global, and not when X is defined at repo.
+  `--level global` warns when X isn't defined at global. `--level repo-user`
+  never warns. [warn only for global]
 - **S14 Not gated or guarded.** None of the four verbs is gated. While the
   session owns a live team, `roster copy`, `roster delete` and `roster use`
   still run, and `add` is still refused as today. [add `roster` to the skill

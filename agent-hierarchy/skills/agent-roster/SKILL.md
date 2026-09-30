@@ -135,7 +135,8 @@ These are `roster.mjs roster list|copy|delete|use …`.
   --clear [--level L]`): sets which roster later commands pick. It writes the
   user's own file for this repo (`repo-user`) unless they ask for `repo`
   (shared, committed) or `global`. Say the resulting selection back in one
-  line. It never changes a live Team: a Team keeps the roster it was built
+  line, with any warning that others reading that level can't see the
+  roster. It never changes a live Team: a Team keeps the roster it was built
   from.
 
 ## `init`

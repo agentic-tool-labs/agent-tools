@@ -79,6 +79,11 @@ cfg() {
 
 sel() { jget "o.selection.roster + '/' + o.selection.source + '/' + o.selection.level"; }
 
+# A linked worktree of PROJ at $SANDBOX/wt, with no config file of its own.
+worktree() {
+  git -C "$PROJ" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && git -C "$PROJ" worktree add -q "$SANDBOX/wt" -b wtb
+}
+
 # ---------------------------------------------------------------- S1 nothing selected
 fresh
 rm_ show --cwd "$PROJ"
@@ -137,10 +142,20 @@ check "S4 init creates the missing selected roster" '[ $RC = 0 ] && filejs "$REP
 mutate "$REPO_USER_CFG" 'delete d.activeRoster'
 AH_ROSTER=nope2 cfg 'r.roster.teamKey === null && r.roster.members[0].role === "architect" && r.warnings.some((w) => w.includes("AH_ROSTER selects roster \"nope2\""))'
 check "S4 resolveConfig warns and uses the default block without throwing" '[ $RC = 0 ] && [ "$OUT" = true ]'
+mutate "$REPO_USER_CFG" 'd.activeRoster = ""'
+rm_ show --cwd "$PROJ"
+check "S4 an empty activeRoster is refused as not a roster name" '[ $RC = 2 ] && [[ "$ERR" == *"activeRoster at repo-user in $REPO_USER_CFG must be a roster name, got \"\""* ]]'
+mutate "$REPO_USER_CFG" 'd.activeRoster = 5'
+rm_ show --cwd "$PROJ"
+check "S4 a non-string activeRoster is refused as not a roster name" '[ $RC = 2 ] && [[ "$ERR" == *"must be a roster name, got 5"* ]]'
+mutate "$REPO_USER_CFG" 'delete d.activeRoster'
 CLAUDE_PID=$$ rm_ doctor --check --cwd "$PROJ"
 check "S4 doctor --check: no roster-selection row while the selection is fine" '[ $RC = 0 ] && [ "$(jget "o.rows.some(r => r.name === \"roster-selection\")")" = false ]'
 AH_ROSTER=nope2 CLAUDE_PID=$$ rm_ doctor --check --cwd "$PROJ"
 check "S4 doctor --check exits 1 with a red roster-selection row" '[ $RC = 1 ] && [ "$(jget "o.red.includes(\"roster-selection\")")" = true ]'
+team tm '{"version":1,"team_id":"tm","members":[],"roster":"game"}'
+AH_TEAM_FILE="$TEAMS/tm.json" AH_ROSTER=nope2 CLAUDE_PID=$$ rm_ doctor --check --cwd "$PROJ"
+check "S4 doctor, like the hooks, ignores AH_ROSTER while a team file is in scope" '[ $RC = 0 ] && [ "$(jget "o.rows.some(r => r.name === \"roster-selection\")")" = false ]'
 
 # ---------------------------------------------------------------- S5 team files
 fresh
@@ -206,6 +221,11 @@ rm_ roster copy game bad_name --cwd "$PROJ"
 check "S8 copy refuses an invalid dst" '[ $RC = 2 ] && filejs "$REPO_CFG" "!(\"bad_name\" in d.rosters)"'
 rm_ roster copy game alt --cwd "$PROJ"
 check "S8 copy refuses a dst already defined at that level" '[ $RC = 2 ] && [[ "$ERR" == *"already defined"* ]] && filejs "$REPO_CFG" "d.rosters.alt.members[0].role === \"reviewer\" && d.rosters.alt.members.length === 1"'
+fresh
+worktree
+rm_ roster copy game alt --cwd "$SANDBOX/wt"
+check "S8 from a worktree, copy refuses a dst the main checkout's file defines at that level, naming that file" \
+  '[ $RC = 2 ] && [[ "$ERR" == *"already defined at level \"repo\" ($REPO_CFG)"* ]] && [[ "$ERR" == *"--cwd $PROJ"* ]] && [ ! -e "$SANDBOX/wt/.claude/agent-hierarchy.json" ]'
 
 # ---------------------------------------------------------------- S9 roster delete
 fresh
@@ -225,6 +245,13 @@ check "S9 delete refuses a roster activeRoster in the same file selects" '[ $RC 
 mutate "$REPO_USER_CFG" 'd.activeRoster = "r5"'
 rm_ roster delete r5 --cwd "$PROJ"
 check "S9 delete warns and goes ahead when another level selects it" '[ $RC = 0 ] && [[ "$ERR" == *"warning"*"$REPO_USER_CFG"* ]] && [ "$(jget "o.warnings.length")" = 1 ] && filejs "$REPO_CFG" "!(\"r5\" in d.rosters)"'
+fresh
+worktree
+for extra in "" "--dry-run" "--level repo"; do
+  rm_ roster delete alt $extra --cwd "$SANDBOX/wt"
+  check "S9 from a worktree, delete ${extra:-(no flag)} refuses a block only the main checkout's file holds, naming that file and --cwd" \
+    '[ $RC = 2 ] && [[ "$ERR" == *"main checkout'"'"'s file ($REPO_CFG)"* ]] && [[ "$ERR" == *"--cwd $PROJ"* ]] && filejs "$REPO_CFG" "\"alt\" in d.rosters" && [ ! -e "$SANDBOX/wt/.claude/agent-hierarchy.json" ]'
+done
 
 # ---------------------------------------------------------------- S10 roster use
 fresh
@@ -236,8 +263,9 @@ rm_ roster use g --cwd "$SANDBOX/norepo"
 check "S10 use writes global by default outside a repo" '[ $RC = 0 ] && [ "$(jget o.level)" = global ] && filejs "$GLOBAL_CFG" "d.activeRoster === \"g\""'
 rm_ roster use nope --cwd "$PROJ"
 check "S10 use refuses a roster no level defines" '[ $RC = 2 ] && filejs "$REPO_USER_CFG" "d.activeRoster === \"game\""'
+mutate "$REPO_USER_CFG" 'd.rosters = {keep: {route: "peer", members: []}}'
 rm_ roster use --clear --cwd "$PROJ"
-check "S10 use --clear removes the key" '[ $RC = 0 ] && [ "$(jget o.cleared)" = true ] && filejs "$REPO_USER_CFG" "!(\"activeRoster\" in d)"'
+check "S10 use --clear removes the key and keeps the file's other keys" '[ $RC = 0 ] && [ "$(jget o.cleared)" = true ] && [ "$(jget "\"file_removed\" in o")" = false ] && filejs "$REPO_USER_CFG" "!(\"activeRoster\" in d) && \"keep\" in d.rosters"'
 rm_ roster use default --cwd "$PROJ"
 check "S10 use accepts default" '[ $RC = 0 ] && filejs "$REPO_USER_CFG" "d.activeRoster === \"default\""'
 rm_ roster use game --level global --cwd "$PROJ"
@@ -259,8 +287,7 @@ check "S11 ... also alongside the other preference-only keys" '[ $RC = 0 ] && [ 
 
 # ---------------------------------------------------------------- S12 linked worktree
 fresh
-git -C "$PROJ" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
-git -C "$PROJ" worktree add -q "$SANDBOX/wt" -b wtb
+worktree
 mkdir -p "$SANDBOX/wt/.claude"
 echo '{"version":1}' > "$SANDBOX/wt/.claude/agent-hierarchy.json"
 mutate "$REPO_CFG" 'd.activeRoster = "game"'
@@ -298,6 +325,47 @@ CLAUDE_PID=$$ rm_ roster delete alt --cwd "$PROJ"
 check "S14 roster delete runs while the session owns a live team" '[ $RC = 0 ] && filejs "$REPO_CFG" "!(\"alt\" in d.rosters)"'
 CLAUDE_PID=$$ rm_ add --role implementor --model sonnet --cwd "$PROJ"
 check "S14 add is still refused while the session owns a live team" '[ $RC = 2 ] && [[ "$ERR" == *"edits the roster TEMPLATE"* ]]'
+
+# ---------------------------------------------------------------- S15 nothing configured
+fresh
+rm -f "$REPO_CFG"
+inject() {
+  OUT=$(printf '%s' '{"session_id":"s15","cwd":"'"$PROJ"'","hook_event_name":"SessionStart","source":"startup"}' | HOME="$FAKEHOME" node "$H/sessionstart.mjs" 2>&1); RC=$?
+}
+inject  # settles anything a first session records
+inject; BEFORE_INJECT=$OUT
+cfg 'r.configured'
+check "S15 (baseline) nothing is configured" '[ $RC = 0 ] && [ "$OUT" = false ]'
+rm_ roster use default --cwd "$PROJ"
+check "S15 use default writes the repo-user file" '[ $RC = 0 ] && filejs "$REPO_USER_CFG" "d.activeRoster === \"default\""'
+cfg 'r.configured'
+check "S15 ... which keeps resolveConfig unconfigured" '[ $RC = 0 ] && [ "$OUT" = false ]'
+inject
+check "S15 ... and SessionStart's injection byte-identical" '[ $RC = 0 ] && [ "$OUT" = "$BEFORE_INJECT" ]'
+rm_ roster use --clear --cwd "$PROJ"
+check "S15 use --clear then leaves no repo-user file" '[ $RC = 0 ] && [ "$(jget o.file_removed)" = true ] && [ ! -e "$REPO_USER_CFG" ]'
+mutate "$REPO_USER_CFG" 'd.version = 1; d.activeRoster = "default"; d.roster = {route: "peer", members: [{role: "architect"}]}'
+cfg 'r.configured'
+check "S15 a repo-user file that also holds a roster block is configured" '[ $RC = 0 ] && [ "$OUT" = true ]'
+
+# ---------------------------------------------------------------- S16 who can see the selected roster
+fresh
+mutate "$REPO_USER_CFG" 'd.rosters = {mine: {route: "peer", members: [{role: "reviewer"}]}}'
+mutate "$GLOBAL_CFG" 'd.rosters = {wide: {route: "peer", members: [{role: "reviewer"}]}}'
+rm_ roster use mine --level repo --cwd "$PROJ"
+check "S16 use --level repo warns for a roster only repo-user defines, and still writes" '[ $RC = 0 ] && [[ "$ERR" == *"others working in this repo"* ]] && [ "$(jget "o.warnings.length")" = 1 ] && filejs "$REPO_CFG" "d.activeRoster === \"mine\""'
+rm_ roster use wide --level repo --cwd "$PROJ"
+check "S16 use --level repo warns for a roster only global defines" '[ $RC = 0 ] && [[ "$ERR" == *"others working in this repo"* ]]'
+rm_ roster use game --level repo --cwd "$PROJ"
+check "S16 use --level repo doesn't warn for a roster the repo level defines" '[ $RC = 0 ] && [ -z "$ERR" ] && [ "$(jget "\"warnings\" in o")" = false ]'
+rm_ roster use game --level global --cwd "$PROJ"
+check "S16 use --level global warns for a roster the global file doesn't define" '[ $RC = 0 ] && [[ "$ERR" == *"other repos"* ]]'
+rm_ roster use wide --level global --cwd "$PROJ"
+check "S16 use --level global doesn't warn for a roster the global file defines" '[ $RC = 0 ] && [ -z "$ERR" ]'
+rm_ roster use mine --level repo-user --cwd "$PROJ"
+check "S16 use --level repo-user never warns" '[ $RC = 0 ] && [ -z "$ERR" ]'
+rm_ roster use wide --level repo-user --cwd "$PROJ"
+check "S16 ... even for a roster only global defines" '[ $RC = 0 ] && [ -z "$ERR" ]'
 
 echo
 echo "SUMMARY: $PASS passed, $FAIL failed"
