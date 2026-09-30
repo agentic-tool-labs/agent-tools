@@ -178,8 +178,17 @@ the lists above are exhaustive for those verbs rather than indicative.
 and point at `--roster <r>`. On team verbs, a session that owns exactly one live team and passes no
 `--team` acts on that team. Owning several, a verb that names a member (`dismiss <name>`, `untrack <name>`,
 `move <name>`, `deliver <name>`, `answer <name>`, `spawn-one`/`spawn-ad-hoc --member <name>`) takes the team
-whose members include that name among the owned ones, and every other verb refuses, exit 2, listing the
-owned teams. `msg.mjs new` without `--team`, owning several, takes the team whose members include
+whose members include that name among the owned ones (recorded member names only: not a pane id or
+session id). Every other team verb — `create`, `disband`, `resync`, `untrack --all`, `stream-open`,
+`stream-status`, `stream-done`, `stream-label`, and `spawn-one <role>` or `spawn-ad-hoc <role>` without
+`--member` — refuses, exit 2, listing the owned teams; a named member that no owned team holds, or
+that more than one holds, adds that to the message. An explicit `--team <t>` is taken as given. Verbs
+that don't act on one team (`teams`, `doctor`, `whoami`, `checkin`, `adopt`, `tier`, `reap`, `history`,
+`show` and the other roster verbs) are unaffected. The default team (a legacy `team.json`) counts as
+owned but has no `--team` spelling: with several teams owned it can be reached only through a member's
+name. A session owns a team when its session id matches the one the team file records, or its pid
+matches the recorded orchestrator pid and no two known session ids differ; a dead pid proves nothing,
+and ownership never checks that the owner is alive. `msg.mjs new` without `--team`, owning several, takes the team whose members include
 `--to-name` and otherwise refuses and writes nothing; `msg.mjs list` covers every owned team, and each
 row carries its `team` (`team=<name>` in `--plain`); `msg.mjs roster` prints every owned team's table,
 each under a line naming the team and its roster (JSON: `teams`). The removed `alias` and `layout`

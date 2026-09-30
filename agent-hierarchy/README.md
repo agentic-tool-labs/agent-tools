@@ -370,6 +370,71 @@ under [docs/specs/](./docs/specs/). Good places to start:
 [0026](./docs/specs/0026-downstream-dispatch-visibility-and-orchestrator-only-route-gate.md) (route gate),
 [0028](./docs/specs/0028-orchestrator-conduit-and-liveness.md) (conduit and liveness).
 
+## What's new
+
+- **0.106.0** named rosters: several rosters side by side, pick one per repo, machine or session.
+- **0.107.0** role packs: roles shipped in a plugin, adopted one at a time behind a pin.
+- **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
+
+The installed version is in `.claude-plugin/plugin.json`. Each feature below
+is complete enough to use; the linked page has the detail.
+
+## Named rosters
+
+A roster is the list of members a team is built from. Until now there was one
+per level; now a level can hold several, as `rosters.<name>` blocks beside the
+default one. Commands that read or edit a roster use the first of `--roster
+<name>`, the `AH_ROSTER` environment variable, the `activeRoster` config key,
+then the default block. A running team keeps the roster it was built from.
+
+```
+/agent-roster copy default docs     # new roster "docs", starting from the default
+/agent-roster use docs              # later teams you create use it (this repo, just you)
+/agent-roster list                  # what exists, where, and which is selected
+AH_ROSTER=docs claude               # or: one session only
+```
+
+`use docs --level repo` shares the choice with the repo, `--level global` makes
+it machine-wide; `use default` goes back. More, including names and deleting:
+[docs/getting-started.md](./docs/getting-started.md#named-rosters).
+
+## Role packs: roles from someone else's plugin
+
+A role pack is an ordinary Claude Code plugin that also has an `ah-roles.json`.
+You install it with Claude Code, but nothing in it routes, dispatches or
+spawns until you adopt a role: you review its dry run (fields, tools, what else
+the plugin carries) and approve a pin in Claude Code's own prompt. The pin
+covers the whole plugin, so any change, even a plain `claude plugin update`,
+makes its roles unavailable until you review and trust them again. A pack role
+never runs with permission checks off, and in `/pipeline` runs it may implement
+but never review.
+
+```
+/agent-role install owner/my-pack   # shows the roles and everything else the plugin carries, then installs
+/agent-role adopt                   # dry run, then commit with the pin it prints
+/agent-role trust my-role           # after an update: review the change, re-pin
+```
+
+Nothing is trusted on your say-so in a subagent, peer or pipeline session; the
+approval is yours, in your own session. Writing a pack, the trust model and its
+limits: [docs/custom-roles.md](./docs/custom-roles.md#6-role-packs).
+
+## Several teams in one session
+
+A session can own more than one team. Ask for them in a sentence, and the
+Orchestrator asks only what you left out (a name, a roster, a model):
+
+```
+create team foo from roster x and team bar from roster y
+```
+
+Afterwards, say which team you mean: `disband foo`. A member's name already
+says its team: `dismiss bar-reviewer`. The session's start-up note lists the
+teams you own, and a command about a whole team (`disband`, `untrack --all`)
+needs `--team foo` when you own several. More:
+[docs/getting-started.md](./docs/getting-started.md#5-spawning-a-team),
+[docs/troubleshooting.md](./docs/troubleshooting.md#several-owned-teams).
+
 ## Commands
 
 ```
@@ -394,15 +459,6 @@ reviewer. It adds, edits, or removes a custom role and its agent file, `list`
 shows which roles exist, and `check` looks for problems with your roles (or
 one role) and walks you through fixing them. Putting a new role on the roster
 afterwards is `/agent-roster`, and starting it in a live team is `/agent-team`.
-Roles can also come from someone else's plugin, a *role pack*: `install`
-shows you everything the plugin carries, and nothing from it is used until you
-adopt a role and approve its pin. See
-[docs/custom-roles.md](./docs/custom-roles.md#6-role-packs).
-
-`/agent-roster` can also hold several rosters side by side (`list`, `copy`,
-`delete`, `use`, or `--roster <name>` / `AH_ROSTER` for one command or
-session), so different workloads get different teams. See
-[docs/getting-started.md](./docs/getting-started.md#named-rosters).
 
 `/pipeline` takes a plan, a spec, or a list of acceptance criteria and runs it
 to completion by itself: round after round of Architect, Implementor, and

@@ -28,6 +28,7 @@ Then: symptom → likely cause → what to run.
 | Peers in different repos share no messages | Cross-repo limitation, documented in [README.md](../README.md) — different repos resolve different hierarchy dirs | Set `AGENT_HIERARCHY_DIR` to the same path in both sessions |
 | A dispatch is denied for a missing `[hierarchy-msg]` pointer | The dispatch/response gate requires a message-file pointer in-band | Follow the deny text's `msg.mjs new` instructions — see [docs/comms-protocol.md](./comms-protocol.md) §5/§6 |
 | Tier gate denies a dispatch | Dispatching Architect or Ultra-Advisor at or below your own model's tier | Do it inline, or set `reason: context\|second-opinion\|parallel` in the request file and re-issue |
+| A command says `this session owns N live teams (…) — pass --team <name> to say which` | you own several teams and the verb doesn't name a member | [Several owned teams](#several-owned-teams) below |
 | A command says `… selects roster "<name>", but there is no rosters.<name> block at any level` | `--roster`, `AH_ROSTER` or `activeRoster` names a roster no level defines | [Named rosters](#named-rosters) below |
 | A custom or pack role is missing from routing, or `role list` shows `UNAVAILABLE` with a `pack-…` reason | the pack changed, went missing, or was never trusted on this machine | [Role packs](#role-packs) below |
 | A response is denied with "not in its request's directory" or "outside this session's message pool" | the response file is not beside the request it answers | [Response pointers](#response-pointers) below |
@@ -55,6 +56,40 @@ Code Bash tool (a plain terminal, a CI job, a wrapper that strips the environmen
 **"`Cannot find module …/hooks/roster.mjs`."** The version directory your context names was removed
 by an update. Old and new version dirs normally coexist, so the old CLI keeps working until the
 session ends; when it does not, start a new session and use the `ah CLI root:` line it prints.
+
+## Several owned teams
+
+What it is and how to ask for it: [getting-started.md](./getting-started.md#5-spawning-a-team)
+("Several teams"); the rules per verb are in [cli-tools.md](./cli-tools.md).
+
+**"`<verb>: this session owns N live teams ("bar", "foo") — pass --team <name> to say which`."**
+You own more than one team and the verb acts on one whole team, or names no member. Add `--team
+foo`. A name after it, as in `… "x" is a member of none of them`, means the member you named is in
+none of your teams' files (a name not yet recorded, a pane id and a session id never match), or
+`is a member of more than one of them`; name the team too. `msg.mjs new` says the same for a
+recipient it can't place; it writes nothing, so re-run it with `--team` or with `--to-name` set
+to a member's name.
+
+**The legacy default team can't be named.** A `team.json` team counts as owned and shows as
+`default`, but there is no `--team` spelling for it. With several teams owned, reach it by a
+member's name, or disband or untrack the named teams first.
+
+**A team I created isn't listed as mine, or a resumed session owns nothing.** Ownership is the
+creating session's pid (`--orchestrator-pid`, else `CLAUDE_PID`), or a session id the team file
+records, which `create --commit --session <id>` writes; a new pid with no recorded session id
+owns nothing. `roster.mjs teams` lists every team file, with `own` true when the pid matches;
+`adopt --orchestrator-pid <pid>` takes over an orphaned team.
+
+**The route gate tells me to `spawn-one` without `--team`.** With several teams owned and no
+live peer of the role anywhere, the gate's "no live Architect peer" text names a bare
+`spawn-one <role>`, and `roster.mjs` refuses that for the reason above. Add `--team <name>` for
+the team that should get the member. When a live peer exists the gate instead names each one,
+`bar-architect (team bar), foo-architect (team foo)`: SendMessage the one whose team owns the
+work.
+
+**Which teams do I own?** The session's start-up note leads with `You own N live teams: …`, as
+does `/hierarchy status`; `roster.mjs doctor` lists each owned team with its roster, and a
+selected roster that doesn't exist is a red `roster-selection` row naming the team.
 
 ## Named rosters
 

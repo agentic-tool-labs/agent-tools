@@ -145,6 +145,33 @@ The Orchestrator asks only what the request doesn't already say. Afterwards,
 name the team when you ask for something ("disband foo"); a member's name
 already says its team ("dismiss bar-reviewer").
 
+Phrasings it reads without asking:
+
+- "create team foo from roster x and team bar from roster y": foo from x, bar
+  from y.
+- "a team for each of x and y": each team takes its roster's name.
+- "create teams foo and bar, both from x": both use x.
+- "create team docs": the selected roster, as for one team.
+
+What it does ask, once for everyone: a name you didn't give, a roster that
+can't be worked out, a member with no model, each question naming its team.
+It plans every team, asks, then launches, checks in and commits team by team;
+one team failing doesn't undo the others, and it asks once whether to retry.
+You end up owning every team it built.
+
+Owning several teams changes how you address them. A command that names a
+member (`dismiss bar-reviewer`, `move foo-architect …`) finds the team from
+the name. A command about a whole team (`disband`, `untrack --all`, the
+stream commands) needs `--team foo`; without it the command refuses and lists
+the teams you own, and in conversation the Orchestrator asks which you mean.
+Messages follow the same rule: `msg.mjs new` takes the team from `--to-name`,
+and `msg.mjs list` shows every owned team with a `team` on each row. The
+session's start-up note says which teams you own. A team is yours by the pid
+of the session that created it, or by a session id the team file records.
+Details:
+[cli-tools.md](./cli-tools.md); when it goes wrong,
+[troubleshooting.md](./troubleshooting.md#several-owned-teams).
+
 ## 6. The first dispatch
 
 This is the part that makes the model click. Say the Orchestrator (your
