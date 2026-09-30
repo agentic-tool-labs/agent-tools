@@ -190,10 +190,17 @@ session id). Every other team verb — `create`, `disband`, `resync`, `untrack -
 that more than one holds, adds that to the message. An explicit `--team <t>` is taken as given. Verbs
 that don't act on one team (`teams`, `doctor`, `whoami`, `checkin`, `adopt`, `tier`, `reap`, `history`,
 `show` and the other roster verbs) are unaffected. The default team (a legacy `team.json`) counts as
-owned but has no `--team` spelling: with several teams owned it can be reached only through a member's
-name. A session owns a team when its session id matches the one the team file records, or its pid
-matches the recorded orchestrator pid and no two known session ids differ; a dead pid proves nothing,
-and ownership never checks that the owner is alive. `msg.mjs new` without `--team`, owning several, takes the team whose members include
+owned, and is `--team @default`. A session owns a team when its session id matches the one the team
+file records, or its pid matches the recorded orchestrator pid and no two known session ids differ; a
+dead pid proves nothing, and ownership never checks that the owner is alive. The CLI reads the session
+id only from `--session` (never from the environment), and a team records one only when
+`create --commit --session <id>` wrote it, which the agent-team skill doesn't pass. So a resumed
+session, with a new pid, owns none of its teams in the CLI or in its hooks until it re-claims each one
+with `adopt --orchestrator-pid <its pid> [--team <t>]`; `adopt` keeps the recorded session id and
+changes only the pid, and it is one call per team. The `own` field of `teams` uses the same rule.
+`reap` judges a team by its recorded pid alone, so a team that only a session id owns, with a dead
+pid, is an orphan to `reap --commit` (it deletes the team file unless live members are attributed to
+it): `adopt` first. `msg.mjs new` without `--team`, owning several, takes the team whose members include
 `--to-name` and otherwise refuses and writes nothing; `msg.mjs list` covers every owned team, and each
 row carries its `team` (`team=<name>` in `--plain`); `msg.mjs roster` prints every owned team's table,
 each under a line naming the team and its roster (JSON: `teams`). The removed `alias` and `layout`

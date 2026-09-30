@@ -166,9 +166,11 @@ stream commands) needs `--team foo`; without it the command refuses and lists
 the teams you own, and in conversation the Orchestrator asks which you mean.
 Messages follow the same rule: `msg.mjs new` takes the team from `--to-name`,
 and `msg.mjs list` shows every owned team with a `team` on each row. The
-session's start-up note says which teams you own. A team is yours by the pid
-of the session that created it, or by a session id the team file records.
-Details:
+session's start-up note says which teams you own; the legacy default team, if
+you have one, is `@default` (`--team @default`). A team is yours by the pid of
+the session that created it, so a session you resume owns none of its teams
+until it re-claims each with `roster.mjs adopt --orchestrator-pid <pid> --team
+<name>`. Details:
 [cli-tools.md](./cli-tools.md); when it goes wrong,
 [troubleshooting.md](./troubleshooting.md#several-owned-teams).
 

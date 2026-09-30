@@ -70,22 +70,33 @@ none of your teams' files (a name not yet recorded, a pane id and a session id n
 recipient it can't place; it writes nothing, so re-run it with `--team` or with `--to-name` set
 to a member's name.
 
-**The legacy default team can't be named.** A `team.json` team counts as owned and shows as
-`default`, but there is no `--team` spelling for it. With several teams owned, reach it by a
-member's name, or disband or untrack the named teams first.
+**Naming the legacy default team.** A `team.json` team counts as owned and appears as `@default`
+in refusals, start-up notes and commands. Pass `--team @default` to any verb that takes `--team`,
+and to `msg.mjs`. It is reserved: no team can be named that, and any other `@…` value is
+refused. `roster.mjs teams --json` still gives that team a `name` of `null`.
 
 **A team I created isn't listed as mine, or a resumed session owns nothing.** Ownership is the
-creating session's pid (`--orchestrator-pid`, else `CLAUDE_PID`), or a session id the team file
-records, which `create --commit --session <id>` writes; a new pid with no recorded session id
-owns nothing. `roster.mjs teams` lists every team file, with `own` true when the pid matches;
-`adopt --orchestrator-pid <pid>` takes over an orphaned team.
+creating session's pid (`--orchestrator-pid`, else `CLAUDE_PID`), or a session id that the team
+file records and the CLI is given with `--session`. A team records a session id only when
+`create --commit --session <id>` wrote it, and the agent-team skill doesn't pass that. So a
+resumed session, whose pid is new, owns none of its teams until it re-claims each one:
 
-**The route gate tells me to `spawn-one` without `--team`.** With several teams owned and no
-live peer of the role anywhere, the gate's "no live Architect peer" text names a bare
-`spawn-one <role>`, and `roster.mjs` refuses that for the reason above. Add `--team <name>` for
-the team that should get the member. When a live peer exists the gate instead names each one,
-`bar-architect (team bar), foo-architect (team foo)`: SendMessage the one whose team owns the
-work.
+    roster.mjs adopt --orchestrator-pid <this session's pid> --team <name>
+
+`adopt` changes only the recorded pid, refuses a pid that isn't a live process, and refuses a team
+still owned by another live pid. It is one team per call (`--team @default` for `team.json`).
+`roster.mjs teams` lists every team file, with `own` true by the same rule as above.
+
+**`reap --commit` removed, or wants to remove, a team I own.** `reap` judges a team by its
+recorded pid alone, so a team that only a session id owns, with a dead pid, looks orphaned, and
+`reap --commit` deletes its team file unless live members are attributed to it. Run `adopt` for it
+first. A reap that keeps a team lists it under `kept`, with the `adopt` command to run.
+
+**The route gate's "no live peer" text.** With several teams owned and no live peer of the role
+anywhere, the gate lists one command per owned team, each with its own verb, `--team` and the
+name prefix to pass to `--names-in-use`, and says to run the one for the team that owns the work.
+When a live peer exists the gate instead names each one, `bar-architect (team bar),
+foo-architect (team foo)`: SendMessage the one whose team owns the work.
 
 **Which teams do I own?** The session's start-up note leads with `You own N live teams: …`, as
 does `/hierarchy status`; `roster.mjs doctor` lists each owned team with its roster, and a

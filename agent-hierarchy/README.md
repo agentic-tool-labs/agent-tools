@@ -431,7 +431,10 @@ create team foo from roster x and team bar from roster y
 Afterwards, say which team you mean: `disband foo`. A member's name already
 says its team: `dismiss bar-reviewer`. The session's start-up note lists the
 teams you own, and a command about a whole team (`disband`, `untrack --all`)
-needs `--team foo` when you own several. More:
+needs `--team foo` when you own several (`--team @default` is a legacy
+`team.json` team). A session you resume doesn't own its teams again on its
+own: re-claim each with `roster.mjs adopt --orchestrator-pid <pid> --team foo`.
+More:
 [docs/getting-started.md](./docs/getting-started.md#5-spawning-a-team),
 [docs/troubleshooting.md](./docs/troubleshooting.md#several-owned-teams).
 
