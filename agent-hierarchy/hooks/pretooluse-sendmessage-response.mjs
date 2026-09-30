@@ -141,7 +141,7 @@ try {
   if (token) {
     for (const rec of qualifying) {
       const meta = parseMsgFilename(rec.msg);
-      const check = validateResponseToken(text, dir, callerRole, meta ? meta.id : null);
+      const check = validateResponseToken(text, dir, callerRole, meta ? meta.id : null, rec.msg);
       if (!check.ok) continue;
       const id = meta ? meta.id : rec.msg;
       const echo = echoBytesAfterPointer(text, meta ? meta.id : null);
@@ -151,9 +151,12 @@ try {
       appendGate(dir, { type: "send-echo-cap", id, session_id: sessionId, bytes: echo });
       decide("deny", echoCapReason(echo), "ah: held an over-long report message; it will be trimmed to the file pointer and re-sent.");
     }
-    // Present but satisfies no open request: re-check the oldest for the reported reason.
-    const meta = parseMsgFilename(qualifying[0].msg);
-    const check = validateResponseToken(text, dir, callerRole, meta ? meta.id : null);
+    // Present but satisfies no open request: re-check the record the token's filename names
+    // (else the oldest) for the reported reason.
+    const tokenMeta = parseMsgFilename(token);
+    const target = (tokenMeta && qualifying.find((r) => (parseMsgFilename(r.msg) || {}).id === tokenMeta.id)) || qualifying[0];
+    const meta = parseMsgFilename(target.msg);
+    const check = validateResponseToken(text, dir, callerRole, meta ? meta.id : null, target.msg);
     decide("deny", invalidTokenReason(check.why), "ah: held a report whose file pointer matches no open request; it will be corrected.");
   }
 
