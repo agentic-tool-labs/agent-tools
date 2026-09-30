@@ -1134,9 +1134,18 @@ export function teamsWithMember(dir, teams, name) {
   return name ? teams.filter((team) => teamMemberNameSet(dir, team).has(name)) : [];
 }
 
-/** How a list of team names reads in a refusal: `"foo", "bar"`, the default team spelled out. */
+/** The `--team` value that names the default team (team.json). No team can take it as a name: it
+    fails `validateTeamAlias`, which roster.mjs and msg.mjs check only after this value. */
+export const DEFAULT_TEAM_ARG = "@default";
+
+/** A team name as the user or the model passes it back with `--team`: the default team is `@default`. */
+export function teamArgName(team) {
+  return team === null ? DEFAULT_TEAM_ARG : team;
+}
+
+/** How a list of team names reads in a refusal: `"foo", "bar"`, the default team as `"@default"`. */
 export function teamListText(teams) {
-  return teams.map((n) => (n === null ? "the default team (team.json)" : `"${n}"`)).join(", ");
+  return teams.map((n) => `"${teamArgName(n)}"`).join(", ");
 }
 
 /**

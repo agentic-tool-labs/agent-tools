@@ -54,7 +54,7 @@ import {
   sweep,
   SWEEP_DAYS,
 } from "./lib-hier.mjs";
-import { memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamListText, teamsWithMember } from "./lib-roster.mjs";
+import { DEFAULT_TEAM_ARG, memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamArgName, teamListText, teamsWithMember } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all"]);
 
@@ -114,6 +114,11 @@ const plain = opts.plain === true;
  * default team (null), same as before this rung existed.
  */
 function resolveTeamArg() {
+  // `--team @default` names team.json explicitly: no owned-team fallback, no refusal for several.
+  if (opts.team === DEFAULT_TEAM_ARG) {
+    defaultTeamExplicit = true;
+    return null;
+  }
   if (typeof opts.team === "string") {
     const v = validateTeamAlias(opts.team);
     if (!v.ok) fail(`--team: ${v.why}`);
@@ -161,6 +166,8 @@ function resolveTeamArg() {
 /** The hierarchy dir holding the resolved team's file when it is not this cwd's — a worktree
     peer's team belongs to the main checkout. Null means `hierarchyDir(cwd)`. */
 let teamHome = null;
+/** `--team @default` was given. */
+let defaultTeamExplicit = false;
 /** The teams `list` and `roster` show when this session owns more than one and names none; null otherwise. */
 let everyTeam = null;
 const teamArg = resolveTeamArg();
@@ -244,7 +251,7 @@ try {
       // to before this existed until a downstream dispatch actually exists.
       const downstream = listDownstreamDispatches(dir);
       if (plain) {
-        const rowsText = rows.map((r) => `${r.id}  ${r.to}  ${r.slug}  ${r.age}  ${r.state}${everyTeam ? `  team=${r.team ?? "default"}` : ""}`).join("\n");
+        const rowsText = rows.map((r) => `${r.id}  ${r.to}  ${r.slug}  ${r.age}  ${r.state}${everyTeam ? `  team=${teamArgName(r.team)}` : ""}`).join("\n");
         const text = downstream.length
           ? (rowsText ? `${rowsText}\n\ndownstream:\n` : "downstream:\n") + downstream.map(downstreamLine).join("\n")
           : rowsText;
@@ -302,11 +309,11 @@ try {
           const ros = roster(dir, resolved, teamPrefix(resolved.cwd, team));
           return { team, roster: (readTeam(dir, team) || {}).roster ?? null, resolved, ros };
         });
-        if (plain) out(parts.flatMap((p) => [`Team ${p.team ?? "default"} (roster ${p.roster ?? "default"}):`, ...tableLines(p.resolved, p.ros)]).join("\n"), true);
+        if (plain) out(parts.flatMap((p) => [`Team ${teamArgName(p.team)} (roster ${p.roster ?? "default"}):`, ...tableLines(p.resolved, p.ros)]).join("\n"), true);
         else out({ dir, teams: parts.map((p) => ({ team: p.team, roster: p.roster, summary: rosterLine(p.ros), roles: p.ros })) }, false);
         break;
       }
-      const resolved = resolveConfig(cwd, { team: teamArg, teamHome, pid: Number(opts["orchestrator-pid"] ?? process.env.CLAUDE_PID) });
+      const resolved = resolveConfig(cwd, { ...(defaultTeamExplicit ? { defaultTeam: true } : { team: teamArg }), teamHome, pid: Number(opts["orchestrator-pid"] ?? process.env.CLAUDE_PID) });
       const ros = roster(dir, resolved, teamPrefix(resolved.cwd, resolved.team));
       if (plain) {
         out(tableLines(resolved, ros).join("\n"), true);

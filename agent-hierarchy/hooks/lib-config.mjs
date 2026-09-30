@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 // bodies called later (statusReport here; validateMember/validateRosterBlock there). Keep it that
 // way — a top-level use on either side would risk the top-level-await deadlock class documented
 // in lib-roster.mjs's header.
-import { legacyTeamPrefix, listTeamNames, memberTeam, ownedTeams, readTeam, ROSTER_LAYOUT_VALUES, teamRosterEntry, teamRosterKey } from "./lib-roster.mjs";
+import { legacyTeamPrefix, listTeamNames, memberTeam, ownedTeams, readTeam, teamArgName, ROSTER_LAYOUT_VALUES, teamRosterEntry, teamRosterKey } from "./lib-roster.mjs";
 import { normalizeSessionId } from "./lib-gate.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 
@@ -2759,9 +2759,9 @@ function roleLines(resolved, repoBasename, owned = null) {
       return `- ${roleLabel(role, resolved)}${tag} — ${agentCall}`;
     }
     if (owned) {
-      const targets = owned.flatMap(({ team }) => resolvedPeerTargets(role, entry, teamPrefix(resolved.cwd, team)).map((p) => `"${p}" (team ${team ?? "default"})`));
+      const targets = owned.flatMap(({ team }) => resolvedPeerTargets(role, entry, teamPrefix(resolved.cwd, team)).map((p) => `"${p}" (team ${teamArgName(team)})`));
       const who = targets.length ? `${targets.join(" or ")}, the one whose team owns the work` : "the live teammate of the team that owns the work (names: `ListAgents` / `roster.mjs teams`)";
-      const spawns = owned.map(({ team, resolved: r }) => `team ${team ?? "default"}: \`node "${ROSTER_CLI}" ${rosterMemberFor(r, role) ? "spawn-one" : "spawn-ad-hoc"} ${role}${team === null ? "" : ` --team ${team}`} --cwd ${cwd}\``);
+      const spawns = owned.map(({ team, resolved: r }) => `team ${teamArgName(team)}: \`node "${ROSTER_CLI}" ${rosterMemberFor(r, role) ? "spawn-one" : "spawn-ad-hoc"} ${role} --team ${teamArgName(team)} --cwd ${cwd}\``);
       return `- ${roleLabel(role, resolved)}${tag} — SendMessage ${who}; none live → ${spawns.join("; ")}; then SendMessage the name it prints. Can't launch → agent-team 'When a role can't take the work'.`;
     }
     const explicit = entry.peer && entry.peer !== "auto";
@@ -3126,7 +3126,7 @@ export function statusReport(cwd) {
     for (const { team, resolved: r } of owned) {
       const t = readTeam(dir, team);
       const prefix = teamPrefix(r.cwd, team);
-      out.push(`Team ${team ?? "default"} (roster ${(t && t.roster) ?? "default"}):`);
+      out.push(`Team ${teamArgName(team)} (roster ${(t && t.roster) ?? "default"}):`);
       out.push(...rosterSectionLines(r));
       out.push(`Team name: ${prefix} (team) — agents named ${prefix}-<role>`);
       out.push(t ? `Team: ${t.team_id} (${t.transport}, ${t.members.length} member(s)${teamIsPartial(dir, r.cwd, team, t, r) ? ", partial" : ""})` : "Team: none active");
@@ -3157,7 +3157,7 @@ export function statusReport(cwd) {
 
 /** The lead line of every surface that shows several owned teams. */
 export function ownedTeamsLead(teams) {
-  return `You own ${teams.length} live teams: ${teams.map((t) => t ?? "default").join(", ")}. Pass --team <name> to roster.mjs team verbs and to msg.mjs new/list; a member name already says its team.`;
+  return `You own ${teams.length} live teams: ${teams.map(teamArgName).join(", ")}. Pass --team <name> to roster.mjs team verbs and to msg.mjs new; a member name already says its team.`;
 }
 
 /** `/hierarchy status`'s Roster lines for one resolved config. */

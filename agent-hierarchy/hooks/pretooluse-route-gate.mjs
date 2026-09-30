@@ -69,7 +69,7 @@ import {
   sessionModel,
   upRecordFor,
 } from "./lib-hier.mjs";
-import { resolveMemberTeam, teamMemberByName, teamMemberRenamedFrom } from "./lib-roster.mjs";
+import { ownedTeams, resolveMemberTeam, teamArgName, teamMemberByName, teamMemberRenamedFrom } from "./lib-roster.mjs";
 import { parseSentinel, stripRef } from "./lib-peer.mjs";
 
 /** The registry this call resolved; labels for custom roles come from it. */
@@ -121,7 +121,18 @@ function failClosedReason(input) {
   if (ref === "ah:orchestrator") return `${head} The Orchestrator never runs as a subagent.`;
   const role = ref.slice("ah:".length);
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : "<abs cwd>";
-  return `${head} ${ROLE_LABELS[role]} never runs as a subagent: SendMessage its live peer, or start one with \`node "${ROSTER_CLI}" spawn-one ${role} --cwd ${cwd}\`.`;
+  // The owner rule alone still names each team when the session owns several, even though the
+  // config around it could not be resolved.
+  let owned = [];
+  try {
+    if (input.cwd) owned = ownedTeams(hierarchyDir(cwd), { pid: process.ppid, sessionId: typeof input.session_id === "string" ? input.session_id : null });
+  } catch {
+    owned = [];
+  }
+  const start = owned.length > 1
+    ? `${owned.map((t) => `\`node "${ROSTER_CLI}" spawn-one ${role} --team ${teamArgName(t)} --cwd ${cwd}\``).join(" or ")}, the one for the team that owns this work`
+    : `\`node "${ROSTER_CLI}" spawn-one ${role} --cwd ${cwd}\``;
+  return `${head} ${ROLE_LABELS[role]} never runs as a subagent: SendMessage its live peer, or start one with ${start}.`;
 }
 
 /** Why a dispatch of pack role agent `ref` is held: the session runs with permission checks off. */
@@ -150,16 +161,18 @@ function peersDenyReason(role, live, resolved, cwd) {
 
 /** Live peers of `role` across several owned teams, each named with its team. */
 function teamPeersDenyReason(role, liveByTeam, cwd) {
-  const named = liveByTeam.flatMap(({ team, live }) => live.map((i) => `${i.name} (team ${team ?? "default"})`));
+  const named = liveByTeam.flatMap(({ team, live }) => live.map((i) => `${i.name} (team ${teamArgName(team)})`));
   return [
     `ah: live ${label(role)} peer(s): ${named.join(", ")}: SendMessage the one whose team owns this work (set to_name), with the brief this Agent call carried, instead of spawning.`,
     ...[...new Set(liveByTeam.flatMap(({ resolved }) => paneLine(resolved, rosterMemberFor(resolved, role), cwd)))],
   ].join("\n");
 }
 
-function spawnCommand(role, member, cwd) {
-  if (member) return `node "${ROSTER_CLI}" spawn-one ${role} --cwd ${cwd}`;
-  return `node "${ROSTER_CLI}" spawn-ad-hoc ${role} --cwd ${cwd}`;
+/** The command that starts `role`; `team` (null for the default team) adds that team's `--team`. */
+function spawnCommand(role, member, cwd, team) {
+  const scope = team === undefined ? "" : ` --team ${teamArgName(team)}`;
+  if (member) return `node "${ROSTER_CLI}" spawn-one ${role}${scope} --cwd ${cwd}`;
+  return `node "${ROSTER_CLI}" spawn-ad-hoc ${role}${scope} --cwd ${cwd}`;
 }
 
 function deliverCommand(name, reqPath, cwd) {
@@ -185,16 +198,35 @@ function renamedReason(to, member) {
   return `${to} is not in your team; its ${label(member.role)} is ${member.name}. SendMessage "${member.name}". To reach the other session on purpose, address it with its [ref].`;
 }
 
+/** What the no-live-peer deny says after its spawn command. */
+const SPAWN_FOLLOW_UP = [
+  "Then SendMessage the `name` the command prints, with the brief you gave this Agent call. The session takes a few seconds to boot: if the name is not in ListAgents yet, wait until it is (`roster.mjs teams` reports it live).",
+  "If the command reports the member already exists or is already live, SendMessage the name it reports.",
+  'If the command refuses with `refused: "team-name-unusable"`, follow its `message`: ask the user for the team name, then re-run with `--team`. That is not a launch failure.',
+  "If the command fails to launch, follow agent-team's 'When a role can't take the work'.",
+];
+
 function spawnReason(role, resolved, member, cwd, prefix) {
   return [
     `ah: no live ${label(role)} peer. ah chain roles run as peers, never subagents.`,
     `Run: ${spawnCommand(role, member, cwd)}`,
     `Before running it, run ListAgents and add \`--names-in-use <name>\` for every live name that starts with \`${prefix}-\`.`,
-    "Then SendMessage the `name` the command prints, with the brief you gave this Agent call. The session takes a few seconds to boot: if the name is not in ListAgents yet, wait until it is (`roster.mjs teams` reports it live).",
-    "If the command reports the member already exists or is already live, SendMessage the name it reports.",
-    'If the command refuses with `refused: "team-name-unusable"`, follow its `message`: ask the user for the team name, then re-run with `--team`. That is not a launch failure.',
-    "If the command fails to launch, follow agent-team's 'When a role can't take the work'.",
+    ...SPAWN_FOLLOW_UP,
     ...paneLine(resolved, member, cwd),
+  ].join("\n");
+}
+
+/** The no-live-peer deny for a session that owns several teams: each team's own spawn command. */
+function teamSpawnReason(role, teamConfigs, cwd) {
+  return [
+    `ah: no live ${label(role)} peer. ah chain roles run as peers, never subagents.`,
+    ...teamConfigs.map(
+      ({ team, resolved }) =>
+        `Team ${teamArgName(team)}: ${spawnCommand(role, rosterMemberFor(resolved, role), cwd, team)} — before running it, run ListAgents and add \`--names-in-use <name>\` for every live name that starts with \`${teamPrefix(cwd, team)}-\`.`
+    ),
+    "Run the one for the team that owns this work.",
+    ...SPAWN_FOLLOW_UP,
+    ...new Set(teamConfigs.flatMap(({ resolved }) => paneLine(resolved, rosterMemberFor(resolved, role), cwd))),
   ].join("\n");
 }
 
@@ -305,7 +337,8 @@ try {
     }
     const live = teamConfigs ? [] : (getRoster()[role] || []).filter((i) => i.live);
     if (live.length) decide("deny", peersDenyReason(role, live, resolved, cwd), "ah: held a subagent dispatch of a chain role; it goes to the live peer instead.");
-    decide("deny", spawnReason(role, resolved, rosterMemberFor(resolved, role), cwd, repoBasename), "ah: held a subagent dispatch of a chain role; a peer session will be started instead.");
+    const reason = teamConfigs ? teamSpawnReason(role, teamConfigs, cwd) : spawnReason(role, resolved, rosterMemberFor(resolved, role), cwd, repoBasename);
+    decide("deny", reason, "ah: held a subagent dispatch of a chain role; a peer session will be started instead.");
   }
 
   // ---- tier gate: same-or-lower-tier Architect / Ultra-Advisor without a reason
@@ -326,7 +359,7 @@ try {
         const reason = parsed && parsed.fm ? parsed.fm.reason : null;
         if (!reason && !hasGate(dir, (r) => r.type === "tier-deny" && r.session_id === sessionId && r.role === role)) {
           appendGate(dir, { type: "tier-deny", session_id: sessionId, role });
-          const from = teamConfigs ? ` (team ${hit.team ?? "default"})` : "";
+          const from = teamConfigs ? ` (team ${teamArgName(hit.team)})` : "";
           decide("deny", tierReason(model, tier, role, hit.resolved.roles[role].model, rt, resolved.msgs === "off") + from, "ah: held a dispatch to a role at or below this session's tier; it will be justified or done here.");
         }
       }

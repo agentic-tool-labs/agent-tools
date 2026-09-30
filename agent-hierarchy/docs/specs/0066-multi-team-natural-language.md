@@ -155,8 +155,14 @@ The rule tests one team against the caller's identity (pid, session id).
 The team is owned when either of these holds:
 - **Same session:** the caller's session id and the team's
   `orchestrator.session_id` are both present and equal. The pid is not
-  compared, so a resumed session (same session id, new pid) still owns its
-  teams.
+  compared.
+  - This arm matters only for a team that recorded a session id, and only
+    `create --commit --session <id>` writes one. The skill doesn't pass
+    `--session`, and `spawn-one` records none.
+  - So in the normal flow, a resumed session (new pid) owns none of its
+    teams, as before this spec. It re-claims each one with `roster.mjs adopt
+    --orchestrator-pid <new pid> --team <T>` (docs/troubleshooting.md:77-81).
+  - Whether to make resumed ownership automatic is Q8.
 - **Same process:** the team's `orchestrator.pid` equals the caller's pid,
   and the session ids don't conflict. They conflict only when both are
   present and differ.
@@ -174,7 +180,7 @@ Why this rule:
 
 It accepts more than today in two cases, both on purpose:
 - roster.mjs and msg.mjs, when given `--session`, recognise a resumed
-  session's teams. Today they don't.
+  session's teams, if those teams recorded a session id. Today they don't.
 - A hook caller with no session id (statusReport, posttooluse-roster)
   accepts a pid match on a team that recorded a session id. roster.mjs
   already does this today. The hooks' current rule requires the team to have
@@ -229,7 +235,34 @@ is recorded as any team's orchestrator.
   refuses because the team is live). With several it refuses with the list.
   The skill always passes `--team` for a new team (§5), so this only matters
   for a bare create.
-- **`teams`** already lists every team with an "own" flag. No change.
+- **`teams`** already lists every team with an `own` flag.
+  - `own` is computed with the §4.1 rule against `invokerIdentity()`, like
+    every other ownership check. Today it compares the pid only
+    (roster.mjs:4460).
+  - Without `--session` the output is unchanged, because a caller with no
+    session id can't conflict.
+  - The JSON `name` stays `null` for the default team.
+- **The default team has a name for `--team`: `@default`.**
+  - The default team is `team.json`, the one that is used when no `--team`
+    is given.
+  - `@default` fails `validateTeamAlias`
+    (`^[A-Za-z0-9][A-Za-z0-9-]{0,31}$`), so no named team can be called
+    that.
+  - `--team @default` means `team.json` in every roster.mjs verb that takes
+    `--team`, and in msg.mjs. It is explicit, exactly like a named `--team`:
+    no ownership fallback and no refusal for several owned teams.
+  - Any other value outside the pattern is still refused.
+  - Wherever ah prints a team name for the user or the model to pass back,
+    the default team is shown as `@default`. That covers the refusal lists
+    ("pass --team <name> to say which"), the lead line, the directive's team
+    labels and printed commands, the route gate's text, and the section
+    heads in `statusReport` and `msg.mjs roster`.
+  - The `teams --json` schema doesn't change: its `name` stays `null`. The
+    skill maps `null` to `@default` (§5.2).
+  - Why: once the default team is owned beside a named team, its no-member
+    commands (for example `spawn-one <role>`) have no other way to reach it.
+    A reserved value goes through the existing `--team` parsing in every
+    verb, whereas a new flag would have to be added to every verb's flag set.
 - **Verbs outside `OWNED_TEAM_VERBS` that call `registry()`:** show, init,
   add, edit, remove, layout, alias, next-split, layout-splits, tier, adopt,
   teams, checkin, whoami, reap, history, role, pack, roster and doctor.
@@ -267,15 +300,19 @@ behaviour must be:
   - Text that doesn't depend on a team (the protocol, the tier line) appears
     once.
   - One extra line goes first: "You own N live teams: foo, bar. Pass --team
-    <name> to roster.mjs team verbs and to msg.mjs new/list; a member name
+    <name> to roster.mjs team verbs and to msg.mjs new; a member name
     already says its team."
+    - The default team is listed as `@default` (§4.2).
+    - msg.mjs `list` isn't named in the line, because it covers every owned
+      team without `--team` (§4.6). `--team` only narrows it.
 - **The directive's role lines** (`roleLines` in `buildDirective`):
   - For each role, every owned team gets its own peer target, taken from its
     prefix or its explicit `peer` entry.
   - Each team gets its own verb: `spawn-one` when that team's roster
     template has a row for the role, else `spawn-ad-hoc`.
   - Every printed roster.mjs command carries `--team <T>`, because without
-    it roster.mjs refuses.
+    it roster.mjs refuses. The default team's commands carry `--team
+    @default`.
   - The Implementor picks the shape: a block of role lines per team, or one
     line per role with a part for each team. Either way the text must stay
     correct when two teams differ in verb, in target, or in whether the role
@@ -306,7 +343,14 @@ behaviour must be:
     for a live peer, but name each one with its team ("foo-architect (team
     foo), bar-architect (team bar): SendMessage the one whose team owns this
     work").
-  - If none has one, act as today for no live peer.
+  - If none has one, give today's no-live-peer outcome, with its text built
+    per team as the directive's role lines are (§4.3):
+    - one spawn command per owned team, each with that team's own verb,
+      `--team <T>` (`@default` for the default team) and its own prefix in
+      the `--names-in-use` hint;
+    - then "run the one for the team that owns this work".
+
+    With at most one owned team, the text is byte-identical to today.
 - **Checks that need one roster value** (the tier rule's role model, and
   anything else read from the session's resolved config): evaluate once per
   owned team. If any team's result is deny or ask, that is the result, and
@@ -367,6 +411,13 @@ it.
 
 - Team files, member naming, the `orchestrator` record, and the 24-hour cap
   for other sessions' teams. `teamOwnedBy` changes only as §4.1 says.
+- `reap` and `teamIsOrphaned`. This is a known limit:
+  - a team owned only by session (it recorded a session id, and its
+    recorded pid is dead) still looks orphaned to another session;
+  - that session's `reap --commit` can delete it.
+  - `adopt` re-stamps the pid and ends that.
+  - It is reachable only through `--session`, so the normal flow doesn't
+    hit it. Q8 covers making it automatic.
 - `AH_TEAM_FILE` and member-side resolution.
 - stop-peer-nudge.mjs, which is team-agnostic.
 - pretooluse-disband-close-gate.mjs. Its confirmation text reads the
@@ -464,13 +515,27 @@ exactly, because tests grep for them (§7, K-rows).
 - **New paragraph after § Create: "Owning more than one team."** Anchor:
   "**Owning more than one team.**" Its content:
   - While this session owns more than one live team, pass `--team` to every
-    roster.mjs team verb and to `msg.mjs new`/`list`. A verb that names a
-    member may leave it out.
+    roster.mjs team verb and to `msg.mjs new`. A verb that names a member
+    may leave it out. `msg.mjs list` covers every owned team, and `--team`
+    only narrows it.
+  - The default team is `--team @default`. In `roster.mjs teams --json` it is
+    the row whose `name` is `null`.
   - When the user's words don't say which team ("disband the team"), ask one
     AskUserQuestion listing the owned teams (`roster.mjs teams`, `own:
     true`), or with multi-select when the request can cover several
     ("disband the teams").
   - Each disband keeps its own confirmation.
+- **SKILL.md:513-516**, the sentences after "Every subsequent step (…)
+  then needs that same `--team <name>`". Two claims in them hold only while
+  the session owns exactly one team:
+  - roster.mjs team verbs "resolve the Team it owns without the flag";
+  - `msg.mjs new`/`list` "auto-resolve the active team".
+
+  State both as true only with one owned team. With several, point to
+  **Owning more than one team.** Anchor: "only while this session owns just
+  that one team". The rest of the passage (the `CLAUDE_PID`/`pidAlive`
+  explanation, "pass `--team <name>` explicitly whenever you are not
+  certain") stays.
 - **Kept byte-for-byte**, because tests grep them:
   - "Team name — one question, every create";
   - "Run a bare `roster.mjs create --plan`";
@@ -487,8 +552,8 @@ exactly, because tests grep for them (§7, K-rows).
 - **docs/getting-started.md:** a short "Several teams" paragraph at the end
   of "## 5. Spawning a team" (:112-120). It gives one plain example
   sentence, and says that later requests name the team.
-- **docs/cli-tools.md:** the `--team` rule from §4.2 and the `msg.mjs` rule
-  from §4.6, where `--team` is described.
+- **docs/cli-tools.md:** the `--team` rule from §4.2 (including `--team
+  @default`) and the `msg.mjs` rule from §4.6, where `--team` is described.
 - **skills/agent-roster/SKILL.md:** no change. It already lists the teams
   per roster (:124).
 
@@ -596,6 +661,27 @@ throughout unless a row says otherwise.
   - msg-gate resolves a `bar-` name against `bar`'s config.
 
   [scope each to the first owned team]
+- **M12 The default team's name.** The session owns `team.json` and `foo`.
+  - `spawn-one reviewer --team @default --plan` plans against `team.json`.
+  - The directive's default-team commands, the refusal list and the lead
+    line all show `@default`.
+  - pretooluse-ah-cli allows a `roster.mjs … --team @default` command, as it
+    does for a named `--team`.
+  - `--team @other` is refused.
+
+  [omit `--team` for the default team], [reject `@default` in validation],
+  [accept any `@` value]
+- **M13 Route gate, no live peer, several teams.** With two owned teams and
+  no live architect, the deny text has one spawn command per team, each
+  with its own verb, `--team` and `--names-in-use` prefix. With one owned
+  team, it is byte-identical to today. [print one bare command]
+- **M14 `teams` `own`.**
+  - `--session S` against a team that recorded `S` under a dead pid:
+    `own: true`.
+  - A recorded session that conflicts, with the same pid: `own: false`.
+  - No `--session`: today's output.
+
+  [compare the pid only]
 
 **Part B.** Skill-text rows, in the test-team-identity.sh E2 style: exact
 `grep -q` checks on SKILL.md.
@@ -603,6 +689,9 @@ throughout unless a row says otherwise.
 - **K2** Every string §5.2 says to keep is still present.
 - **K3** The subsection comes before step 0 (`**Several teams in one
   request.**` appears before `0. **Layout`).
+- **K4** The :513-516 anchor "only while this session owns just that one
+  team" is present, and the paragraph **Owning more than one team.** names
+  `--team @default`.
 
 Skill text can't be run under the mutation standard. For K1 and K2, the
 mutation is to delete the anchor and see the row fail.
@@ -668,9 +757,34 @@ test-team-lifecycle-names.sh and test-team-stale.sh.
 - **Q7** Commands that only show state (`/hierarchy status`, `msg.mjs
   roster`, `doctor`) with several owned teams: show every team (default), or
   refuse and ask for `--team`, as the acting verbs do.
-- **Q8** A resumed session (same session id, new pid): it keeps owning its
-  teams everywhere, including roster.mjs when given `--session` (default).
-  The alternative is to own them only in the hooks, as today.
+- **Q8** Should a resumed orchestrator (same session id, new pid) keep its
+  teams automatically?
+  - **Default: not in this spec.** Teams record no session id in the normal
+    flow, so a resumed session re-claims each team with `adopt`, as before
+    this spec.
+  - **If the user says yes**, a later change would:
+    1. record the session id at `create --commit`, from `--session`, else
+       from `CLAUDE_CODE_SESSION_ID`, which Bash sees (roster.mjs:5037
+       already reads it);
+    2. have `invokerIdentity` in roster.mjs and msg.mjs read `--session`,
+       else `CLAUDE_CODE_SESSION_ID`;
+    3. at SessionStart with source `resume`, re-stamp `orchestrator.pid` to
+       `process.ppid` for each team matched by session whose recorded pid is
+       dead. This follows `adopt`'s guard: never when the recorded pid is
+       alive. It also ends the `reap` limit in §4.7.
+    4. clear `CLAUDE_CODE_SESSION_ID` in test sandboxes unless a row sets
+       it.
+  - **Evidence needed first (E1):** does a peer launched by roster.mjs
+    (tmux, herdr, terminal) see its own `CLAUDE_CODE_SESSION_ID` in Bash, or
+    the orchestrator's? Compare `echo $CLAUDE_CODE_SESSION_ID` in the
+    orchestrator and in a spawned peer, with the peer's hook payload
+    `session_id`.
+    - Its own: steps 1 to 4 as written.
+    - The orchestrator's: drop step 2, because every peer would own its
+      orchestrator's teams. Step 1 stays, since it runs only in the
+      orchestrator. Step 3 then gives the CLI the new pid.
+    - Subagents sharing the parent's id is fine, because they are the same
+      session.
 
 ## 11. Decisions and confidence
 

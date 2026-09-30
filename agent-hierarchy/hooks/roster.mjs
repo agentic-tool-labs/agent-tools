@@ -162,7 +162,7 @@ import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expan
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
-import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
+import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
 const DISBAND_FLAGS = new Set(["kill", "plan", "close", "confirm", "plan-token", "allow-global", "cwd", "team"]);
@@ -1285,7 +1285,7 @@ function doctorReport(cwd) {
       const parts = owned.map((name) => {
         const t = readTeam(dir, name) || {};
         const orphans = (t.members || []).filter((m) => m && m.role && !known.has(m.role)).length;
-        return { orphans, text: `${name ?? "default"} (roster ${t.roster ?? "default"}, team_id ${t.team_id || "?"}${orphans ? `, ${orphans} member(s) with a role not defined here` : ""})` };
+        return { orphans, text: `${teamArgName(name)} (roster ${t.roster ?? "default"}, team_id ${t.team_id || "?"}${orphans ? `, ${orphans} member(s) with a role not defined here` : ""})` };
       });
       return { status: parts.some((p) => p.orphans) ? "warn" : "ok", detail: `this session owns ${owned.length} live teams: ${parts.map((p) => p.text).join("; ")}` };
     }
@@ -1364,7 +1364,7 @@ function doctorReport(cwd) {
   const selectionProblems = perTeam
     ? perTeam.map(({ team, selection }) => {
         const problem = rosterSelectionProblem(cwd, selection);
-        return problem && `team ${team ?? "default"}: ${problem}`;
+        return problem && `team ${teamArgName(team)}: ${problem}`;
       })
     : [rosterSelectionProblem(cwd, sessionRosterSelection(cwd, { pid: ownOrchestratorPid() }))];
   const selectionProblem = selectionProblems.filter(Boolean).join(" ");
@@ -1410,6 +1410,11 @@ if (opts.help === true || cmd === undefined) printUsage(cmd);
 /** `--team <name>` (spec 0011 §5.1), validated once with the same validator 0010's alias uses. */
 function resolveTeamArg() {
   if (typeof opts.team !== "string") return null;
+  // `--team @default` names team.json explicitly: no owned-team fallback, no refusal for several.
+  if (opts.team === DEFAULT_TEAM_ARG) {
+    teamDefaultExplicit = true;
+    return null;
+  }
   const v = validateTeamAlias(opts.team);
   if (!v.ok) {
     if (TEAM_CREATING_VERBS.has(cmd)) {
@@ -1455,6 +1460,8 @@ function refuseMissingSelection() {
 // Declared before it is resolved: validating it can read the role registry, which reads teamArg.
 let registryCache = null;
 let teamArg = null;
+/** `--team @default` was given: the default team, named as explicitly as any other `--team`. */
+let teamDefaultExplicit = false;
 /** An ad hoc member about to be spawned, so the name check counts it among the new team's members. */
 let adHocForNameCheck = null;
 teamArg = resolveTeamArg();
@@ -1479,7 +1486,7 @@ let teamFileDefaulted = false;
 let teamFileUnnamable = null;
 let teamFileUnreadable = null;
 function resolveTeamFileScope() {
-  if (teamArg) {
+  if (teamArg || teamDefaultExplicit) {
     teamFile = teamArg;
     teamFileDefaulted = false;
     return;
@@ -1926,7 +1933,7 @@ function showNameNote(block) {
     than one (`team` names it, for the messages), else its own team's or the default team's. */
 function roleSetPrefixes() {
   const owned = ownedLiveTeams(hierarchyDir(cwd));
-  if (owned.length > 1) return owned.map((team) => ({ team: team ?? "default", prefix: teamPrefix(cwd, team) }));
+  if (owned.length > 1) return owned.map((team) => ({ team: teamArgName(team), prefix: teamPrefix(cwd, team) }));
   return [{ team: null, prefix: owned.length ? teamPrefix(cwd, owned[0]) : teamPrefix(cwd, null) }];
 }
 resolveTeamFileScope();
@@ -2675,7 +2682,7 @@ function spawnShape(member, transport, agent = null) {
 function registry() {
   if (!registryCache) {
     try {
-      registryCache = resolveConfig(cwd, { team: teamArg });
+      registryCache = resolveConfig(cwd, teamDefaultExplicit ? { defaultTeam: true } : { team: teamArg });
     } catch {
       registryCache = { roles: {}, sources: {}, excludedRoles: [], warnings: [], cwd };
     }
@@ -4446,7 +4453,7 @@ async function createSpawn(dir, withWarnings) {
     `name` == readdirSync's entry basename == the value listTeamNames(dir) returns. Never
     writes. Shared by `teams` and `reap` (spec 0033 §3.2) so the two commands cannot drift
     apart about what a team is. */
-function describeTeamRow(dir, name, myPid) {
+function describeTeamRow(dir, name, invoker) {
   const t = readTeam(dir, name);
   if (!t) return null;
   const pid = t.orchestrator && t.orchestrator.pid;
@@ -4457,14 +4464,14 @@ function describeTeamRow(dir, name, myPid) {
     orchestrator_pid: pid ?? null,
     pid_alive: pidAlive(pid),
     orphaned: teamIsOrphaned(t), // pid null/unresolvable/dead — spec 0033 §3.1
-    own: Number.isInteger(myPid) && pid === myPid,
+    own: teamOwnedBy(t, invoker),
     created: t.created,
   };
 }
 
 /** Every team in this hierarchy dir — default team first, then every named team (spec 0033 §3.2). */
-function allTeamRows(dir, myPid) {
-  return [describeTeamRow(dir, null, myPid), ...listTeamNames(dir).map((name) => describeTeamRow(dir, name, myPid))].filter(Boolean);
+function allTeamRows(dir, invoker) {
+  return [describeTeamRow(dir, null, invoker), ...listTeamNames(dir).map((name) => describeTeamRow(dir, name, invoker))].filter(Boolean);
 }
 
 // ---------------------------------------------------------------- streams
@@ -5457,7 +5464,7 @@ try {
       // Spec 0015 §7.2: --from without an explicit --team targets the entry's own alias (or the
       // default team when the alias is null) — an explicit --team still wins. Must happen before
       // anything below reads teamArg/repoBasename (naming, file target, history upsert alias).
-      if (typeof opts.from === "string" && !teamArg) {
+      if (typeof opts.from === "string" && !teamArg && !teamDefaultExplicit) {
         const entry = resolveHistoryEntry(dir);
         teamArg = entry.alias || null;
         repoBasename = teamPrefix(cwd, teamArg);
@@ -6661,8 +6668,7 @@ try {
       // Spec 0011 §5.4: read-only inventory of every team file in this hierarchy dir — otherwise a
       // stale or a sibling orchestrator's team is invisible. Never writes.
       const dir = hierarchyDir(cwd);
-      const myPid = typeof opts["orchestrator-pid"] === "string" ? Number(opts["orchestrator-pid"]) : Number(process.env.CLAUDE_PID);
-      const rows = allTeamRows(dir, myPid);
+      const rows = allTeamRows(dir, invokerIdentity());
       // Spec 0036 §3.6 (F4 fix): a misplaced row is attributed to a specific member ONLY when its
       // own `team` matches this team's identity AND its role names exactly one peer member of
       // THIS team — role alone is not unique across DIFFERENT teams, and §3.5's action on a wrong
@@ -6741,16 +6747,19 @@ try {
       // Spec 0044 §1.6: the pane this session sits in is authoritative — the orchestrator wrote it
       // into the member row — so ask that before falling back to the role scan, which under §1.1's
       // concurrent teams is ambiguous far more often than it used to be.
-      const resolved = attributeSessionTeam(dir, existing.role, {
-        explicitTeam: teamArg,
-        paneId: sessionPaneId(existing),
-        homes: [dir, mainHierarchyDir(cwd)],
-      });
+      const defaultTeam = teamDefaultExplicit ? readTeam(dir, null) : null;
+      const resolved = teamDefaultExplicit
+        ? defaultTeam && { teamName: null, team: defaultTeam }
+        : attributeSessionTeam(dir, existing.role, {
+            explicitTeam: teamArg,
+            paneId: sessionPaneId(existing),
+            homes: [dir, mainHierarchyDir(cwd)],
+          });
       // G8: an EXPLICIT --team that resolves to nothing is a typo, not a legitimate absence —
       // 0032 §3.4b's same precedent (add --team X refuses a nonexistent container) rather than
       // silently reporting misplaced:false forever. An omitted --team still skips silently
       // (§3.2 point 3), unaffected.
-      if (teamArg && !resolved) fail(`checkin: no such team "${teamArg}"`);
+      if ((teamArg || teamDefaultExplicit) && !resolved) fail(`checkin: no such team "${teamArgName(teamArg)}"`);
       const team = resolved && resolved.team;
       const expectedRoot = (team && team.expected_root) || null;
       const observed = realCwd(cwd);
@@ -6801,7 +6810,7 @@ try {
       // (`env`), or the member row holding its pane (`pane`). A rejected AH_TEAM_FILE is never
       // followed; it is reported beside the real outcome, so a bad launch is diagnosable without
       // hiding what the pane lookup found.
-      const env = teamArg ? null : envTeamFile([dir, mainHierarchyDir(cwd)]);
+      const env = teamArg || teamDefaultExplicit ? null : envTeamFile([dir, mainHierarchyDir(cwd)]);
       const envInvalid = env && env.invalid ? { env_team_invalid: { value: env.value, kind: env.kind, why: env.invalid } } : {};
       const empty = (reason) => ({ member: null, team: null, team_file: null, orchestrator: null, last_observed_brief, reason, answered_by: null, ...envInvalid });
       const describe = (home, teamName, team, member, answeredBy) => {
@@ -6842,7 +6851,7 @@ try {
       // by an orchestrator in the main checkout — so that dir is searched too.
       const records = [dir, mainHierarchyDir(cwd)]
         .filter(Boolean)
-        .flatMap((home) => (teamArg ? [teamArg] : [null, ...listTeamNames(home)]).map((teamName) => ({ home, teamName, team: readTeam(home, teamName) })))
+        .flatMap((home) => (teamArg || teamDefaultExplicit ? [teamArg] : [null, ...listTeamNames(home)]).map((teamName) => ({ home, teamName, team: readTeam(home, teamName) })))
         .filter((r) => r.team);
       if (records.length === 0) {
         out(empty("no-team"));

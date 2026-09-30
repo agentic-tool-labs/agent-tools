@@ -511,14 +511,17 @@ roster bar-named-roster"), run the steps below once per Team, driven by this lis
    never applies unconfirmed. Every subsequent step (`--spawn`, `--commit`,
    `spawn-one`, `disband`, `resync`, `move`, `msg.mjs new`, `msg.mjs list`)
    then needs that same `--team <name>` to keep operating on this Team
-   instead of the default one. Once committed, `roster.mjs` team verbs run by
-   this session resolve the Team it owns without the flag, but pass it when in
-   doubt. `msg.mjs new`/`msg.mjs list` also auto-resolve the active team
+   instead of the default one. Once committed, and
+   only while this session owns just that one team,
+   `roster.mjs` team verbs run by this session resolve the Team it owns
+   without the flag, but pass it when in doubt, and `msg.mjs new`/`msg.mjs
+   list` also auto-resolve the active team
    (spec 0011 §4.4 rung 3) when run from this Team's own orchestrator process
    — `CLAUDE_PID`, `pidAlive`-guarded, matched against the Team's recorded
    `orchestrator.pid` — but pass `--team <name>` explicitly whenever you are
    not certain that rung will fire (e.g. tooling running outside the
-   orchestrator's own process).
+   orchestrator's own process). With more than one, see **Owning more than
+   one team.**
 2. **`manual` mode**: before each spawn, show the intended placement (name,
    role, transport) and let the user override it (different pane, skip it,
    change the name) before proceeding. `auto` mode spawns straight through.
@@ -711,8 +714,10 @@ rather than improvising; spec 0001 §13 flags this area as a real escalation
 candidate, not a place for invented judgment calls.
 
 **Owning more than one team.** While this session owns more than one live Team,
-pass `--team` to every `roster.mjs` team verb and to `msg.mjs new`/`list`; a verb
-that names a member may leave it out. When the user's words don't say which Team
+pass `--team` to every `roster.mjs` team verb and to `msg.mjs new`; a verb that
+names a member may leave it out. `msg.mjs list` covers every owned team, and
+`--team` only narrows it. The default team is `--team @default`; in
+`roster.mjs teams --json` it is the row whose `name` is `null`. When the user's words don't say which Team
 ("disband the team"), ask one AskUserQuestion listing the owned Teams
 (`roster.mjs teams`, the rows with `own: true`), multi-select when the request can
 cover several ("disband the teams"). Each disband keeps its own confirmation.

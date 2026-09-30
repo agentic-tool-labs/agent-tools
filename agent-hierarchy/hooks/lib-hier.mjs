@@ -22,7 +22,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
-import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
+import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamArgName, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
 
 export { hierarchyDir };
 
@@ -1101,7 +1101,7 @@ export function buildStateBlock(dir, resolved, repoBasename, model, sessionId = 
     ? [
         ownedTeamsLead(owned.map(({ team }) => team)),
         ...owned.flatMap(({ team, resolved: r }) => [
-          `Team ${team ?? "default"} (roster ${(readTeam(dir, team) || {}).roster ?? "default"}):`,
+          `Team ${teamArgName(team)} (roster ${(readTeam(dir, team) || {}).roster ?? "default"}):`,
           ...teamStateLines(dir, r, teamPrefix(r.cwd, team), now),
         ]),
       ]

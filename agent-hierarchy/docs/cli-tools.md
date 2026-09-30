@@ -174,6 +174,11 @@ Flags are validated per verb: `spawn-one`, `spawn-ad-hoc`, `adopt`, `checkin`, `
 `stream-done` and `stream-label` reject any flag not in their own set, so
 the lists above are exhaustive for those verbs rather than indicative.
 
+`--team @default` names the default team (`team.json`) as explicitly as any named team, in every verb that
+takes `--team` and in `msg.mjs`: no owned-team fallback, no refusal for several. No team can be named
+`@default`, and any other `@` value is refused. Wherever a team name is printed to pass back (refusal
+lists, the owned-teams lead line, the directive's commands), the default team shows as `@default`;
+`teams --json` keeps `name: null` for it.
 `--team <t>` names a live team, never a roster: `show`, `init`, `add`, `edit` and `remove` refuse it
 and point at `--roster <r>`. On team verbs, a session that owns exactly one live team and passes no
 `--team` acts on that team. Owning several, a verb that names a member (`dismiss <name>`, `untrack <name>`,

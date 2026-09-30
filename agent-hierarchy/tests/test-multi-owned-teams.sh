@@ -182,7 +182,7 @@ team_file bar "$BAR_MEMBERS" '"Y"'
 hook_as_owner sessionstart.mjs "$SS_PAYLOAD"
 CTX=$(context)
 check "M4 SessionStart with two owned teams leads with the owned-teams line" \
-  '[[ "$CTX" == *"You own 2 live teams: bar, foo. Pass --team <name> to roster.mjs team verbs and to msg.mjs new/list; a member name already says its team."* ]]'
+  '[[ "$CTX" == *"You own 2 live teams: bar, foo. Pass --team <name> to roster.mjs team verbs and to msg.mjs new; a member name already says its team."* ]]'
 check "M4 ... foo's part names its roster and holds its own members only" \
   '[[ "$(section foo)" == "Team foo (roster X):"* ]] && [[ "$(section foo)" == *"reviewer=foo-reviewer"* ]] && [[ "$(section foo)" == *"architect=foo-architect"* ]] && [[ "$(section foo)" != *bar-* ]]'
 check "M4 ... bar's part names its roster and holds its own members and routes only" \
@@ -275,12 +275,51 @@ check "M11 stop-orchestrator-liveness counts an open exchange that exists only i
 hook_as_owner pretooluse-msg-gate.mjs "$(payload m11b SendMessage "{\"to\":\"foo-reviewer\",\"message\":\"$BRIEF\\n[hierarchy-msg $OWED]\"}")"
 check "M11 msg-gate resolves a foo- name against foo's config" '[[ "$OUT" == *"wrong to:"* ]]'
 
+# ================================================================ M12 the default team's name
+# The session owns the default team (team.json) and foo.
+fresh; config
+node -e 'const fs=require("fs");const f=process.argv[1];const d=JSON.parse(fs.readFileSync(f,"utf8"));d.roster={route:"peer",members:[{role:"reviewer",model:"sonnet"}]};fs.writeFileSync(f,JSON.stringify(d,null,2))' "$PROJ/.claude/agent-hierarchy.json"
+node --input-type=module -e "const R = await import('$H/lib-roster.mjs'); R.writeTeam('$HD', { version: 1, team_id: 'T-default', created: '2026-09-30T00:00:00Z', roster_level: 'repo', transport: 'terminal', roster: null, orchestrator: { pid: $OWNER }, members: [{ name: 'myrepo-reviewer', role: 'reviewer', route: 'peer' }], partial: false }, null);"
+team_file foo "$FOO_MEMBERS" '"X"'
+run_roster spawn-one reviewer --team @default --dry-run
+check "M12 spawn-one reviewer --team @default plans against team.json" '[ $RC = 0 ] && [[ "$OUT" == *"$HD/team.json"* ]] && [[ "$OUT" != *"teams/foo.json"* ]]'
+run_roster stream-status
+check "M12 the refusal list shows the default team as @default" '[ $RC != 0 ] && [[ "$OUT" == *"(\"@default\", \"foo\")"* ]]'
+run_roster stream-status --team @other
+check "M12 --team @other is refused" '[ $RC != 0 ] && [[ "$OUT" == *"--team:"* ]]'
+hook_as_owner sessionstart.mjs "$SS_PAYLOAD"
+CTX=$(context)
+check "M12 the lead line and the directive's default-team label and commands show @default" \
+  '[[ "$CTX" == *"You own 2 live teams: @default, foo."* ]] && [[ "$CTX" == *"\"myrepo-architect\" (team @default)"* ]] && [[ "$CTX" == *" architect --team @default --cwd "* ]]'
+AHCLI_ROSTER="node \"$H/roster.mjs\" spawn-one reviewer --team @default --dry-run --cwd $PROJ"
+OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"m12",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$AHCLI_ROSTER" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/pretooluse-ah-cli.mjs" 2>&1)
+check "M12 pretooluse-ah-cli allows a roster.mjs command with --team @default" '[[ "$OUT" == *"\"permissionDecision\":\"allow\""* ]]'
+
+# ================================================================ M13 route gate, no live peer, several teams
+fresh; config
+team_file foo "$FOO_MEMBERS" '"X"'
+team_file bar "$BAR_MEMBERS" '"Y"'
+hook_as_owner pretooluse-route-gate.mjs "$AGENT_ARCH"
+check "M13 with two owned teams and no live architect, one spawn command per team: its verb, --team and prefix" \
+  '[[ "$OUT" == *"Team bar: node \\\"$H/roster.mjs\\\" spawn-ad-hoc architect --team bar --cwd"*"starts with \`bar-\`"* ]] && [[ "$OUT" == *"Team foo: node \\\"$H/roster.mjs\\\" spawn-one architect --team foo --cwd"*"starts with \`foo-\`"* ]] && [[ "$OUT" == *"Run the one for the team that owns this work."* ]]'
+
+# ================================================================ M14 teams' own flag
+fresh
+node --input-type=module -e "const R = await import('$H/lib-roster.mjs'); for (const [n, o] of [['s', { session_id: 'S', pid: $DEAD }], ['c2', { session_id: 'S2', pid: $OWNER }]]) R.writeTeam('$HD', { version: 1, team_id: 'T-' + n, created: '2026-09-30T00:00:00Z', roster_level: 'repo', transport: 'terminal', orchestrator: o, members: [], partial: false }, n);"
+run_roster teams --json --session S
+check "M14 --session S owns a team that recorded S under a dead pid, and not one whose session conflicts" \
+  '[ "$(jget "o.teams.map(t => t.name + \"=\" + t.own).join()")" = "c2=false,s=true" ]'
+run_roster teams --json
+check "M14 without --session, own is the pid match, as before" '[ "$(jget "o.teams.map(t => t.name + \"=\" + t.own).join()")" = "c2=true,s=false" ]'
+
 # ================================================================ M8 one owned team
 # Every M-row's command with one owned team gives what the build before this change gave.
 fresh; config
 team_file foo "$FOO_MEMBERS" '"X"'
 hook_as_owner sessionstart.mjs "$SS_PAYLOAD"
 check "M4/M8 SessionStart with one owned team is byte-identical to the golden" 'golden sessionstart "$(context)"'
+hook_as_owner pretooluse-route-gate.mjs "$AGENT_ARCH"
+check "M8/M13 route gate, one owned team with no live architect" 'golden route-gate-no-peer "$OUT"'
 peer_up foo-architect foo architect
 hook_as_owner pretooluse-route-gate.mjs "$AGENT_ARCH"
 check "M8 route gate, one owned team with a live architect" 'golden route-gate "$OUT"'
@@ -309,6 +348,9 @@ for k in 'Team name — one question, every create' 'Run a bare `roster.mjs crea
   're-run the plan with' 'needs_user_choice: false'; do
   check "K2 still present: $k" 'grep -qF -- "$k" "$SK"'
 done
+check "K4 the single-team claims hold only while one team is owned" 'grep -qF -- "only while this session owns just that one team" "$SK"'
+check "K4 ... and the Owning more than one team paragraph names --team @default" \
+  '[[ "$(awk "/^\*\*Owning more than one team\.\*\*/{on=1} on&&/^$/{exit} on" "$SK")" == *"--team @default"* ]]'
 check "K3 the several-teams subsection comes before step 0" \
   '[ "$(grep -nF "**Several teams in one request.**" "$SK" | head -1 | cut -d: -f1)" -lt "$(grep -nF "0. **Layout" "$SK" | head -1 | cut -d: -f1)" ]'
 
