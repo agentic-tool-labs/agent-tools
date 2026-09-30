@@ -127,7 +127,7 @@ always JSON. Full verb/flag reference: `docs/cli-tools.md`.
 one, each owned by a distinct orchestrator session: it points every verb that
 reads or writes the team file at `teams/<name>.json`, and its members are named
 `<name>-<role>[-N]`. It never selects a roster block — `create --roster <r>`
-does. **Omitted**, a team verb run by a session that owns exactly one live Team
+does, over the selected roster (§ Create). **Omitted**, a team verb run by a session that owns exactly one live Team
 acts on that Team; otherwise the default is `teams/<repo basename>.json` — never
 a shared `team.json` (spec 0044 §1.1), so two orchestrators in one repo do not
 collide. A pre-0044 `team.json` keeps working, unmigrated, named by its own
@@ -392,14 +392,19 @@ check-in) apply unchanged. This capability is skill-only.
    `--team <chosen>` and pass the same `--team` to `--spawn` and `--commit`;
    a chosen name that is refused again gets the question again.
 
-   **Roster — only when the plan lists `named_rosters`.** A roster block other
-   than the default is picked with `--roster <r>` on every create phase; a
-   team is never built from `rosters.<name>` because of its `--team`. When the
-   bare plan carries `named_rosters`, ask which roster to build from as a
-   second question in the **same** AskUserQuestion call as the team name:
-   the default roster first, then up to three of the named keys, with Other
-   for the rest. A named choice adds `--roster <r>` to every later phase
-   (re-run the plan with it). Without `named_rosters`, do not ask.
+   **Roster — only when the plan lists `named_rosters`.** A create with no
+   `--roster` builds from the selected roster — `AH_ROSTER`, else
+   `activeRoster` (set with `/agent-roster use`), else the default block. The
+   plan's `selection` says which and why (a plan without one is the default
+   block); name the roster when you show the plan. `--roster <r>` on every
+   create phase overrides it (`default` is the default block); a team is
+   never built from `rosters.<name>` because of its `--team`. When the bare
+   plan carries `named_rosters`, ask which roster to build from as a second
+   question in the **same** AskUserQuestion call as the team name: the
+   selected roster first, then up to three of the others (the default block
+   among them), with Other for the rest. A different choice adds `--roster
+   <r>` to every later phase (re-run the plan with it). Without
+   `named_rosters`, do not ask.
 
    **Models — only when the plan lists `members_needing_model`.** Each entry
    is a member about to launch with no model, and its model is the user's

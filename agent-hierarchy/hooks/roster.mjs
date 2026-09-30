@@ -17,6 +17,15 @@
  *                       [--effort E] [--route ...] [--auto-mode A] [--on-missing auto|prompt|never] [--cwd <path>]
  *                       (--model "" and --effort "" clear the field)
  *   roster.mjs remove  [level] [--level L] [--roster <r>] --member <NAME> [--cwd <path>]
+ *   roster.mjs roster list [--json] [--cwd <path>]
+ *   roster.mjs roster copy <src> <dst> [--level L] [--dry-run] [--cwd <path>]
+ *   roster.mjs roster delete <name> [--level L] [--dry-run] [--cwd <path>]
+ *   roster.mjs roster use <name>|default [--level L] [--cwd <path>]
+ *   roster.mjs roster use --clear [--level L] [--cwd <path>]
+ *                       Named rosters are `rosters.<name>` blocks. show/init/add/edit/remove and
+ *                       create use --roster <r>, else AH_ROSTER, else the most specific
+ *                       activeRoster, else the default `roster` block; `default` names that block.
+ *                       `use` writes activeRoster (default level: repo-user in a repo, else global).
  *   roster.mjs create  [--plan] [--commit --verified <json> --transport <t>
  *                       (--verified: JSON array of member objects from the spawn/check-in
  *                       cycle, OR a JSON array of member-name strings hydrated from the
@@ -139,7 +148,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { AGENT_REF_RE, agentRefError, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, TIER, userConfigPath } from "./lib-config.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, TIER, userConfigPath } from "./lib-config.mjs";
 import { ageSecOf, appendRosterRecord, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
@@ -532,6 +541,223 @@ function roleRemove(name) {
   return { removed: name, level, path, override_only: builtin };
 }
 
+// ---------------------------------------------------------------- named rosters (list/copy/delete/use)
+
+/** A level file's parsed object, or null when it is missing or not an object. Reads only. */
+function levelFileData(path) {
+  if (!existsSync(path)) return null;
+  try {
+    const data = JSON.parse(readFileSync(path, "utf8"));
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    dropNonObjectMembers(data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/** Every visible level file holding roster block `key` (null: the unnamed `roster` block), most
+    specific first, as `{level, path, block, members, route}`. */
+function rosterDefinitions(key) {
+  const candidates = rosterLevelCandidates(cwd);
+  const defs = [];
+  const seen = new Set();
+  for (const level of ROSTER_LEVELS) {
+    for (const path of candidates[level]) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      const data = levelFileData(path);
+      if (!data) continue;
+      const map = data.rosters && typeof data.rosters === "object" && !Array.isArray(data.rosters) ? data.rosters : {};
+      const block = key === null ? data.roster : Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+      if (block === undefined || block === null) continue;
+      const members = typeof block === "object" && Array.isArray(block.members) ? block.members : [];
+      defs.push({ level, path, block, members, route: typeof block === "object" && block.route !== undefined ? block.route : null });
+    }
+  }
+  return defs;
+}
+
+/** The definition that wins, by resolveRoster's rule: the first with members, else the first. */
+function winningDefinition(defs) {
+  return defs.find((d) => d.members.length > 0) || defs[0] || null;
+}
+
+/** Every team file in this checkout's hierarchy dir, and from a worktree the main checkout's, by the
+    roster key `teamRosterKey` gives it (null: the default block), as `{team, file}` lists. */
+function teamsByRosterKey() {
+  const byKey = new Map();
+  const dirs = [...new Set([hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean))];
+  for (const dir of dirs) {
+    for (const name of [null, ...listTeamNames(dir)]) {
+      if (!readTeam(dir, name)) continue;
+      const key = teamRosterKey(dir, name);
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push({ team: name, file: teamPath(dir, name) });
+    }
+  }
+  return byKey;
+}
+
+function rosterLevelOpt() {
+  return opts.level === undefined ? null : requireLevel(opts.level);
+}
+
+const LEGACY_DEFAULT_NOTE =
+  "a block named `default` can't be selected or copied — `default` means the unnamed `roster` block — but a team whose file records it keeps using it";
+
+function rosterList() {
+  const sel = rosterSelection(cwd);
+  const teams = teamsByRosterKey();
+  const entry = (key) => {
+    const defs = rosterDefinitions(key);
+    const win = winningDefinition(defs);
+    return {
+      roster: key === null ? DEFAULT_ROSTER : key,
+      block: containerLabel(key),
+      level: win ? win.level : null,
+      path: win ? win.path : null,
+      shadowed: defs.filter((d) => d !== win).map(({ level, path }) => ({ level, path })),
+      members: win ? win.members.length : 0,
+      route: win ? win.route : null,
+      selected: key === DEFAULT_ROSTER ? false : sel.key === key,
+      teams: teams.get(key) || [],
+      ...(key === DEFAULT_ROSTER ? { note: LEGACY_DEFAULT_NOTE } : {}),
+    };
+  };
+  const rosters = [entry(null), ...namedRosterKeys(cwd).map(entry)];
+  if (opts.json === true) return out({ selection: selectionView(sel), rosters });
+  const from = sel.source === "activeRoster" ? `activeRoster at ${sel.level}, ${sel.path}` : sel.source === "env" ? "AH_ROSTER" : "nothing selected";
+  const lines = [`selection: ${sel.roster} (${from})`];
+  for (const r of rosters) {
+    const where = r.level ? `${r.level} ${r.path}` : "not defined";
+    const parts = [`${r.selected ? "*" : " "} ${r.roster} (${r.block})`, where, `${r.members} member${r.members === 1 ? "" : "s"}`, `route ${r.route ?? "-"}`];
+    if (r.shadowed.length) parts.push(`shadows ${r.shadowed.map((s) => `${s.level} ${s.path}`).join(", ")}`);
+    if (r.teams.length) parts.push(`teams: ${r.teams.map((t) => t.team ?? "the default team").join(", ")}`);
+    if (r.note) parts.push(r.note);
+    lines.push(parts.join(" · "));
+  }
+  process.stdout.write(lines.join("\n") + "\n");
+}
+
+function rosterCopy(src, dst) {
+  if (typeof src !== "string" || typeof dst !== "string") fail("usage: roster.mjs roster copy <src> <dst> [--level L] [--dry-run]");
+  const srcKey = src === DEFAULT_ROSTER ? null : src;
+  if (srcKey !== null) {
+    const v = validateTeamAlias(srcKey);
+    if (!v.ok) fail(`roster copy: <src> ${JSON.stringify(src)}: ${v.why}`);
+  }
+  const win = winningDefinition(rosterDefinitions(srcKey));
+  if (!win) fail(`roster copy: ${srcKey === null ? "the default `roster` block" : `roster "${src}"`} is not defined at any level (defined: ${selectableRosters(cwd).join(", ") || "none"})`);
+  if (dst === DEFAULT_ROSTER) fail("roster copy: <dst> can't be `default` — it means the unnamed `roster` block");
+  const v = validateTeamAlias(dst);
+  if (!v.ok) fail(`roster copy: <dst> ${JSON.stringify(dst)}: ${v.why}`);
+  const level = rosterLevelOpt() || win.level;
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  if (data.rosters && typeof data.rosters === "object" && Object.prototype.hasOwnProperty.call(data.rosters, dst)) {
+    fail(`roster copy: rosters.${dst} is already defined at level "${level}" (${path}) — pick another name, or delete it first with \`roster.mjs roster delete ${dst} --level ${level}\``);
+  }
+  const block = JSON.parse(JSON.stringify(win.block.route === undefined ? { members: win.members } : { route: win.block.route, members: win.members }));
+  const dryRun = opts["dry-run"] === true;
+  if (!dryRun) {
+    installRosterBlock(data, dst, block);
+    writeLevelFile(path, data);
+  }
+  out({
+    copied: !dryRun,
+    dry_run: dryRun,
+    from: { roster: srcKey === null ? DEFAULT_ROSTER : src, block: containerLabel(srcKey), level: win.level, path: win.path },
+    to: { roster: dst, block: containerLabel(dst), level, path },
+    route: block.route ?? null,
+    members: block.members.length,
+  });
+}
+
+function rosterDelete(name) {
+  if (typeof name !== "string" || !name) fail("usage: roster.mjs roster delete <name> [--level L] [--dry-run]");
+  if (name === DEFAULT_ROSTER) fail("roster delete: `default` is the unnamed `roster` block, which delete never removes");
+  const explicit = rosterLevelOpt();
+  const win = explicit ? null : winningDefinition(rosterDefinitions(name));
+  if (!explicit && !win) fail(`roster delete ${name}: no level defines it (defined: ${selectableRosters(cwd).join(", ") || "none"})`);
+  const level = explicit || win.level;
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  if (!existsSync(path) || !data.rosters || typeof data.rosters !== "object" || !Object.prototype.hasOwnProperty.call(data.rosters, name)) {
+    fail(`roster delete ${name}: no rosters.${name} at level "${level}" (${path})`);
+  }
+  const users = teamsByRosterKey().get(name) || [];
+  if (users.length) {
+    fail(
+      `roster delete ${name}: ${users.map((t) => `${t.team === null ? "the default team" : `team "${t.team}"`} (${t.file})`).join(", ")} ${users.length === 1 ? "uses" : "use"} it — ` +
+        "nothing was deleted. Disband the team first (`roster.mjs disband`), or remove an orphaned record with `roster.mjs reap --commit`."
+    );
+  }
+  if (data.activeRoster === name) {
+    fail(`roster delete ${name}: activeRoster in ${path} selects it — nothing was deleted. Select another first: \`roster.mjs roster use <other> --level ${level}\`, or \`roster.mjs roster use --clear --level ${level}\`.`);
+  }
+  const warnings = [];
+  const candidates = rosterLevelCandidates(cwd);
+  for (const other of ROSTER_LEVELS) {
+    for (const p of candidates[other]) {
+      if (p === path) continue;
+      const d = levelFileData(p);
+      if (d && d.activeRoster === name) warnings.push(`activeRoster at ${other} in ${p} still selects "${name}"; once it is deleted, commands there will refuse until that selection changes`);
+    }
+  }
+  for (const w of warnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
+  const dryRun = opts["dry-run"] === true;
+  if (!dryRun) {
+    delete data.rosters[name];
+    writeLevelFile(path, data);
+  }
+  out({ deleted: !dryRun, dry_run: dryRun, roster: name, block: containerLabel(name), level, path, ...(warnings.length ? { warnings } : {}) });
+}
+
+function rosterUse(name) {
+  const clear = opts.clear === true;
+  if (clear && name !== undefined) fail("roster use: pass a roster name or --clear, not both");
+  if (!clear && (typeof name !== "string" || !name)) fail("usage: roster.mjs roster use <name>|default [--level L] | roster use --clear [--level L]");
+  const level = rosterLevelOpt() || (findGitRoot(cwd) ? "repo-user" : "global");
+  const path = rosterLevelPaths(cwd)[level];
+  const warnings = [];
+  if (clear) {
+    const had = (levelFileData(path) || {}).activeRoster !== undefined;
+    if (had) {
+      const data = readLevelFile(path);
+      delete data.activeRoster;
+      writeLevelFile(path, data);
+    }
+    return out({ level, path, activeRoster: null, cleared: had, selection: selectionView(rosterSelection(cwd)) });
+  }
+  if (name !== DEFAULT_ROSTER) {
+    const defined = selectableRosters(cwd);
+    if (!defined.includes(name)) {
+      fail(`roster use ${name}: no level defines roster "${name}" (defined: ${defined.join(", ") || "none"}) — make it with \`roster.mjs init --roster ${name}\` or \`roster.mjs roster copy <src> ${name}\``);
+    }
+    if (level === "global") {
+      const global = levelFileData(rosterLevelPaths(cwd).global);
+      const globalRosters = global && global.rosters && typeof global.rosters === "object" ? global.rosters : {};
+      if (!Object.prototype.hasOwnProperty.call(globalRosters, name)) {
+        warnings.push(`roster "${name}" is not defined in the global file, so other repos will see this selection as missing — select it at repo-user or repo level instead`);
+      }
+    }
+  }
+  const data = readLevelFile(path);
+  data.activeRoster = name;
+  writeLevelFile(path, data);
+  for (const w of warnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
+  out({ level, path, activeRoster: name, selection: selectionView(rosterSelection(cwd)), ...(warnings.length ? { warnings } : {}) });
+}
+
+/** Flags each `roster` subcommand takes, `--cwd` included. */
+const ROSTER_SUB_FLAGS = {
+  list: new Set(["json", "cwd"]),
+  copy: new Set(["level", "dry-run", "cwd"]),
+  delete: new Set(["level", "dry-run", "cwd"]),
+  use: new Set(["level", "clear", "cwd"]),
+};
+
 function doctorReport(cwd) {
   const rows = [];
 
@@ -672,6 +898,9 @@ function doctorReport(cwd) {
   // reading output learns so, and only when there is something to say.
   const stale = staleTeamKeys(cwd, registry()).warnings;
   if (stale.length) rows.push({ name: "stale-config-keys", status: "warn", detail: stale.join(" ") });
+  // Only when broken: every template verb and `create` refuses such a selection until it is fixed.
+  const selectionProblem = rosterSelectionProblem(cwd, rosterSelection(cwd));
+  if (selectionProblem) rows.push({ name: "roster-selection", status: "red", detail: selectionProblem });
   return { cwd, rows, red: rows.filter((r) => r.status === "red").map((r) => r.name) };
 }
 
@@ -729,7 +958,7 @@ function resolveTeamArg() {
 const TEMPLATE_VERBS = new Set(["init", "add", "edit", "remove", "show"]);
 if (TEMPLATE_VERBS.has(cmd) && opts.team !== undefined) fail(`${cmd}: \`--team\` names a live team; to edit a named roster use \`--roster <r>\``);
 
-/** `--roster <r>`: the `rosters.<r>` block a template verb or `create` uses; absent means the default `roster` block. */
+/** `--roster <r>` as given, validated; null when absent. */
 function resolveRosterArg() {
   if (opts.roster === undefined) return null;
   if (typeof opts.roster !== "string") fail("--roster needs a value: --roster <name>");
@@ -737,7 +966,21 @@ function resolveRosterArg() {
   if (!v.ok) fail(`--roster: ${v.why}`);
   return opts.roster;
 }
-const rosterArg = resolveRosterArg();
+const rosterFlag = resolveRosterArg();
+/** Which roster block a template verb or `create` uses: `--roster`, else `AH_ROSTER`, else
+    `activeRoster`, else the default block. `create --from` builds from a history entry and ignores
+    it. Every other verb acts on a live team and its recorded roster, and keeps reading only the flag. */
+const selection =
+  (TEMPLATE_VERBS.has(cmd) || cmd === "create") && !(cmd === "create" && typeof opts.from === "string") ? rosterSelection(cwd, { flag: rosterFlag }) : null;
+/** The `rosters.<r>` key the command uses; null means the default `roster` block. */
+const rosterArg = selection ? selection.key : rosterFlag;
+
+/** Refuses a selection that names a roster no level defines; `init` is how one gets made. */
+function refuseMissingSelection() {
+  if (!selection || cmd === "init") return;
+  const problem = rosterSelectionProblem(cwd, selection);
+  if (problem) fail(`${cmd}: ${problem}`);
+}
 
 // `create --from` without an explicit --team defaults the team scope to the entry's own stored
 // alias (spec 0015 §7.2) — the `create` case reassigns both before anything else reads them.
@@ -2737,7 +2980,9 @@ function resolveMembersPlan(dir) {
   });
   const layout = createLayout();
   const named = namedRosterKeys(cwd);
-  const result = { level: resolved.level, path: resolved.path, transport, layout, layout_plan: layoutPlan(layout.mode, transport, plan), members: plan, ...(named.length ? { named_rosters: named } : {}), ...renamedField(planned) };
+  // Present only when something is selected, so a plan with nothing selected reads exactly as before.
+  const selected = selection.source === "default" ? {} : { selection: selectionView(selection) };
+  const result = { level: resolved.level, path: resolved.path, ...selected, transport, layout, layout_plan: layoutPlan(layout.mode, transport, plan), members: plan, ...(named.length ? { named_rosters: named } : {}), ...renamedField(planned) };
   return withSkipped(result, skipped.map(skippedEntry));
 }
 
@@ -4384,6 +4629,7 @@ function refuseRosterEditWhileOwningTeam(command) {
 
 try {
   refuseRosterEditWhileOwningTeam(cmd);
+  refuseMissingSelection();
   switch (cmd) {
     case "show": {
       const explicit = levelArg();
@@ -4401,15 +4647,17 @@ try {
           roster: shown,
           shadowed: resolved && resolved.level !== level ? `shadowed by ${resolved.level}` : null,
           ...showNameNote(shown),
+          selection: selectionView(selection),
         });
       } else {
         const resolved = resolveRoster(cwd, rosterArg, repoBasename, registry());
         out(
           resolved
-            ? { ...resolved, ...showNameNote(resolved) }
+            ? { ...resolved, ...showNameNote(resolved), selection: selectionView(selection) }
             : {
                 roster: null,
                 hint: "no roster configured — spawn ad hoc with: roster.mjs spawn-ad-hoc <role> [--kind K] [--route pane|peer] --cwd <abs cwd>",
+                selection: selectionView(selection),
               }
         );
       }
@@ -4417,6 +4665,7 @@ try {
     }
 
     case "init": {
+      if (rosterFlag === DEFAULT_ROSTER) fail("init --roster default: `default` means the unnamed `roster` block, so it can't be a roster name — run init without --roster for the default block, or pick another name");
       const level = requireLevel(levelArg() || fail("init needs --level global|repo|repo-user (or the level as the first word)"));
       const route = opts.route;
       if (!ROSTER_ROUTE_VALUES.includes(route)) fail(`--route must be "peer" or "subagent", got ${JSON.stringify(route)}`);
@@ -4717,7 +4966,11 @@ try {
       if (rosterArg) {
         const named = resolveRoster(cwd, rosterArg, repoBasename, registry());
         if (!named || named.teamKey !== rosterArg) {
-          fail(`create --roster ${rosterArg}: no rosters.${rosterArg} block with members at any level — nothing was launched or written. Define it with \`roster.mjs init --roster ${rosterArg}\` and \`roster.mjs add --roster ${rosterArg} --role <R>\``);
+          const selected =
+            selection.source === "flag"
+              ? `--roster ${rosterArg}`
+              : `(roster ${rosterArg}, selected by ${selection.source === "env" ? "AH_ROSTER" : `activeRoster at ${selection.level} in ${selection.path}`})`;
+          fail(`create ${selected}: no rosters.${rosterArg} block with members at any level — nothing was launched or written. Define it with \`roster.mjs init --roster ${rosterArg}\` and \`roster.mjs add --roster ${rosterArg} --role <R>\``);
         }
       }
       // --team once also picked `rosters.<team>`; it now names only the team, so a block that would
@@ -6172,6 +6425,20 @@ try {
       break;
     }
 
+    case "roster": {
+      const sub = opts._[0];
+      const allowed = ROSTER_SUB_FLAGS[sub];
+      if (!allowed) fail("usage: roster.mjs roster list [--json] | roster copy <src> <dst> [--level L] [--dry-run] | roster delete <name> [--level L] [--dry-run] | roster use <name>|default [--level L] | roster use --clear [--level L]  (all with --cwd <abs cwd>)");
+      for (const key of Object.keys(opts)) {
+        if (key !== "_" && !allowed.has(key)) fail(`roster ${sub}: unrecognized flag --${key} (use ${[...allowed].map((k) => `--${k}`).join(", ")})`);
+      }
+      if (sub === "list") rosterList();
+      else if (sub === "copy") rosterCopy(opts._[1], opts._[2]);
+      else if (sub === "delete") rosterDelete(opts._[1]);
+      else rosterUse(opts._[1]);
+      break;
+    }
+
     case "doctor": {
       const report = doctorReport(cwd);
       out(report);
@@ -6180,7 +6447,7 @@ try {
     }
 
     default:
-      fail(`usage: roster.mjs show|init|add|edit|remove|create|next-split|layout-splits|disband|resync|move|spawn-one|spawn-ad-hoc|adopt|untrack|teams|reap|history|checkin|whoami|doctor [--commit] [--level global|repo|repo-user] [--team <name>] [--cwd <path>]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
+      fail(`usage: roster.mjs show|init|add|edit|remove|roster|create|next-split|layout-splits|disband|resync|move|spawn-one|spawn-ad-hoc|adopt|untrack|teams|reap|history|checkin|whoami|doctor [--commit] [--level global|repo|repo-user] [--team <name>] [--cwd <path>]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
   }
 } catch (err) {
   fail(err && err.message ? err.message : String(err));

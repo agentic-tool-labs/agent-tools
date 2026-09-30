@@ -891,8 +891,14 @@ export function legacyTeamPrefix(dir) {
  * team's own name. No team file → null.
  */
 export function teamRosterKey(dir, teamName) {
+  return teamRosterEntry(dir, teamName) ?? null;
+}
+
+/** What `teamRosterKey` reads, keeping "no team file" (undefined) apart from "the file records the
+    default block" (null). */
+export function teamRosterEntry(dir, teamName) {
   const t = readTeam(dir, teamName);
-  if (!t) return null;
+  if (!t) return undefined;
   if (!Object.prototype.hasOwnProperty.call(t, "roster")) return teamName || null;
   return typeof t.roster === "string" && t.roster ? t.roster : null;
 }

@@ -1,7 +1,7 @@
 ---
 name: agent-roster
-description: Define, edit, or inspect the agent-hierarchy ROSTER — the template of which roles exist and their model/effort/route/kind. Use for /agent-roster, for "add a reviewer peer", "add a peer to the roster", "change the architect's model", "remove a role from the roster", "what's in my roster", or "set up a roster". Standing up, reshaping, or tearing down a LIVE Team is the agent-team skill, not this one.
-argument-hint: "[show|init|add|edit|remove]"
+description: Define, edit, or inspect the agent-hierarchy ROSTER — the template of which roles exist and their model/effort/route/kind. Use for /agent-roster, for "add a reviewer peer", "add a peer to the roster", "change the architect's model", "remove a role from the roster", "what's in my roster", "set up a roster", or listing, copying, deleting or switching named rosters. Standing up, reshaping, or tearing down a LIVE Team is the agent-team skill, not this one.
+argument-hint: "[show|init|add|edit|remove|list|copy|delete|use]"
 ---
 
 # agent-roster
@@ -73,12 +73,20 @@ with `--cwd "$(pwd)"` (or the relevant repo path). Level may be given as
 `--level <L>` or as the first bare word: `roster.mjs add repo --role architect`
 ≡ `--level repo`.
 
-`--roster <name>` selects the `rosters.<name>` roster block instead of the
-default one, so a repo can keep more than one template. Omitted, everything is
-the default roster — most sessions never pass it. A live Team's name is not a
-roster selector: these verbs refuse the team flag and point at `--roster`.
-A Team's name and pane arrangement belong to the Team, chosen when
-`/agent-team` creates it; the roster holds neither.
+A repo can keep more than one template: named rosters are `rosters.<name>`
+blocks beside the default `roster` block. `show`, `init`, `add`, `edit` and
+`remove` work on the **selection**: `--roster <name>`, else `AH_ROSTER`, else
+the most specific `activeRoster` (set with `roster use`), else the default
+block. `default` names the default block everywhere. With nothing selected,
+every verb is the default roster, as before. When the user names no roster,
+work on the selection without asking: say in one line which roster it is and
+where the selection comes from (the `selection` in `show`'s output), and that
+`/agent-roster use <name>` or `--roster <name>` switches it. A selection naming
+a roster no level defines makes every verb but `init` exit 2 with the fixes —
+relay them. A live Team's name is not a roster selector: these verbs refuse
+the team flag and point at `--roster`. A Team's name and pane arrangement
+belong to the Team, chosen when `/agent-team` creates it; the roster holds
+neither.
 
 - `show [--level global|repo|repo-user] [--roster <r>]` — resolved roster, or one level's raw file.
 - `init --level <L> --route peer [--roster <r>]` — replaces that level's block wholesale. `--route subagent` is refused: only legwork roles run as subagents.
@@ -105,8 +113,30 @@ than about which roles the template defines, invoke `ah:agent-team`.
 
 ## `/agent-roster` bare, or `show`
 
-Run `show` and print its output. If it reports `roster: null` (nothing
-configured at any level), say so and offer to run `init`.
+Run `show` and print its output, naming the selected roster and its source.
+If it reports `roster: null` (nothing configured at any level), say so and
+offer to run `init`.
+
+## Named rosters: `list`, `copy`, `delete`, `use`
+
+These are `roster.mjs roster list|copy|delete|use …`.
+- **List** (`roster list`): print its text — each roster with its level, what
+  it shadows, member count, route and the teams using it, the selected one
+  starred.
+- **Copy, or "a new roster from an existing one"** (`roster copy <src> <dst>
+  [--level L]`): `src` defaults to the selection when the user names none,
+  `default` for the default block. It writes at `src`'s level unless the user
+  names one. An empty new roster is `init --roster <name>` instead.
+- **Delete** (`roster delete <name> [--level L]`): confirm with
+  AskUserQuestion (delete, or cancel) before running it. The CLI
+  refuses a roster a team still uses or that `activeRoster` in the same file
+  selects; relay the refusal and its fix.
+- **Use or clear** (`roster use <name>|default [--level L]`, `roster use
+  --clear [--level L]`): sets which roster later commands pick. It writes the
+  user's own file for this repo (`repo-user`) unless they ask for `repo`
+  (shared, committed) or `global`. Say the resulting selection back in one
+  line. It never changes a live Team: a Team keeps the roster it was built
+  from.
 
 ## `init`
 

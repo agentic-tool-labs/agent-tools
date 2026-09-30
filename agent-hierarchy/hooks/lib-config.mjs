@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 // bodies called later (statusReport here; validateMember/validateRosterBlock there). Keep it that
 // way — a top-level use on either side would risk the top-level-await deadlock class documented
 // in lib-roster.mjs's header.
-import { legacyTeamPrefix, listTeamNames, memberTeam, readTeam, ROSTER_LAYOUT_VALUES, teamRosterKey } from "./lib-roster.mjs";
+import { legacyTeamPrefix, listTeamNames, memberTeam, readTeam, ROSTER_LAYOUT_VALUES, teamRosterEntry, teamRosterKey } from "./lib-roster.mjs";
 import { normalizeSessionId } from "./lib-gate.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 
@@ -661,8 +661,8 @@ export function teamLayoutPreference() {
 }
 
 /** Keys a global config file holds when all it records is user preferences: the stored team
-    layout and declared model tiers. Such a file configures no hierarchy. */
-const PREFERENCE_ONLY_KEYS = new Set(["version", "teamLayout", "modelTiers"]);
+    layout, declared model tiers and the selected roster. Such a file configures no hierarchy. */
+const PREFERENCE_ONLY_KEYS = new Set(["version", "teamLayout", "modelTiers", "activeRoster"]);
 
 export function projectConfigPath(cwd) {
   if (typeof cwd !== "string" || !cwd) return null;
@@ -1016,6 +1016,91 @@ export function namedRosterKeys(cwd) {
     }
   }
   return [...keys].sort();
+}
+
+/** The roster name that means the unnamed `roster` block wherever a roster is selected. A team's
+    recorded key is never read this way, so a legacy `rosters.default` block keeps serving its team. */
+export const DEFAULT_ROSTER = "default";
+
+/**
+ * The `activeRoster` that applies: the first one set, most specific level first, across the same
+ * candidate paths `resolveRoster` reads — so a main checkout's repo-level value also applies in its
+ * linked worktrees. `{value, level, path}`, or null when none is set. A JSON null counts as unset.
+ */
+export function activeRosterSetting(cwd) {
+  const candidates = rosterLevelCandidates(cwd);
+  for (const level of ROSTER_LEVELS) {
+    for (const path of candidates[level]) {
+      if (!existsSync(path)) continue;
+      let data;
+      try {
+        data = JSON.parse(readFileSync(path, "utf8"));
+      } catch {
+        continue;
+      }
+      if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+      if (data.activeRoster !== undefined && data.activeRoster !== null) return { value: data.activeRoster, level, path };
+    }
+  }
+  return null;
+}
+
+/**
+ * Which roster block a command uses, and why — the one selection rule, for roster.mjs's template
+ * verbs and `create`, and for `resolveConfig`. The first match wins: `flag`; with `team` given
+ * (`{dir, name}`), the key that team's file records when the file exists; a non-empty `AH_ROSTER`;
+ * `activeRoster`; else the default block. `default` from any source but a team file means the
+ * unnamed block. Returns `{roster, key, source, level, path}`: `roster` is the name or "default",
+ * `key` the `rosters.*` key or null for the unnamed block, and `level`/`path` are set only for
+ * source `activeRoster`.
+ */
+export function rosterSelection(cwd, { flag = null, team = null } = {}) {
+  const chosen = (value, source, level = null, path = null) => {
+    const key = value === DEFAULT_ROSTER ? null : value;
+    return { roster: key === null ? DEFAULT_ROSTER : key, key, source, level, path };
+  };
+  if (typeof flag === "string" && flag) return chosen(flag, "flag");
+  if (team) {
+    const recorded = teamRosterEntry(team.dir, team.name);
+    if (recorded !== undefined) return { roster: recorded === null ? DEFAULT_ROSTER : recorded, key: recorded, source: "team", level: null, path: null };
+  }
+  const env = process.env.AH_ROSTER;
+  if (typeof env === "string" && env !== "") return chosen(env, "env");
+  const active = activeRosterSetting(cwd);
+  if (active) return chosen(active.value, "activeRoster", active.level, active.path);
+  return chosen(DEFAULT_ROSTER, "default");
+}
+
+/** The named rosters a selection can name: every `rosters.<name>` key some visible level holds,
+    even with no members, less a legacy `rosters.default`, which the name `default` never reaches. */
+export function selectableRosters(cwd) {
+  return namedRosterKeys(cwd).filter((k) => k !== DEFAULT_ROSTER);
+}
+
+/** The `selection` object CLI output carries. */
+export function selectionView(selection) {
+  const { roster, source, level, path } = selection;
+  return { roster, source, level, path };
+}
+
+/**
+ * Null when `selection` is usable, else why not: a flag, `AH_ROSTER` or `activeRoster` naming a
+ * roster that no visible level defines — a `rosters.<name>` key, even one with no members. The
+ * message names the source, the defined rosters and the fixes. The verbs refuse with it, except
+ * `init`, which is how a missing roster gets made; `resolveConfig` warns with it and uses the
+ * default block; `doctor` reports it red.
+ */
+export function rosterSelectionProblem(cwd, selection) {
+  if (!["flag", "env", "activeRoster"].includes(selection.source) || selection.key === null) return null;
+  const defined = selectableRosters(cwd);
+  if (defined.includes(selection.key)) return null;
+  const source =
+    selection.source === "flag" ? "--roster" : selection.source === "env" ? "AH_ROSTER" : `activeRoster at ${selection.level} in ${selection.path}`;
+  const name = typeof selection.key === "string" ? selection.key : JSON.stringify(selection.key);
+  return (
+    `${source} selects roster "${name}", but there is no rosters.${name} block at any level (defined: ${defined.join(", ") || "none"}). ` +
+    `Fix with \`roster.mjs roster use default\`, \`roster.mjs roster use <other>\`, or \`roster.mjs init --roster ${name}\`.`
+  );
 }
 
 /**
@@ -1465,8 +1550,15 @@ export function resolveConfig(cwd, opts = {}) {
     if (CLASSES[row.class].chain) normalizeDispatch(name, roles, warnings);
   }
 
-  // The block is the team's recorded template (or an explicit `opts.roster`); the names are the team's own.
-  const rosterKey = opts.roster !== undefined ? opts.roster : teamRosterKey(teamHome || hierarchyDir(resolvedCwd), team);
+  // The block is the team's recorded template (or an explicit `opts.roster`, else the selection);
+  // the names are the team's own. A selection naming no defined roster is warned about, never thrown.
+  const selection = rosterSelection(resolvedCwd, {
+    flag: opts.roster === null ? DEFAULT_ROSTER : opts.roster,
+    team: { dir: teamHome || hierarchyDir(resolvedCwd), name: team },
+  });
+  const selectionProblem = rosterSelectionProblem(resolvedCwd, selection);
+  if (selectionProblem) warnings.push(`ah: ${selectionProblem} Using the default roster block until then.`);
+  const rosterKey = selectionProblem ? null : selection.key;
   const rosterResult = resolveRoster(cwd, rosterKey, teamPrefix(resolvedCwd, team), { roles });
   return {
     configured: true,
