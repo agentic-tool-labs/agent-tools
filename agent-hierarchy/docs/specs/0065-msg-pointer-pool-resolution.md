@@ -147,7 +147,7 @@ If `main` has moved past 0.105.x when this lands (the named-rosters stream is co
 - **Clause (3) creates no new write location.** It widens acceptance only to the one directory `msg.mjs new --req` already writes into.
 - **The anchor is trusted only as far as today's arming.** It is the request path from this session's own pending record, keyed by `session_id`. That record is armed only by an inbound cross-session brief whose first line is an existing `--request.md` pointer, which is the same trust boundary spec 0031/0037 already accept.
 - **Nothing file-derived is echoed before location passes.** A deny reason echoes frontmatter fields only once the location check has passed, and never echoes file bodies.
-- **Hooks stop reading arbitrary files.** With R4, a hook never opens a file whose name is not a message file, so the pointer check can no longer be used to make a hook read an arbitrary path.
+- **Hooks stop reading non-message files.** With R4, the suffix gate checks the pointer's NAME only: a file not named `*--response.md` (or `*--request.md`) is never opened. A `*--response.md`-named FIFO, device or symlink is still opened by `readMsgFile` before the location check. That is pre-existing and not widened by this spec; no content is echoed, and the open is bounded by the hook timeout.
 
 ## 6. Verification
 

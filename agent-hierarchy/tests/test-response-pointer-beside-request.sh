@@ -64,11 +64,14 @@ new_pair t1
 check "T1 precondition: request has team_file null" 'grep -q "^team_file: null" "$REQ"'
 check "T1 precondition: response sits beside the request" '[ "$(cd "$(dirname "$RESP")" && pwd -P)" = "$(cd "$(dirname "$REQ")" && pwd -P)" ]'
 arm s1 "$REQ"
+pending_n() { HOME="$FAKEHOME" node --input-type=module -e 'const{pendingFor}=await import(process.argv[1]);process.stdout.write(String(pendingFor(process.argv[2]).length))' "$H/lib-peer.mjs" "$1"; }
+check "T1 precondition: s1 owes one response" '[ "$(pending_n s1)" = 1 ]'
 send_chain s1 "[hierarchy-msg $RESP]
 - done: PASS"
 check "T1a: whole SendMessage chain allows the beside-request response" 'allowed'
 OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"s1",cwd:process.env.MAIN,tool_name:"SendMessage",tool_input:{to:"ct-orchestrator",message:process.argv[1]}}))' "[hierarchy-msg $RESP]
 - done: PASS" | HOME="$FAKEHOME" MAIN="$MAIN" node "$PTU" 2>&1); RC=$?
+check "T1b: peer-resolve recorded s1's obligation resolved" '[ "$(pending_n s1)" = 0 ]'
 OUT=$(printf '{"session_id":"s1","cwd":"%s","stop_hook_active":false}' "$MAIN" | HOME="$FAKEHOME" node "$STOP" 2>&1); RC=$?
 check "T1c: stop-peer-nudge does not block after the send" '! echo "$OUT" | grep -q "\"decision\":\"block\""'
 
@@ -105,6 +108,20 @@ send_chain s4 "[hierarchy-msg $RESP]
 - done: PASS"
 check "T4: another request's response is denied" 'denied'
 check "T4: reason is wrong id" 'echo "$OUT" | grep -q "wrong id"'
+
+# ---- T4b: two open requests in different pools; stray response for the newer one
+new_pair t4old
+OLDREQ=$REQ
+msg new --type request --to architect --from orchestrator --slug t4new --cwd "$MAIN"; NEWREQ=$(field path); NEWID=$(field id)
+msg new --type response --id "$NEWID" --to orchestrator --from architect --req "$NEWREQ" --cwd "$MAIN"; NEWRESP=$(field path)
+printf '\n- done: PASS\n' >> "$NEWRESP"
+cp "$NEWRESP" "$SANDBOX/elsewhere/"
+arm s4b "$OLDREQ"; sleep 0.05; arm s4b "$NEWREQ"
+send_chain s4b "[hierarchy-msg $SANDBOX/elsewhere/$(basename "$NEWRESP")]
+- done: PASS"
+check "T4b: stray response for the newer request is denied" 'denied'
+check "T4b: reason names the newer request's directory" 'echo "$OUT" | grep -qF "$(dirname "$NEWREQ")"'
+check "T4b: reason is not wrong id" '! echo "$OUT" | grep -q "wrong id"'
 
 # ---- T5: suffix is checked before the file is read
 new_pair t5
