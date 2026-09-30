@@ -54,7 +54,7 @@ import {
   sweep,
   SWEEP_DAYS,
 } from "./lib-hier.mjs";
-import { listTeamNames, memberTeam, readTeam, resolveMemberTeam } from "./lib-roster.mjs";
+import { memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamListText, teamsWithMember } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all"]);
 
@@ -122,17 +122,27 @@ function resolveTeamArg() {
   // Spec 0048 §2.3: `--orchestrator-pid` first, mirroring roster.mjs, so a test or a human shell
   // can pin the session identity the Bash tool's CLAUDE_PID otherwise supplies.
   const pid = Number(opts["orchestrator-pid"] !== undefined ? opts["orchestrator-pid"] : process.env.CLAUDE_PID);
-  if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) {
-    try {
-      const dir = hierarchyDir(cwd);
-      const base = readTeam(dir);
-      if (base && base.orchestrator && base.orchestrator.pid === pid) return null;
-      for (const name of listTeamNames(dir)) {
-        const team = readTeam(dir, name);
-        if (team && team.orchestrator && team.orchestrator.pid === pid) return name;
-      }
-    } catch {
-      // fail-open to default — 0009 §8.12 pattern extended to team resolution.
+  // A dead pid proves nothing, so it leaves the identity; a session id alone can still match.
+  const identity = { pid: Number.isInteger(pid) && pid > 0 && pidAlive(pid) ? pid : null, sessionId: typeof opts.session === "string" ? opts.session : null };
+  let owned = [];
+  try {
+    owned = ownedTeams(hierarchyDir(cwd), identity);
+  } catch {
+    // fail-open to default — 0009 §8.12 pattern extended to team resolution.
+  }
+  if (owned.length === 1) return owned[0];
+  if (owned.length > 1) {
+    // Several owned teams: `list` and `roster` show every one; `new` takes its recipient's team.
+    if (cmd === "list" || cmd === "roster") {
+      everyTeam = owned;
+      return null;
+    }
+    if (cmd === "new") {
+      const toName = typeof opts["to-name"] === "string" ? opts["to-name"] : null;
+      const holders = teamsWithMember(hierarchyDir(cwd), owned, toName);
+      if (holders.length === 1) return holders[0];
+      const why = toName ? `"${toName}" is a member of ${holders.length ? "more than one" : "none"} of them; ` : "";
+      fail(`new: this session owns ${owned.length} live teams (${teamListText(owned)}) — ${why}pass --team <name> to say which`);
     }
   }
   // A session that owns no team: the team it was launched into, else the live team holding its pane.
@@ -151,6 +161,8 @@ function resolveTeamArg() {
 /** The hierarchy dir holding the resolved team's file when it is not this cwd's — a worktree
     peer's team belongs to the main checkout. Null means `hierarchyDir(cwd)`. */
 let teamHome = null;
+/** The teams `list` and `roster` show when this session owns more than one and names none; null otherwise. */
+let everyTeam = null;
 const teamArg = resolveTeamArg();
 
 /** The `team:` tag an exchange's request was written with (null = default team or untagged, §7.6). */
@@ -216,7 +228,7 @@ try {
       if (which === "open") items = items.filter((e) => e.open);
       if (which === "closed") items = items.filter((e) => !e.open);
       if (typeof opts.to === "string") items = items.filter((e) => e.to === opts.to);
-      items = items.filter((e) => itemTeamTag(e) === teamArg);
+      items = items.filter((e) => (everyTeam ? everyTeam.includes(itemTeamTag(e)) : itemTeamTag(e) === teamArg));
       const rows = items.map((e) => ({
         id: e.id,
         to: e.to,
@@ -225,13 +237,14 @@ try {
         state: e.open ? "open" : "closed",
         request: e.request.path,
         response: e.response ? e.response.path : null,
+        ...(everyTeam ? { team: itemTeamTag(e) } : {}),
       }));
       // Spec 0026 §4.3: append a downstream section only when non-empty — no
       // header when there is nothing to show, so output stays byte-identical
       // to before this existed until a downstream dispatch actually exists.
       const downstream = listDownstreamDispatches(dir);
       if (plain) {
-        const rowsText = rows.map((r) => `${r.id}  ${r.to}  ${r.slug}  ${r.age}  ${r.state}`).join("\n");
+        const rowsText = rows.map((r) => `${r.id}  ${r.to}  ${r.slug}  ${r.age}  ${r.state}${everyTeam ? `  team=${r.team ?? "default"}` : ""}`).join("\n");
         const text = downstream.length
           ? (rowsText ? `${rowsText}\n\ndownstream:\n` : "downstream:\n") + downstream.map(downstreamLine).join("\n")
           : rowsText;
@@ -269,9 +282,7 @@ try {
     }
     case "roster": {
       const dir = hierarchyDir(cwd);
-      const resolved = resolveConfig(cwd, { team: teamArg, teamHome, pid: Number(opts["orchestrator-pid"] ?? process.env.CLAUDE_PID) });
-      const ros = roster(dir, resolved, teamPrefix(resolved.cwd, resolved.team));
-      if (plain) {
+      const tableLines = (resolved, ros) => {
         const lines = [];
         for (const role of chainRoles(resolved)) {
           const list = ros[role];
@@ -282,7 +293,23 @@ try {
             );
           }
         }
-        out(lines.join("\n"), true);
+        return lines;
+      };
+      if (everyTeam) {
+        // Several owned teams: each team's table under a line naming it and its roster.
+        const parts = everyTeam.map((team) => {
+          const resolved = resolveConfig(cwd, { ...(team === null ? { defaultTeam: true } : { team }), teamHome: dir });
+          const ros = roster(dir, resolved, teamPrefix(resolved.cwd, team));
+          return { team, roster: (readTeam(dir, team) || {}).roster ?? null, resolved, ros };
+        });
+        if (plain) out(parts.flatMap((p) => [`Team ${p.team ?? "default"} (roster ${p.roster ?? "default"}):`, ...tableLines(p.resolved, p.ros)]).join("\n"), true);
+        else out({ dir, teams: parts.map((p) => ({ team: p.team, roster: p.roster, summary: rosterLine(p.ros), roles: p.ros })) }, false);
+        break;
+      }
+      const resolved = resolveConfig(cwd, { team: teamArg, teamHome, pid: Number(opts["orchestrator-pid"] ?? process.env.CLAUDE_PID) });
+      const ros = roster(dir, resolved, teamPrefix(resolved.cwd, resolved.team));
+      if (plain) {
+        out(tableLines(resolved, ros).join("\n"), true);
       } else {
         out({ dir, summary: rosterLine(ros), roles: ros }, false);
       }

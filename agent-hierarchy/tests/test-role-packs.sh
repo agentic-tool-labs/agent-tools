@@ -159,6 +159,9 @@ showpath "$PACKS/hidden2"
 check "P2 pack-hidden-chars: variation selectors, U+2028, the U+3164 filler and an emoji written with U+FE0F in fields" \
   '[ "$(roleerr pk-impl)" = pack-hidden-chars ] && [ "$(roleerr pk-rev)" = pack-hidden-chars ] && [ "$(roleerr pk-des)" = pack-hidden-chars ] && [ "$(roleerr pk-leg)" = pack-hidden-chars ]'
 check "P2 ... and the finding names the code point, line and column" '[[ "$(jget "o.roles.find(r => r.name === \"pk-impl\").findings[0].message")" == *"U+FE00 at line 1, column 4"* ]]'
+bad "$PACKS/hidden4" 'm.roles["pk-impl"].description = "braille\u2800blank"'
+showpath "$PACKS/hidden4"
+check "P2 pack-hidden-chars: the U+2800 braille blank in a field" '[ "$(roleerr pk-impl)" = pack-hidden-chars ]'
 rm -rf "$PACKS/hidden3"; cp -R "$PACKS/a" "$PACKS/hidden3"
 node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],"---\nname: pk-rev\ndescription: Reviews\nmodel: opus\ntools: Read, Grep, SendMessage\n---\nabc\u{E0100}def\n")' "$PACKS/hidden3/agents/pk-rev.md"
 showpath "$PACKS/hidden3"

@@ -1,0 +1,30 @@
+0 {
+  "member": {
+    "role": "reviewer",
+    "name": "foo-reviewer",
+    "route": "peer",
+    "transport": "terminal",
+    "command": null
+  },
+  "live": false,
+  "close_token": "1e5a90a42d5a19db",
+  "sources": {
+    "team": {
+      "file": "<SANDBOX>/hier/teams/foo.json",
+      "members": 3
+    },
+    "peers": {
+      "live": 1
+    },
+    "herdr": {
+      "ok": false,
+      "reason": "team transport is not herdr",
+      "prefix": "foo"
+    }
+  },
+  "team_id": "T-foo",
+  "remaining": [
+    "foo-architect",
+    "foo-coder"
+  ]
+}

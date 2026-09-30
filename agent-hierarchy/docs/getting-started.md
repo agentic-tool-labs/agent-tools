@@ -139,6 +139,12 @@ is asked every time, `auto` or `manual` alike — `auto` only skips the
 per-member placement prompt; `manual` walks you through each member's
 placement individually.
 
+**Several teams.** One request can build more than one team: "create team foo
+from roster foo-named-roster and create team bar from roster bar-named-roster".
+The Orchestrator asks only what the request doesn't already say. Afterwards,
+name the team when you ask for something ("disband foo"); a member's name
+already says its team ("dismiss bar-reviewer").
+
 ## 6. The first dispatch
 
 This is the part that makes the model click. Say the Orchestrator (your

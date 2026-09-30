@@ -1,0 +1,10 @@
+0 roster.mjs: ah: this member will be named "foo-reviewer", but team T-foo's existing members are named "foo-coder-*". The team will hold both prefixes. Every name still resolves from team.json, so dispatch is unaffected.
+{
+  "dry_run": true,
+  "role": "reviewer",
+  "name": "foo-reviewer",
+  "mode": "auto",
+  "launch": [
+    "claude --agent ah:reviewer --name foo-reviewer --model sonnet --settings '{\"env\":{\"AH_TEAM_FILE\":\"<SANDBOX>/hier/teams/foo.json\"}}' --bg"
+  ]
+}

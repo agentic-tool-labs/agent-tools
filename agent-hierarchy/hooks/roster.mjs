@@ -158,11 +158,11 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
-import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
+import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
 const DISBAND_FLAGS = new Set(["kill", "plan", "close", "confirm", "plan-token", "allow-global", "cwd", "team"]);
@@ -444,9 +444,10 @@ function roleSet(name) {
   const owner = registryRoles(reg).find((r) => r !== name && roleAgent(r, reg.roles[r]) === agent);
   if (owner) fail(`role set ${name}: agent ${JSON.stringify(agent)} is already the ${owner} role's agent — an agent maps to exactly one role`);
   if (!builtin) {
-    const prefix = roleSetPrefix();
-    const v = validateTeamAlias(prefix, { roles: { ...reg.roles, [name]: checked } });
-    if (!v.ok) fail(`role set ${name}: the team prefix "${prefix}" collides with this role name (${v.why}) — rename the role, or create the team with a different \`--team <name>\``);
+    for (const { team, prefix } of roleSetPrefixes()) {
+      const v = validateTeamAlias(prefix, { roles: { ...reg.roles, [name]: checked } });
+      if (!v.ok) fail(`role set ${name}: ${team ? `team ${team}'s prefix` : "the team prefix"} "${prefix}" collides with this role name (${v.why}) — rename the role, or create the team with a different \`--team <name>\``);
+    }
     if (checked.routes) {
       const rival = customRoleNames(reg).find((r) => r !== name && reg.roles[r].class === cls && reg.roles[r].routes);
       if (rival) warnings.push(`class ${cls} already has an alternative (${rival}); candidates are tried in name order and the first fit wins`);
@@ -454,9 +455,10 @@ function roleSet(name) {
   }
   const loc = agent.includes(":") ? null : locateAgentFile(agent, cwd);
   if (!builtin) {
-    const prefix = roleSetPrefix();
-    const peerName = `${prefix}-${name}`;
-    if (!validateHerdrName(peerName).ok) warnings.push(`under the team prefix "${prefix}" its peer name, ${peerName}, is ${peerName.length} characters — Herdr allows at most 32 ([a-z][a-z0-9_-]), so spawning it under Herdr is refused; use a shorter role name, or create the team with a shorter \`--team <name>\``);
+    for (const { team, prefix } of roleSetPrefixes()) {
+      const peerName = `${prefix}-${name}`;
+      if (!validateHerdrName(peerName).ok) warnings.push(`under ${team ? `team ${team}'s prefix` : "the team prefix"} "${prefix}" its peer name, ${peerName}, is ${peerName.length} characters — Herdr allows at most 32 ([a-z][a-z0-9_-]), so spawning it under Herdr is refused; use a shorter role name, or create the team with a shorter \`--team <name>\``);
+    }
   }
   if (level === "repo" && loc && loc.level === "user") warnings.push(`this repo-level row points at ${loc.path}, which exists only in your user agents dir — other users of this repo will not have it`);
 
@@ -1276,6 +1278,17 @@ function doctorReport(cwd) {
 
   rows.push(row("team", () => {
     const dir = hierarchyDir(cwd);
+    const owned = ownedLiveTeams(dir);
+    if (owned.length > 1) {
+      // Owning several live teams: every one is named, with the roster it was built from.
+      const known = new Set(registryRoles(registry()));
+      const parts = owned.map((name) => {
+        const t = readTeam(dir, name) || {};
+        const orphans = (t.members || []).filter((m) => m && m.role && !known.has(m.role)).length;
+        return { orphans, text: `${name ?? "default"} (roster ${t.roster ?? "default"}, team_id ${t.team_id || "?"}${orphans ? `, ${orphans} member(s) with a role not defined here` : ""})` };
+      });
+      return { status: parts.some((p) => p.orphans) ? "warn" : "ok", detail: `this session owns ${owned.length} live teams: ${parts.map((p) => p.text).join("; ")}` };
+    }
     const team = readTeam(dir, teamFile);
     if (!team) return { status: "ok", detail: `no team file at ${teamPath(dir, teamFile)}` };
     const pid = team.orchestrator && team.orchestrator.pid;
@@ -1346,7 +1359,15 @@ function doctorReport(cwd) {
   const stale = staleTeamKeys(cwd, registry()).warnings;
   if (stale.length) rows.push({ name: "stale-config-keys", status: "warn", detail: stale.join(" ") });
   // Only when broken: every template verb and `create` refuses such a selection until it is fixed.
-  const selectionProblem = rosterSelectionProblem(cwd, sessionRosterSelection(cwd, { pid: ownOrchestratorPid() }));
+  // Owning several live teams, each team's selection is checked, and a broken one names its team.
+  const perTeam = ownedRosterSelections(cwd, { pid: ownOrchestratorPid() });
+  const selectionProblems = perTeam
+    ? perTeam.map(({ team, selection }) => {
+        const problem = rosterSelectionProblem(cwd, selection);
+        return problem && `team ${team ?? "default"}: ${problem}`;
+      })
+    : [rosterSelectionProblem(cwd, sessionRosterSelection(cwd, { pid: ownOrchestratorPid() }))];
+  const selectionProblem = selectionProblems.filter(Boolean).join(" ");
   if (selectionProblem) rows.push({ name: "roster-selection", status: "red", detail: selectionProblem });
   return { cwd, rows, red: rows.filter((r) => r.status === "red").map((r) => r.name) };
 }
@@ -1467,11 +1488,15 @@ function resolveTeamFileScope() {
   // `spawn-one` carries no --team, and must join the team its orchestrator made, not start another.
   if (OWNED_TEAM_VERBS.has(cmd)) {
     const owned = ownedLiveTeams(hierarchyDir(cwd));
-    if (owned.length > 1) {
-      fail(`${cmd}: this session owns ${owned.length} live teams (${owned.map((n) => (n === null ? "the default team (team.json)" : `"${n}"`)).join(", ")}) — pass --team <name> to say which`);
+    // A verb that names a member takes its team from the name, among the teams this session owns.
+    const member = owned.length > 1 ? namedMember() : null;
+    const holders = teamsWithMember(hierarchyDir(cwd), owned, member);
+    if (owned.length > 1 && holders.length !== 1) {
+      const why = member ? `; "${member}" is a member of ${holders.length ? "more than one of them" : "none of them"}` : "";
+      fail(`${cmd}: this session owns ${owned.length} live teams (${teamListText(owned)}) — pass --team <name> to say which${why}`);
     }
-    if (owned.length === 1) {
-      teamFile = owned[0];
+    if (owned.length >= 1) {
+      teamFile = owned.length > 1 ? holders[0] : owned[0];
       teamFileDefaulted = false;
       repoBasename = teamPrefix(cwd, teamFile);
       return;
@@ -1484,15 +1509,18 @@ function resolveTeamFileScope() {
   teamFileUnreadable = scope.unreadable || null;
 }
 
-/** The live teams this invocation's own pid owns — every team file here, the legacy one included.
-    Empty when no pid resolves: a plain user shell owns nothing. */
+/** The live teams this invocation owns — every team file here, the legacy one included. Empty when
+    no pid resolves: a plain user shell owns nothing. */
 function ownedLiveTeams(dir) {
-  const myPid = ownOrchestratorPid();
-  if (!Number.isInteger(myPid)) return [];
-  return [null, ...listTeamNames(dir)].filter((name) => {
-    const t = readTeam(dir, name);
-    return teamOwnedBy(t, invokerIdentity());
-  });
+  return ownedTeams(dir, invokerIdentity());
+}
+
+/** The existing member a team verb names, if any: the positional of dismiss, untrack, move, deliver
+    and answer, or spawn-one's and spawn-ad-hoc's --member. */
+function namedMember() {
+  if (["dismiss", "untrack", "move", "deliver", "answer"].includes(cmd)) return typeof opts._[0] === "string" ? opts._[0] : null;
+  if (cmd === "spawn-one" || cmd === "spawn-ad-hoc") return typeof opts.member === "string" ? opts.member : null;
+  return null;
 }
 
 /** Where the name a create would use came from: the user's --team (or a history entry's), a legacy
@@ -1894,10 +1922,12 @@ function showNameNote(block) {
   return problem ? { team_name_note: `members are shown under the default team name "${repoBasename}", which a team cannot use (${problem.why}) — create will ask for a name` } : {};
 }
 
-/** `role set`'s assumed prefix: the invoking session's own live team, else the default team's. */
-function roleSetPrefix() {
+/** `role set`'s assumed prefixes: one per live team the invoking session owns when it owns more
+    than one (`team` names it, for the messages), else its own team's or the default team's. */
+function roleSetPrefixes() {
   const owned = ownedLiveTeams(hierarchyDir(cwd));
-  return owned.length ? teamPrefix(cwd, owned[0]) : teamPrefix(cwd, null);
+  if (owned.length > 1) return owned.map((team) => ({ team: team ?? "default", prefix: teamPrefix(cwd, team) }));
+  return [{ team: null, prefix: owned.length ? teamPrefix(cwd, owned[0]) : teamPrefix(cwd, null) }];
 }
 resolveTeamFileScope();
 
@@ -3302,10 +3332,11 @@ function refuseLiveDefaultTeam(dir, existing) {
   );
 }
 
-/** Who runs this command, for deciding which team it owns: its pid, and its session id when
-    `--session` supplies one. */
+/** Who runs this command, for deciding which team it owns: its pid while that process is alive
+    (a dead one proves nothing), and its session id when `--session` supplies one. */
 function invokerIdentity() {
-  return { pid: ownOrchestratorPid(), sessionId: typeof opts.session === "string" ? opts.session : null };
+  const pid = ownOrchestratorPid();
+  return { pid: Number.isInteger(pid) && pidAlive(pid) ? pid : null, sessionId: typeof opts.session === "string" ? opts.session : null };
 }
 
 /** The pid this session claims as its own, resolved exactly as the commit path resolves it

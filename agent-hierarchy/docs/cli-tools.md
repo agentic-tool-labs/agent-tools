@@ -176,7 +176,13 @@ the lists above are exhaustive for those verbs rather than indicative.
 
 `--team <t>` names a live team, never a roster: `show`, `init`, `add`, `edit` and `remove` refuse it
 and point at `--roster <r>`. On team verbs, a session that owns exactly one live team and passes no
-`--team` acts on that team; owning several, it must pass `--team`. The removed `alias` and `layout`
+`--team` acts on that team. Owning several, a verb that names a member (`dismiss <name>`, `untrack <name>`,
+`move <name>`, `deliver <name>`, `answer <name>`, `spawn-one`/`spawn-ad-hoc --member <name>`) takes the team
+whose members include that name among the owned ones, and every other verb refuses, exit 2, listing the
+owned teams. `msg.mjs new` without `--team`, owning several, takes the team whose members include
+`--to-name` and otherwise refuses and writes nothing; `msg.mjs list` covers every owned team, and each
+row carries its `team` (`team=<name>` in `--plain`); `msg.mjs roster` prints every owned team's table,
+each under a line naming the team and its roster (JSON: `teams`). The removed `alias` and `layout`
 verbs exit 2 naming their replacements (`create --team`, `create --mode`), as does `init --layout`.
 
 **Which roster a command uses.** `show`, `init`, `add`, `edit`, `remove` and `create` take the first

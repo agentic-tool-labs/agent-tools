@@ -124,11 +124,13 @@ without a permission prompt; a `--close` call still prompts, by design. Output i
 always JSON. Full verb/flag reference: `docs/cli-tools.md`.
 
 `--team <name>` (spec 0011) names a live Team, so one repo can host more than
-one, each owned by a distinct orchestrator session: it points every verb that
+one, owned by one orchestrator session or several: it points every verb that
 reads or writes the team file at `teams/<name>.json`, and its members are named
 `<name>-<role>[-N]`. It never selects a roster block — `create --roster <r>`
 does, over the selected roster (§ Create). **Omitted**, a team verb run by a session that owns exactly one live Team
-acts on that Team; otherwise the default is `teams/<repo basename>.json` — never
+acts on that Team. With more than one, a verb that names a member (`dismiss bar-reviewer`)
+takes the Team from the name, and every other verb refuses and lists the owned Teams. With
+none, the default is `teams/<repo basename>.json` — never
 a shared `team.json` (spec 0044 §1.1), so two orchestrators in one repo do not
 collide. A pre-0044 `team.json` keeps working, unmigrated, named by its own
 members. See § Create for what happens when a bare `create` collides with
@@ -324,6 +326,63 @@ files, offer to reuse a recent one: run `roster.mjs history --json`, and if it r
 `roster.mjs create --from <id> --commit --spawn` (its own id, not the alias)
 in place of the roster-driven plan below — same downstream steps (spawn,
 check-in) apply unchanged. This capability is skill-only.
+
+**Several teams in one request.** When the user asks for more than one Team at
+once ("create team foo from roster foo-named-roster and create team bar from
+roster bar-named-roster"), run the steps below once per Team, driven by this list:
+
+1. **Read the request into a list of Teams first,** each with its roster, before
+   any command runs:
+   - "team foo from roster X": foo builds from X.
+   - Several Teams and several rosters in one phrase ("teams foo and bar from
+     rosters X and Y", "set up foo and bar using the foo and bar rosters"): pair
+     them in the order given.
+   - One roster for several Teams ("both from X", "same roster for both"): every
+     Team uses it.
+   - One Team per named roster ("a team per roster", "a team for each of X and
+     Y"): each Team takes its roster's name.
+   - "The foo team from its roster", or "from the foo roster" with no other
+     roster word: the roster is `foo`.
+   - A Team with no roster named: the single-Team rule (the selected roster; the
+     roster question only when the plan lists `named_rosters`).
+   - Counts that don't pair (two Teams, three rosters): one roster question per
+     Team, in the round of step 4.
+   - A Team per roster with no rosters named: one multi-select question listing
+     the names from `roster.mjs roster list --json`, the selected roster first.
+   - The same Team name twice: ask once for a different name for the later one.
+   - Never ask the team-name question for a Team the user named, nor the roster
+     question for a Team whose roster the user named:
+     never ask what the request already says.
+2. **Make one `ListAgents` call for the whole request.** Each Team's
+   names-in-use set comes from that one result, by its own `<team>-` prefix;
+   capture it once per Team and pass it unchanged to that Team's phases.
+3. **Plan each Team, one after another** (a plan can write: it clears a stale
+   Team): `create --plan --team <T> [--roster <r>] [--names-in-use …]`, always
+   with `--team`, even when it is the name the plan would pick anyway.
+   - A plan that refuses because the roster is missing lists the defined
+     rosters: that Team's roster joins the step 4 round, the defined rosters as
+     options and the selected one first.
+   - A plan that refuses because a live Team of that name exists: tell the
+     user, and put "another name for <T>, or skip <T>" in the step 4 round.
+   - A plan that refuses with `team-name-unusable`: offer its `suggestion` in
+     the step 4 round, as for a single Team.
+4. **Ask one question round for every team.** It holds only the Team names the
+   user didn't give, the rosters still unsettled, each Team's
+   `members_needing_model`, and the layout if the user asked to change it (one
+   `--mode` for every Team unless the user named one per Team). At most 4
+   questions per AskUserQuestion call, with more calls as needed, Team by Team;
+   every question's header and text name its Team. Re-plan each Team whose
+   flags changed.
+5. **Spawn, then check in and commit, team by team, never in parallel.** Run
+   each Team's `--spawn` in turn; the next Team's spawn may start while the
+   earlier Team's sessions boot. Then each Team's check-in and `--commit`, each
+   with that Team's own `--team`, `--roster`, `--names-in-use` and
+   `--member-model` flags. A Team that fails doesn't undo the others: report it,
+   and ask once whether to retry it.
+6. **Report one line per Team:** "Team foo (roster X): foo-architect,
+   foo-implementor, …". Then: "You now own N teams. Name the team when you ask
+   for something ('disband foo'); a member's name already says its team
+   ('dismiss bar-reviewer')."
 
 0. **Layout — ask nothing by default.** The Team's pane layout is `create`'s
    `--mode`, which defaults to the stored global preference (`teamLayout`),
@@ -650,6 +709,13 @@ a transport that silently no-ops, a member that comes up under an unexpected
 name, anything the plan above doesn't cover — stop and report it upward
 rather than improvising; spec 0001 §13 flags this area as a real escalation
 candidate, not a place for invented judgment calls.
+
+**Owning more than one team.** While this session owns more than one live Team,
+pass `--team` to every `roster.mjs` team verb and to `msg.mjs new`/`list`; a verb
+that names a member may leave it out. When the user's words don't say which Team
+("disband the team"), ask one AskUserQuestion listing the owned Teams
+(`roster.mjs teams`, the rows with `own: true`), multi-select when the request can
+cover several ("disband the teams"). Each disband keeps its own confirmation.
 
 ## `disband`
 

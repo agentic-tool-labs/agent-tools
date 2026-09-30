@@ -1105,15 +1105,38 @@ export function resolveSessionTeam(dir, role, explicitTeam = null) {
 export const TEAM_STALE_AGE_SEC = 24 * 3600;
 
 /**
- * Whether `invoker` (`{pid, sessionId}`) owns team `t`: the recorded owner pid is the invoker's and
- * is alive, and — when both the invocation and the team know a session id — the two agree. That
- * session check is the only guard against a reused pid; without one, the pid alone decides.
+ * Whether `invoker` (`{pid, sessionId}`, either may be null) owns team `t` — the one owner rule
+ * roster.mjs, the hooks and msg.mjs share. Either the same session: both session ids are known and
+ * equal, whatever the pids (a resumed session keeps its teams). Or the same process: the recorded
+ * owner pid is the invoker's, and the session ids don't conflict (both known and different). The
+ * rule never checks liveness: a caller that can't vouch for its pid leaves it out of `invoker`.
  */
 export function teamOwnedBy(t, invoker) {
-  if (!t || !invoker || !Number.isInteger(invoker.pid)) return false;
+  if (!t || !invoker) return false;
   const orch = t.orchestrator || {};
-  if (Number(orch.pid) !== invoker.pid || !pidAlive(invoker.pid)) return false;
-  return !(invoker.sessionId && orch.session_id && orch.session_id !== invoker.sessionId);
+  const bothSessions = Boolean(invoker.sessionId) && Boolean(orch.session_id);
+  if (bothSessions && orch.session_id === invoker.sessionId) return true;
+  return Number.isInteger(invoker.pid) && Number(orch.pid) === invoker.pid && !bothSessions;
+}
+
+/**
+ * The teams `invoker` owns in hierarchy dir `dir`: every team `teamOwnedBy` gives it, live at any
+ * age, over the default team (null) and every `teams/*.json`, the default team first and the rest
+ * by name. Empty when the invoker has neither a pid nor a session id.
+ */
+export function ownedTeams(dir, invoker) {
+  if (!invoker || (!Number.isInteger(invoker.pid) && !invoker.sessionId)) return [];
+  return [null, ...listTeamNames(dir).sort()].filter((name) => teamOwnedBy(readTeam(dir, name), invoker));
+}
+
+/** The teams among `teams` (names, null for the default team) whose members include `name`. */
+export function teamsWithMember(dir, teams, name) {
+  return name ? teams.filter((team) => teamMemberNameSet(dir, team).has(name)) : [];
+}
+
+/** How a list of team names reads in a refusal: `"foo", "bar"`, the default team spelled out. */
+export function teamListText(teams) {
+  return teams.map((n) => (n === null ? "the default team (team.json)" : `"${n}"`)).join(", ");
 }
 
 /**

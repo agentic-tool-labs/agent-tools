@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 // bodies called later (statusReport here; validateMember/validateRosterBlock there). Keep it that
 // way — a top-level use on either side would risk the top-level-await deadlock class documented
 // in lib-roster.mjs's header.
-import { legacyTeamPrefix, listTeamNames, memberTeam, readTeam, ROSTER_LAYOUT_VALUES, teamRosterEntry, teamRosterKey } from "./lib-roster.mjs";
+import { legacyTeamPrefix, listTeamNames, memberTeam, ownedTeams, readTeam, ROSTER_LAYOUT_VALUES, teamRosterEntry, teamRosterKey } from "./lib-roster.mjs";
 import { normalizeSessionId } from "./lib-gate.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 
@@ -1313,49 +1313,45 @@ function loadScope(path, scope, warnings) {
 /**
  * The active team scope (spec 0011 §4.4): (1) `opts.team` if given —
  * trusted as-is, the CLI layer validates it with `validateTeamAlias` before
- * we ever see it; (2) the team (default or named) whose `team.json` binds
- * `orchestrator.session_id === opts.sessionId`, letting an orchestrator omit
- * `--team` after `create`; (3) the team whose `orchestrator.session_id` is
- * unset and whose `orchestrator.pid` is the calling Claude session's pid —
- * `spawn-one`/`spawn-ad-hoc` record only the pid, so without this the
- * session that spawned a team cannot see it; (4) for a session that owns none, the team it was
- * launched into (`AH_TEAM_FILE`), else the live team whose member row holds its pane — the
- * orchestrator steps come first so an owner always resolves to its own team; (5) `null`, the
- * default team.
+ * we ever see it; (2) the teams the calling session owns, by the owner rule roster.mjs and msg.mjs
+ * share (`ownedTeams`: the recorded owner pid is the caller's, and the session ids agree when both
+ * are known), which lets an orchestrator omit `--team` after `create`; (3) for a session that owns
+ * none, the team it was launched into (`AH_TEAM_FILE`), else the live team whose member row holds
+ * its pane — the owner step comes first so an owner always resolves to its own team; (4) `null`,
+ * the default team.
  * The caller pid is `opts.pid`, else `process.ppid` (a hook's parent is the
  * Claude process). A CLI's parent is a shell, so CLI callers pass the pid
  * spawn-* records (`--orchestrator-pid`, else `CLAUDE_PID`); a non-integer
- * pid skips (3). A team with a session_id is
- * never adopted by pid. Any read failure (missing team file, unreadable
+ * pid skips (2). Any read failure (missing team file, unreadable
  * member list) degrades to `null` rather than throwing — 0009 §8.12's
  * fail-open catch, extended to team resolution.
  *
- * Returns `{name, home, via}`: `home` is the hierarchy dir holding that team's file (null when not
- * known — an explicit `opts.team` without `opts.teamHome`, or no team); `via` is the step that
- * answered — `team`, `session`, `pid` (the session's own team), `env` or `pane` (a team it was only
- * attributed to, which may be read but never cleared or rewritten), or null.
+ * Returns `{name, home, via, owned}`: `home` is the hierarchy dir holding that team's file (null
+ * when not known — an explicit `opts.team` without `opts.teamHome`, or no team); `via` is the step
+ * that answered — `team`, `session` or `pid` (the session's own team, matched with or without a
+ * session id), `env` or `pane` (a team it was only attributed to, which may be read but never
+ * cleared or rewritten), or null. `owned` lists every team the session owns, in `ownedTeams` order;
+ * when it holds more than one, `name` is its first and the caller must treat each in turn.
  */
 function resolveTeamScope(cwd, opts) {
-  if (opts && typeof opts.team === "string" && opts.team) return { name: opts.team, home: opts.teamHome || null, via: "team" };
+  if (opts && typeof opts.team === "string" && opts.team) return { name: opts.team, home: opts.teamHome || null, via: "team", owned: [] };
+  if (opts && opts.defaultTeam === true) return { name: null, home: opts.teamHome || null, via: "team", owned: [] };
   const pid = opts && opts.pid !== undefined ? opts.pid : process.ppid;
   try {
     const dir = hierarchyDir(cwd);
-    const teams = [null, ...listTeamNames(dir)].map((name) => ({ name, orch: (readTeam(dir, name) || {}).orchestrator }));
-    if (opts && opts.sessionId) {
-      const hit = teams.find((t) => t.orch && t.orch.session_id === opts.sessionId);
-      if (hit) return { name: hit.name, home: dir, via: "session" };
-    }
-    if (Number.isInteger(pid) && pid > 0) {
-      const hit = teams.find((t) => t.orch && !t.orch.session_id && t.orch.pid === pid);
-      if (hit) return { name: hit.name, home: dir, via: "pid" };
+    const sessionId = (opts && opts.sessionId) || null;
+    const owned = ownedTeams(dir, { pid: Number.isInteger(pid) && pid > 0 ? pid : null, sessionId });
+    if (owned.length) {
+      const orch = (readTeam(dir, owned[0]) || {}).orchestrator || {};
+      return { name: owned[0], home: dir, via: sessionId && orch.session_id === sessionId ? "session" : "pid", owned };
     }
     // A session that owns no team: the team it was launched into, else the live team holding its pane.
     const member = memberTeam(dir, [dir, mainHierarchyDir(cwd)], process.env.HERDR_PANE_ID || process.env.TMUX_PANE || null);
-    if (member) return { name: member.teamName, home: member.home, via: member.via };
+    if (member) return { name: member.teamName, home: member.home, via: member.via, owned: [] };
   } catch {
     // fail-open to default — see doc comment above.
   }
-  return { name: null, home: null, via: null };
+  return { name: null, home: null, via: null, owned: [] };
 }
 
 /**
@@ -1394,6 +1390,27 @@ export function sessionRosterSelection(cwd, opts = {}) {
   return scopedRosterSelection(resolvedCwd, opts, team, teamHome);
 }
 
+/** One `{team, selection}` per team the session owns when it owns more than one, else null. */
+export function ownedRosterSelections(cwd, opts = {}) {
+  const resolvedCwd = resolve(typeof cwd === "string" && cwd ? cwd : process.cwd());
+  const { owned } = resolveTeamScope(resolvedCwd, opts);
+  if (owned.length < 2) return null;
+  const home = hierarchyDir(resolvedCwd);
+  return owned.map((team) => ({ team, selection: scopedRosterSelection(resolvedCwd, opts, team, home) }));
+}
+
+/**
+ * For a session that owns more than one live team: one `{team, resolved}` per owned team, each
+ * resolved as that team (its own roster), in `resolved.ownedTeams` order. Null for a session with
+ * at most one, which keeps its single-team path. `opts` is passed on to each `resolveConfig`.
+ */
+export function ownedTeamConfigs(resolved, opts = {}) {
+  const owned = resolved && Array.isArray(resolved.ownedTeams) ? resolved.ownedTeams : [];
+  if (owned.length < 2) return null;
+  const teamHome = hierarchyDir(resolved.cwd);
+  return owned.map((team) => ({ team, resolved: resolveConfig(resolved.cwd, { ...opts, ...(team === null ? { defaultTeam: true } : { team }), teamHome }) }));
+}
+
 /**
  * Resolve the effective hierarchy for a session.
  *
@@ -1405,7 +1422,7 @@ export function resolveConfig(cwd, opts = {}) {
   const resolvedCwd = resolve(typeof cwd === "string" && cwd ? cwd : process.cwd());
   // `teamHome` is the hierarchy dir the team's file lives in — a worktree peer's team is the main
   // checkout's, which is not `hierarchyDir(cwd)`.
-  const { name: team, home: teamHome, via: teamVia } = resolveTeamScope(resolvedCwd, opts);
+  const { name: team, home: teamHome, via: teamVia, owned: ownedTeamNames } = resolveTeamScope(resolvedCwd, opts);
   const userPath = userConfigPath();
   // Fix 2 (spec 0032 §4): worktree-aware candidate lists, matching resolveRoster — first
   // existing path per scope, never merged across candidates within a level (§4 rationale:
@@ -1461,6 +1478,7 @@ export function resolveConfig(cwd, opts = {}) {
       rosterLevel: null,
       team,
       teamVia,
+      ownedTeams: ownedTeamNames,
     };
   }
 
@@ -1630,6 +1648,7 @@ export function resolveConfig(cwd, opts = {}) {
     rosterLevel: rosterResult ? rosterResult.level : null,
     team,
     teamVia,
+    ownedTeams: ownedTeamNames,
   };
 }
 
@@ -1758,8 +1777,9 @@ const PACK_DESCRIPTION_BAD_RE = /[\uFFFE\uFFFF\uE000-\uF8FF\u{F0000}-\u{10FFFF}]
 /** Characters that hide text: control characters other than newline and tab, Unicode format
     characters (category Cf: the bidirectional controls and zero-width characters among them), the
     tag block, variation selectors (a known way to carry an invisible payload, so an emoji written
-    with U+FE0F is refused too), the line and paragraph separators, and the invisible fillers. */
-const HIDDEN_CHAR_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u{E0000}-\u{E007F}\uFE00-\uFE0F\u{E0100}-\u{E01EF}\u2028\u2029\u034F\u115F\u1160\u3164\uFFA0]/u;
+    with U+FE0F is refused too), the line and paragraph separators, and the invisible fillers
+    (the braille blank among them). */
+const HIDDEN_CHAR_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u{E0000}-\u{E007F}\uFE00-\uFE0F\u{E0100}-\u{E01EF}\u2028\u2029\u034F\u115F\u1160\u3164\uFFA0\u2800]/u;
 const HIDDEN_CHAR_RE_G = new RegExp(HIDDEN_CHAR_RE.source, "gu");
 
 /** Every install record with an install path: `{key, plugin, marketplace, installPath, version, scope}`. */
@@ -2721,9 +2741,11 @@ export function subagentType(role, entry) {
  * One dispatch line per role. `inherit` renders as "omit the parameter", never
  * as a value. A chain role gets its peer target, the spawn command for when none
  * is live, and where to turn when it cannot be launched — never a subagent call.
- * A legwork role gets the subagent call alone.
+ * A legwork role gets the subagent call alone. `owned` (from `ownedTeamConfigs`) is set when the
+ * session owns several live teams: a chain role's line then names each team's peer target and gives
+ * each team's own spawn command, with that team's verb and `--team`.
  */
-function roleLines(resolved, repoBasename) {
+function roleLines(resolved, repoBasename, owned = null) {
   const cwd = resolved.cwd || "<abs cwd>";
   return registryRoles(resolved).map((role) => {
     const entry = resolved.roles[role];
@@ -2735,6 +2757,12 @@ function roleLines(resolved, repoBasename) {
         : `Agent(subagent_type:"${type}", model:"${entry.model}")`;
     if (classProp(role, resolved, "chain") !== true) {
       return `- ${roleLabel(role, resolved)}${tag} — ${agentCall}`;
+    }
+    if (owned) {
+      const targets = owned.flatMap(({ team }) => resolvedPeerTargets(role, entry, teamPrefix(resolved.cwd, team)).map((p) => `"${p}" (team ${team ?? "default"})`));
+      const who = targets.length ? `${targets.join(" or ")}, the one whose team owns the work` : "the live teammate of the team that owns the work (names: `ListAgents` / `roster.mjs teams`)";
+      const spawns = owned.map(({ team, resolved: r }) => `team ${team ?? "default"}: \`node "${ROSTER_CLI}" ${rosterMemberFor(r, role) ? "spawn-one" : "spawn-ad-hoc"} ${role}${team === null ? "" : ` --team ${team}`} --cwd ${cwd}\``);
+      return `- ${roleLabel(role, resolved)}${tag} — SendMessage ${who}; none live → ${spawns.join("; ")}; then SendMessage the name it prints. Can't launch → agent-team 'When a role can't take the work'.`;
     }
     const explicit = entry.peer && entry.peer !== "auto";
     const target = explicit
@@ -2964,7 +2992,7 @@ export function buildDirective(fullResolved, sessionId, extra = {}) {
     "Agent hierarchy ACTIVE. You are the Orchestrator: decompose, dispatch, synthesize — do not design or implement non-trivial changes yourself, except where agent-team 'When a role can't take the work' has you take a role over.",
     "",
     "Roles — dispatch route per role below. Ultra-Advisor, Architect, Reviewer, Implementor are peer sessions, never subagents: SendMessage the live one; none live → spawn it with the command on its line, then SendMessage the name it prints (Ultra-Advisor is approval-gated — item 7). Legwork (Task-Runner) always spawns or delegates to task-gopher; pass `model` on the Agent call — agent frontmatter is fallback only:",
-    ...roleLines(resolved, repoBasename),
+    ...roleLines(resolved, repoBasename, ownedTeamConfigs(fullResolved)),
     ...registryNotes,
     "",
     "PEER BRIEF CONTRACT — a peer session is an independent Claude session: unlike a subagent, NOTHING returns its result to you automatically; a peer that finishes goes idle without telling you unless the brief itself obliges it to report. Every SendMessage that tasks a role peer must:",
@@ -3056,6 +3084,9 @@ export function statusReport(cwd) {
   const userPath = userConfigPath();
   const projectPath = projectConfigPath(cwd);
   const seen = Object.fromEntries(resolved.layers.map((l) => [l.scope, l.path]));
+  // A session that owns several live teams: the lead line first, then each team's own sections.
+  const owned = ownedTeamConfigs(resolved);
+  if (owned) out.push(ownedTeamsLead(owned.map(({ team }) => team)));
 
   out.push(`ah: ${!resolved.configured ? "NOT CONFIGURED" : resolved.enabled ? "ON" : "OFF (enabled:false)"}`);
   out.push(`user config:    ${seen.user || `${userPath} (none)`}`);
@@ -3070,10 +3101,11 @@ export function statusReport(cwd) {
   out.push("Resolved effective table:");
   out.push(`  Orchestrator  ${"session model".padEnd(14)} fixed (this session's agent)`);
   const repoBasename = teamPrefix(resolved.cwd, resolved.team);
+  const prefixes = owned ? owned.map(({ team }) => teamPrefix(resolved.cwd, team)) : [repoBasename];
   for (const role of ROLES) {
     const entry = resolved.roles[role];
     const model = entry.model === "inherit" ? "inherit*" : entry.model;
-    const peers = resolvedPeerTargets(role, entry, repoBasename);
+    const peers = [...new Set(prefixes.flatMap((prefix) => resolvedPeerTargets(role, entry, prefix)))];
     const dispatch = PEER_ELIGIBLE_ROLES.includes(role) ? (peers.length ? `dispatch: peer ${peers.map((p) => `"${p}"`).join(" / ")}` : "dispatch: subagent-only") : "";
     out.push(
       `  ${ROLE_LABELS[role].padEnd(13)} ${model.padEnd(14)} from ${resolved.sources[role].padEnd(8)} -> ${subagentType(role, entry)}${dispatch ? `  [${dispatch}]` : ""}`
@@ -3089,6 +3121,48 @@ export function statusReport(cwd) {
   out.push("");
   out.push("* inherit = omit the `model` parameter on the Agent call (never pass \"inherit\").");
   out.push("");
+  if (owned) {
+    const dir = hierarchyDir(resolved.cwd);
+    for (const { team, resolved: r } of owned) {
+      const t = readTeam(dir, team);
+      const prefix = teamPrefix(r.cwd, team);
+      out.push(`Team ${team ?? "default"} (roster ${(t && t.roster) ?? "default"}):`);
+      out.push(...rosterSectionLines(r));
+      out.push(`Team name: ${prefix} (team) — agents named ${prefix}-<role>`);
+      out.push(t ? `Team: ${t.team_id} (${t.transport}, ${t.members.length} member(s)${teamIsPartial(dir, r.cwd, team, t, r) ? ", partial" : ""})` : "Team: none active");
+    }
+    for (const w of staleTeamKeys(resolved.cwd, resolved).warnings) out.push(w);
+    out.push(`Stand up one missing peer: node "${ROSTER_CLI}" spawn-one <role> --team <team> --cwd ${resolved.cwd}. Full-team Create is the /agent-team skill's job — do not hand-assemble create calls.`);
+  } else {
+    out.push(...rosterSectionLines(resolved));
+    const nameSource = resolved.team ? "team" : teamPrefixInfo(resolved.cwd, null).source;
+    out.push(`Team name: ${repoBasename} (${nameSource}) — agents named ${repoBasename}-<role>`);
+    for (const w of staleTeamKeys(resolved.cwd, resolved).warnings) out.push(w);
+    out.push(`Stand up one missing peer: node "${ROSTER_CLI}" spawn-one <role> --cwd ${resolved.cwd}. Full-team Create is the /agent-team skill's job — do not hand-assemble create calls.`);
+    let team = null;
+    try {
+      team = readTeam(hierarchyDir(resolved.cwd));
+    } catch {
+      team = null;
+    }
+    out.push(team ? `Team: ${team.team_id} (${team.transport}, ${team.members.length} member(s)${teamIsPartial(hierarchyDir(resolved.cwd), resolved.cwd, null, team, resolved) ? ", partial" : ""})` : "Team: none active — /agent-team create to instantiate the roster");
+  }
+  if (resolved.shadowed.length) {
+    out.push(`WARNING: project config shadows user-scope values for: ${resolved.shadowed.join(", ")}.`);
+  }
+  for (const warning of resolved.warnings) out.push(warning);
+  out.push("Changes apply to this session now; other live sessions pick them up at their next start, clear, or compaction.");
+  return out.join("\n");
+}
+
+/** The lead line of every surface that shows several owned teams. */
+export function ownedTeamsLead(teams) {
+  return `You own ${teams.length} live teams: ${teams.map((t) => t ?? "default").join(", ")}. Pass --team <name> to roster.mjs team verbs and to msg.mjs new/list; a member name already says its team.`;
+}
+
+/** `/hierarchy status`'s Roster lines for one resolved config. */
+function rosterSectionLines(resolved) {
+  const out = [];
   if (resolved.roster) {
     const r = resolved.roster;
     out.push(`Roster: level=${r.level} route=${r.route} path=${r.path}`);
@@ -3120,23 +3194,7 @@ export function statusReport(cwd) {
   } else {
     out.push("Roster: none configured — /agent-roster init to define one (roles/route above stay in effect).");
   }
-  const nameSource = resolved.team ? "team" : teamPrefixInfo(resolved.cwd, null).source;
-  out.push(`Team name: ${repoBasename} (${nameSource}) — agents named ${repoBasename}-<role>`);
-  for (const w of staleTeamKeys(resolved.cwd, resolved).warnings) out.push(w);
-  out.push(`Stand up one missing peer: node "${ROSTER_CLI}" spawn-one <role> --cwd ${resolved.cwd}. Full-team Create is the /agent-team skill's job — do not hand-assemble create calls.`);
-  let team = null;
-  try {
-    team = readTeam(hierarchyDir(resolved.cwd));
-  } catch {
-    team = null;
-  }
-  out.push(team ? `Team: ${team.team_id} (${team.transport}, ${team.members.length} member(s)${teamIsPartial(hierarchyDir(resolved.cwd), resolved.cwd, null, team, resolved) ? ", partial" : ""})` : "Team: none active — /agent-team create to instantiate the roster");
-  if (resolved.shadowed.length) {
-    out.push(`WARNING: project config shadows user-scope values for: ${resolved.shadowed.join(", ")}.`);
-  }
-  for (const warning of resolved.warnings) out.push(warning);
-  out.push("Changes apply to this session now; other live sessions pick them up at their next start, clear, or compaction.");
-  return out.join("\n");
+  return out;
 }
 
 // Run directly: print the status table for the current working directory.

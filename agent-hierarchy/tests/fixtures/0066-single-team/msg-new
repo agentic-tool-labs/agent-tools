@@ -1,0 +1,3 @@
+0 {"id":"<ID>","path":"<SANDBOX>/hier/msgs/<ID>--reviewer--m8--request.md"} team: foo
+team_file: <SANDBOX>/hier/teams/foo.json
+team_guide: <PLUGIN>/docs/team-file.md
