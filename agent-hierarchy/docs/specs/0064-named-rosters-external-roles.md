@@ -484,7 +484,17 @@ the values here are an example:
   - control characters other than newline and tab;
   - Unicode format characters (category Cf, which includes the
     bidirectional controls);
-  - the tag block U+E0000–U+E007F.
+  - the tag block U+E0000–U+E007F;
+  - variation selectors U+FE00–U+FE0F and U+E0100–U+E01EF, a known way to
+    carry an invisible payload;
+  - the line and paragraph separators U+2028 and U+2029;
+  - the invisible fillers U+034F, U+115F, U+1160, U+3164 and U+FFA0.
+
+  All of these are one list in the code. The finding names the code point
+  and its line and column. This refuses emoji written with a variation
+  selector (for example ⚠️, which is U+26A0 U+FE0F). The author writes the
+  plain character instead. That cost is accepted, because a pack can't
+  prove its selectors are harmless.
 
   Every place ah prints pack text (dry runs, `pack show`, `role trust`
   diffs) escapes ANSI sequences. Otherwise the text the user reviews
@@ -587,6 +597,47 @@ the user adopts it:
   - **It fails closed.** Any error while judging a command that parses as a
     `--from` commit or a `role trust` commit denies it. This is unlike the
     skill rule, which fails open.
+  - **Commands the gate can't parse.** `parseAhCommand` accepts only one
+    plain command. Everything else goes to Claude Code's normal permission
+    flow, which runs it without asking in bypass or auto mode, or under a
+    matching allow rule: a compound (`cd … && node …`), an env prefix, a
+    relative script path, `$VAR` or `$(…)`, `bash -c`, a heredoc, or a
+    trailing comment. A model writes several of these without meaning any
+    harm. So:
+    - Any unquoted `#` makes a command not parse. Whether the shell would
+      treat it as a comment isn't worked out; the command is just not
+      parsed.
+    - A Bash command that doesn't parse, and whose raw text contains
+      `roster.mjs`, then later the word `role`, then later the word `trust`
+      or the token `--from`, is judged as a commit. The same session rules
+      apply: `ask` in a top-level interactive session in the E6 modes, deny
+      everywhere else. It is judged as a commit even if the text says
+      `--dry-run`, because the gate can't tell whether the shell will pass
+      that flag. The message says to run the ah command on its own, as one
+      plain command with an absolute script path.
+    - This matches on text, so it can have false positives, for example
+      `grep roster.mjs x | grep 'role trust'`. That is accepted at a trust
+      boundary, and the message says how to rephrase.
+  - **roster.mjs refuses too.** A non-dry-run `role set --from` or `role
+    trust` is refused inside roster.mjs, before any write and with a non-zero
+    exit, when either of these is true:
+    - `AH_TEAM_FILE` is set and non-empty;
+    - a pipeline run is live (the shared test, §4.9) for the checkout of
+      `--cwd`, or for the process's own working directory when that is
+      different.
+
+    The message says that trust is committed only from the user's own
+    top-level session, outside a pipeline run. An error while running these
+    checks refuses. This holds however the shell command was written. The
+    gate checks the same two cwds: the command's `--cwd` and the payload's
+    `cwd`.
+  - **What neither catches.** A subagent of a top-level session in a mode
+    that runs commands without asking can still commit if it hides the words
+    from the gate, for example with a variable holding `trust`, a script file
+    written earlier, or a renamed copy of roster.mjs. roster.mjs can't tell a
+    subagent's Bash from its parent's (evidence step E7 checks whether any
+    environment variable can). That is the same class as hand-editing the
+    config (§4.10), and ah can't hold that line.
   - **Other files.** `tests/check-gate-name-agreement.mjs` and the
     one-shot `VERBS` list don't change.
 
@@ -630,7 +681,9 @@ The pin is `sha256:<64 lowercase hex>` of the UTF-8 bytes of
 - `agentText` is the agent file's text (it must be valid UTF-8, §4.2);
 - `files` is an array of `[relpath, sha256hex]` pairs, one per regular file
   under the install path. Paths use `/` and are relative to the install path.
-  The array is sorted by path, and a top-level `.git` directory is skipped.
+  The array is sorted by path, and a top-level `.git` directory is skipped,
+  because a fetch rewrites it with no content change. What that leaves
+  unpinned is in §4.10.
 
 This form is permanent once it ships. Changing it later would need a
 migration.
@@ -720,12 +773,32 @@ an **allowlist**, which fails closed. This is on top of the class contract.
   wildcard. Leaving it out would inherit every tool, MCP tools and Agent
   included.
 - **Strict grammar.** Every non-blank line between the `---` fences must be
-  either an unquoted top-level key from the list or a continuation of one (an
-  indented list item or a folded line). Everything else is an error:
+  either an unquoted top-level key from the list or a continuation of one.
+  Only two kinds of continuation are allowed:
+  - a `- item` line under `tools` or `disallowedTools` when the key's
+    inline value is empty;
+  - a line of a `|` or `>` block scalar (optionally with `-` or `+`), which
+    only `description` may use.
+
+  Everything else is an error (`pack-agent-line`):
+  - an indented line that would continue a plain value (a folded plain
+    scalar). YAML joins it onto the value above, so `tools: Read, Grep`
+    followed by `  Write, Bash` grants Bash;
   - a quoted key;
   - a duplicate key;
   - a YAML anchor, alias or merge key (`&`, `*`, `<<`);
+  - a tab in the indentation;
+  - a `#` at the start of a line or after whitespace (a YAML comment
+    would make YAML read less than ah does);
   - any line ah can't classify.
+- **Tool entries.** Each entry of `tools` and `disallowedTools`, inline
+  (split on commas) or as a `- item`, must match `^[A-Za-z][A-Za-z0-9_-]*$`
+  once surrounding spaces are trimmed. Anything else is `pack-agent-tools`,
+  including quotes, brackets, braces and parenthesised forms such as
+  `Agent(x)`.
+- **One parse.** The effective tool list that the dry run prints, and that
+  the class contract judges, comes from the same parse that the grammar
+  check accepted. There is no second reader for pack agents.
 
   ah's frontmatter reader today skips lines it doesn't recognise
   (lib-config.mjs:1620-1621). A quoted `"permissionMode": …` would slip past
@@ -891,10 +964,40 @@ gate in §4.4:
 A stale open anchor then blocks these commits too. That is deliberate: the
 next run reports the stale anchor anyway.
 
-**No `bypassPermissions`.** `spawn-one`, `spawn-ad-hoc` and `create` refuse
-to launch a `from` role, including a built-in overridden by one, when the
-member's `autoMode` is `bypassPermissions`. That value is still accepted for
-legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
+**No `bypassPermissions`.** ah never launches or dispatches a `from` role
+(including a built-in overridden by one) with permission checks off.
+- **Peers.** `spawn-one`, `spawn-ad-hoc` and `create` refuse to launch such
+  a member in two cases:
+  - its `autoMode` is `bypassPermissions`. That value is still accepted for
+    legacy configs (lib-roster.mjs:86).
+  - its `autoMode` is unset. Then spawn passes no `--permission-mode`
+    (roster.mjs:2554), so the peer would take the default mode from the
+    user's settings, and that can be bypass.
+
+  The refusal names the member and gives the fix,
+  `roster.mjs edit --member <name> --auto-mode <mode>`, naming `auto` as the
+  hands-off mode. A member that isn't from a pack behaves as today, unset
+  mode included.
+- **Subagents.** `hooks/pretooluse-route-gate.mjs` denies an Agent or Task
+  dispatch when both hold:
+  - the payload's `permission_mode` is `bypassPermissions`;
+  - the `subagent_type` is the agent that some `from` row resolves to, or
+    the agent of a built-in overridden by one, whether or not that row is
+    available right now.
+
+  The message says the pack role doesn't run with permission checks off,
+  and to switch the session's mode or dispatch the built-in. Every other
+  mode, and every other agent, is unchanged.
+  - If this rule throws, it denies only when the mode is
+    `bypassPermissions` and `subagent_type` names a plugin agent outside
+    `ah:`. Otherwise the gate's existing error handling applies.
+- **What remains.**
+  - A person can switch a running pane into bypass themselves.
+  - A user can launch `claude --agent <plugin>:<agent>` in bypass outside
+    ah.
+  - The plugin's agents are subagent types in every session, adopted or
+    not. Dispatching an agent no `from` row names is Claude Code's side
+    (§4.10).
 
 ### 4.10 Security notes
 
@@ -915,21 +1018,41 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
     `claude plugin update` run outside ah.
   - It doesn't stop the plugin's own hooks or MCP servers from running with
     the new content. That is Claude Code's side (above).
+  - It covers the plugin's files as they sit on disk when the role is
+    resolved, and nothing the role reaches at run time. That includes:
+    - the top-level `.git` directory, which is skipped (§4.5) because a
+      fetch rewrites it with no content change. Installed copies can carry
+      one, and a pinned body or hook can read other versions out of it
+      (`git show <ref>:<path>`);
+    - the network, for a role granted Bash or WebFetch;
+    - any other file on the machine.
+
+    `pack show` lists a `.git` directory under "also in this plugin"
+    (§4.7), so it is visible before install.
 - **A human commits trust.**
   - Adoption and trust commit only with the exact pin the dry run printed.
   - The commit goes through Claude Code's own approval prompt in a top-level
     interactive session, and is refused in role, peer and subagent sessions
     and in pipeline runs (§4.4).
-  - What remains: a session with Bash can still hand-edit
-    `agent-hierarchy.json` or the stored copies. ah can't hold that line.
-    Requiring a self-verifying stored copy at resolution (§4.5) narrows it.
+  - A command the gate can't parse is judged as a commit when its text
+    names one. roster.mjs itself also refuses commits from team members and
+    during pipeline runs, whatever the shell form (§4.4).
+  - What remains:
+    - a subagent that hides the words from the gate, in a mode that runs
+      commands without asking (§4.4);
+    - a session with Bash can still hand-edit `agent-hierarchy.json` or the
+      stored copies.
+
+    ah can't hold that line. Requiring a self-verifying stored copy at
+    resolution (§4.5) narrows it.
 - **Tool limits are role discipline, not a sandbox.**
   - The class contract and the frontmatter allowlist (§4.6) decide which
     tools an agent file asks for.
   - They don't confine what a granted tool does. A review-class role with
     Bash can still write files and push.
-  - The boundary is the session's permission mode, and a pack role can't run
-    under `bypassPermissions` (§4.9).
+  - The boundary is the session's permission mode. ah never launches or
+    dispatches a pack role with permission checks off (§4.9, which lists
+    what remains).
   - A pack can't point a role at another plugin's agent or at a path.
 - **Injected text.** `description`, `routes` and `label` reach every
   session's context. They keep the existing limits (one line, 160
@@ -956,7 +1079,8 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
 - Built-in roles and classes.
 - Existing custom rows, bare-name refs, and `plugin:agent` refs without
   `from`.
-- The route gate and the Ultra-Advisor gate.
+- The Ultra-Advisor gate. The route gate changes only by the bypass rule in
+  §4.9.
 - Codex members. Their instructions file takes the agent body from the
   resolved file, so a pack role works there unchanged.
 - `role remove` never deletes a file or touches a plugin. Stored copies stay
@@ -1006,8 +1130,15 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
   - the spawn refusals (§4.9);
   - ANSI escaping wherever pack text is printed;
   - the usage text.
-- `agent-hierarchy/hooks/pretooluse-roster-skill-gate.mjs`: the commit rule
-  (§4.4).
+- `agent-hierarchy/hooks/pretooluse-roster-skill-gate.mjs`: the commit rule,
+  including commands that don't parse and both cwds (§4.4).
+- `agent-hierarchy/hooks/lib-ah-cli.mjs`: an unquoted `#` makes a command
+  not parse (§4.4).
+- `agent-hierarchy/hooks/roster.mjs`, in addition to the list above: the
+  in-process commit refusal (§4.4), and the unset-`autoMode` spawn refusal
+  (§4.9).
+- `agent-hierarchy/hooks/pretooluse-route-gate.mjs`: the bypass rule for
+  Agent and Task dispatches (§4.9).
 - `agent-hierarchy/skills/autonomous-pipeline/SKILL.md`: at queue-time
   resolution, gate slots stay first-party, and the bootstrap halts on a
   pack-overridden built-in (§4.9).
@@ -1110,9 +1241,13 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
   - `pack-hidden-chars`: a bidirectional control or a U+E00xx tag character
     in a field, and a zero-width character in the agent file;
   - a non-UTF-8 agent file is refused;
-  - an ANSI sequence in a field prints escaped.
+  - an ANSI sequence in a field prints escaped;
+  - `pack-hidden-chars` also for a run of U+FE00–U+FE0F in a field, a
+    U+E0100 in the agent file, a U+2028 in a field, a U+3164 filler, and
+    an emoji written with U+FE0F;
+  - the finding names the code point, line and column.
 
-  [drop the Cf check]
+  [drop the Cf check] [drop the variation-selector ranges]
 - **P3 `role set --from`:**
   - the dry run prints the fields verbatim and the pin;
   - a commit with no `--pin`, or with a stale one, is refused;
@@ -1158,7 +1293,19 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
   - a duplicate key;
   - `&anchor`, `*alias` or `<<:`;
   - `tools` missing, or containing a wildcard;
-  - a line that can't be classified.
+  - a line that can't be classified;
+  - `tools: Read, Grep` followed by an indented `  Write, Bash` (a folded
+    plain scalar) [accept any indented line as a continuation];
+  - `description: x` followed by an indented `  bad: indentation`;
+  - a tab in the indentation;
+  - a `#` comment, on its own line or after a value;
+  - a tool entry that is quoted, in `[…]` flow form, or `Agent(x)`;
+  - a `|` block scalar under `tools`.
+
+  These are accepted: a `>` or `|` block scalar under `description`, and
+  `tools:` with an empty value followed by `- Read` / `- Bash` items. For
+  both, the effective tool list the dry run prints equals the one the class
+  contract judges [read tools with a second parser].
 
   The dry run flags `Bash`, `Agent`, `mcp__*`, `Write` and `Edit`. The same
   keys in a user's own bare-name file behave as today.
@@ -1190,18 +1337,54 @@ legacy configs (lib-roster.mjs:82-85). The refusal says to pick another mode.
     - it is `deny` in a permission mode E6 excluded;
     - it is `deny` when the rule throws;
   - dry runs, `role list` and `pack` pass;
-  - the one-shot skill rule is unchanged.
+  - the one-shot skill rule is unchanged;
+  - commands that don't parse, each as a trust commit and as a `--from`
+    commit, are `ask` in a top-level payload and `deny` in a subagent
+    payload, and pretooluse-ah-cli stays silent on them:
+    - a trailing `# --dry-run`;
+    - `cd /x && node <abs>/hooks/roster.mjs role trust …`;
+    - an env prefix;
+    - a relative script path;
+    - `$ROOT/hooks/roster.mjs`;
+    - `bash -c "…"`;
+    - a heredoc holding the command;
+  - `grep -n 'role trust' hooks/roster.mjs` passes (the order rule);
+  - a `--cwd /tmp` commit from a payload whose `cwd` has a live run is
+    denied.
 
-  [fail open on error]
+  [fail open on error] [judge only parsed commands]
+- **P15b In-process refusal** (roster.mjs run directly, no hook):
+  - a non-dry-run `role trust` and `role set --from` with `AH_TEAM_FILE`
+    set are refused, with no write;
+  - so are they with a live anchor, whether it is for the `--cwd` checkout
+    or for the process's own cwd;
+  - `AH_TEAM_FILE=""` counts as unset;
+  - dry runs still work in both cases.
+
+  [check only `--cwd`]
 - **P16 Pipeline spawn backstop.** With a live pipeline run:
   - `spawn-one` and `spawn-ad-hoc` refuse a review-class or design-class
     `from` role, and a Reviewer or Architect built-in overridden by one;
   - an implement-class `from` role spawns.
 
   Without a live run, all of them spawn.
-- **P17 No `bypassPermissions`.** A `from` role member with that `autoMode`
-  is refused by `spawn-one`, `spawn-ad-hoc` and `create`, and a non-pack
-  member with it behaves as today.
+- **P17 No `bypassPermissions`:**
+  - a `from` role member with that `autoMode`, or with no `autoMode`, is
+    refused by `spawn-one`, `spawn-ad-hoc` and `create`, and the message
+    gives the `edit --auto-mode` fix;
+  - a `from` member with `auto` spawns with `--permission-mode auto`;
+  - a non-pack member with either behaves as today.
+
+  [check only `bypassPermissions`]
+- **P17b Route gate:**
+  - an Agent dispatch of a `from` row's agent, or of a pack-overridden
+    built-in's agent, with `permission_mode` `bypassPermissions` is denied;
+  - the same dispatch in `auto`, `acceptEdits` or `default` passes;
+  - a non-pack agent in `bypassPermissions` passes;
+  - a forced throw in the rule denies a `<plugin>:<agent>` outside `ah:` in
+    bypass, and leaves an `ah:` agent to the existing error handling.
+
+  [read the mode from the wrong field]
 - **P18 Install check.** The flow in §4.8, step 4 (a digest that differs
   before and after install) is skill prose. `pack show`'s digest must be
   stable for the same tree and change when the tree changes; that part is
@@ -1272,6 +1455,19 @@ result goes in the PR.
     denies in all others.
   - If the payload doesn't carry the mode, the gate asks and relies on
     Claude Code. Record that as a known limit.
+- **E7 (phase 2).** In a sandbox session, compare the environment of a
+  subagent's Bash command with that of the parent session's Bash command
+  (`env | sort`, the two diffed). Does any variable identify the subagent?
+  - **Yes:** roster.mjs's in-process commit refusal (§4.4) also refuses
+    when that variable is present. Name it in the PR and add a P15b row.
+  - **No:** no change. The residual in §4.4 stands as written.
+- **E8 (phase 2).** In a HOME-redirected sandbox whose settings have
+  `defaultMode: bypassPermissions`, launch `claude --permission-mode auto`
+  and record the mode the session reports. Also confirm that a PreToolUse
+  payload for the Agent tool carries `permission_mode`.
+  - **The flag wins and the Agent payload carries the mode:** no change.
+  - **Either fails:** stop and report to the Architect. The peer rule and
+    the route-gate rule in §4.9 depend on both.
 
 ## 8. Build order
 
@@ -1280,7 +1476,7 @@ result goes in the PR.
    roster.mjs's usage text and lib-config.mjs's loading code.
    - The Ultra-Advisor has reviewed the trust model, and its fixes are in
      §4 (§11).
-   - Run E3–E6 first. E5 can send the build back to the Architect.
+   - Run E3–E8 first. E5 and E8 can send the build back to the Architect.
 
 ## 9. Assumptions not verified
 

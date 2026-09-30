@@ -158,7 +158,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentFindings, packDigest, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packDigest, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
@@ -615,8 +615,10 @@ function packReview(name, state, overlay) {
     if (c.error) fail(`role set ${name}: ${c.error}`);
     warnings.push(...c.warnings);
   }
-  const v = validateAgentContract({ role: name, cls, agent: raw.agent, description: builtin ? null : raw.description || null, builtin, cwd });
-  findings.push(...packAgentFindings(state.agentText, state.agentPath), ...v.findings);
+  // One parse of the agent file feeds the grammar findings, the class contract and the tools shown.
+  const parsed = packAgentParse(state.agentText, state.agentPath);
+  const v = validateAgentContract({ role: name, cls, agent: raw.agent, description: builtin ? null : raw.description || null, builtin, cwd, inMemory: { path: state.agentPath, text: state.agentText, fm: parsed.fm } });
+  findings.push(...parsed.findings, ...v.findings);
   const manifest = readPackManifest(state.record.installPath, state.from.plugin);
   const effectiveRoutes = builtin ? null : raw.routes;
   return {
@@ -629,11 +631,29 @@ function packReview(name, state, overlay) {
       install_path: state.record.installPath,
       fields: shownFields(state.manifestRole.raw),
       agent_file: state.agentPath,
-      tools: packToolReport(state.agentText),
+      tools: packToolReport(parsed.fm),
       also_in_plugin: packExtras(state.record.installPath, manifest).map((e) => ({ ...e, name: escapeTerminal(e.name) })),
       ...(cls === "implement" && effectiveRoutes ? { unattended: UNATTENDED_LINE } : {}),
     },
   };
+}
+
+/**
+ * A trust commit (`role set --from` or `role trust`, not a dry run) is refused here, before any
+ * write, from a team member or while a pipeline run is live at `--cwd` or at this process's own
+ * cwd — whatever shell form ran it, so a command the gate couldn't read is covered too. An error
+ * while checking refuses.
+ */
+function refuseTrustCommitHere(label) {
+  let why = null;
+  try {
+    const team = process.env.AH_TEAM_FILE;
+    if (typeof team === "string" && team !== "") why = "this session is a team member (AH_TEAM_FILE is set)";
+    else if ([...new Set([cwd, process.cwd()])].some((dir) => pipelineRunLive(dir))) why = "a pipeline run is live in this checkout";
+  } catch (err) {
+    why = `the check couldn't run (${err && err.message ? err.message : String(err)})`;
+  }
+  if (why) fail(`${label}: refused — ${why}. Trust is committed only from the user's own top-level session, outside a pipeline run; nothing was written.`);
 }
 
 /**
@@ -649,6 +669,7 @@ function roleSetFrom(name) {
   for (const k of ["from", "pin", "label", "description", "routes", "model", "dispatch", "level"]) {
     if (opts[k] === true) fail(`role set: --${k} needs a value`);
   }
+  if (!dry) refuseTrustCommitHere(`role set ${name} --from`);
   if (!dry && typeof opts.pin !== "string") fail(`role set ${name} --from: committing needs --pin <the pin the dry run printed> — run it with --dry-run first`);
   const builtin = isBuiltinRole(name);
   if (builtin) {
@@ -759,6 +780,7 @@ function roleTrust(name) {
   if (typeof name !== "string" || !name) fail("role trust needs a role name: role trust <name> (--dry-run | --pin sha256:…)");
   const dry = opts["dry-run"] === true;
   if (opts.pin === true) fail("role trust: --pin needs a value");
+  if (!dry) refuseTrustCommitHere(`role trust ${name}`);
   if (!dry && typeof opts.pin !== "string") fail(`role trust ${name}: committing needs --pin <the pin the dry run printed> — run it with --dry-run first`);
   const reg = registry();
   const excluded = reg.excludedRoles.find((e) => e.name === name);
@@ -903,10 +925,11 @@ function packShow(target) {
       if (text !== null) {
         const hidden = hiddenCharAt(text);
         if (hidden) shown.findings.push({ level: "error", code: "pack-hidden-chars", path: agentPath, field: null, message: `${agentPath} holds a hidden character (${hidden})`, fix: [] });
-        shown.findings.push(...packAgentFindings(text, agentPath));
-        const v = validateAgentContract({ role, cls: m.row.class, agent: m.row.agent, description: m.row.description || null, cwd, inMemory: { path: agentPath, text } });
+        const parsed = packAgentParse(text, agentPath);
+        shown.findings.push(...parsed.findings.map((x) => ({ ...x, message: escapeTerminal(x.message) })));
+        const v = validateAgentContract({ role, cls: m.row.class, agent: m.row.agent, description: m.row.description || null, cwd, inMemory: { path: agentPath, text, fm: parsed.fm } });
         shown.findings.push(...v.findings.map((x) => ({ ...x, message: escapeTerminal(x.message) })));
-        shown.tools = packToolReport(text);
+        shown.tools = packToolReport(parsed.fm);
       }
     }
     if (record) shown.adopted = adoptionsOf(reg, `${record.plugin}@${record.marketplace}:${role}`);
@@ -2661,8 +2684,12 @@ function packSpawnRefusal(member) {
   const reg = registry();
   const entry = reg.roles && reg.roles[member.role];
   if (!entry || !entry.from) return null;
-  if (member.autoMode === "bypassPermissions") {
-    return `role ${member.role} is adopted from a pack (${entry.from}), and a pack role never runs with auto-mode bypassPermissions — ${member.name} was not launched. Pick another mode (auto is the hands-off one) with \`roster.mjs edit --member ${member.name} --auto-mode auto\`.`;
+  // An unset mode passes no --permission-mode, so the peer would take the user's settings default,
+  // which can be bypass.
+  const unset = member.autoMode === undefined || member.autoMode === null || member.autoMode === "";
+  if (member.autoMode === "bypassPermissions" || unset) {
+    const why = unset ? "has no auto-mode, so it would run in the default mode of the user's settings, which can be bypassPermissions" : "has auto-mode bypassPermissions";
+    return `role ${member.role} is adopted from a pack (${entry.from}) and a pack role never runs with permission checks off, but ${member.name} ${why} — it was not launched. Give it a mode with \`roster.mjs edit --member ${member.name} --auto-mode <mode>\` (auto is the hands-off one)${cmd === "spawn-ad-hoc" ? ", or pass --auto-mode auto" : ""}.`;
   }
   const slot = roleClass(member.role, reg);
   if ((cmd === "spawn-one" || cmd === "spawn-ad-hoc") && (slot === "review" || slot === "design") && pipelineRunLive(cwd)) {

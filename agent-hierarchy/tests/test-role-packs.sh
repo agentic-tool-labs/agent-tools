@@ -61,6 +61,7 @@ mkpack() {
   printf -- '---\nname: pk-impl\ndescription: Builds pack things\nmodel: opus\ntools: Read, Grep, Edit, Write, Bash, SendMessage\n---\nYou build pack features.\n' > "$d/agents/pk-impl.md"
   printf -- '---\nname: pk-rev\ndescription: Reviews pack things\nmodel: opus\ntools: Read, Grep, Bash, SendMessage\n---\nYou review pack changes.\n' > "$d/agents/pk-rev.md"
   printf -- '---\nname: pk-des\ndescription: Designs pack things\nmodel: opus\ntools: Read, Grep, Write, SendMessage\n---\nYou design pack features.\n' > "$d/agents/pk-des.md"
+  printf -- '---\nname: pk-leg\ndescription: Runs pack errands\nmodel: haiku\ntools: Read, Grep, Bash\n---\nYou run pack errands.\n' > "$d/agents/pk-leg.md"
   printf -- '---\nname: pk-extra\ndescription: not a role\ntools: Read\n---\nExtra.\n' > "$d/agents/pk-extra.md"
   cat > "$d/ah-roles.json" <<'J'
 {
@@ -68,7 +69,8 @@ mkpack() {
   "roles": {
     "pk-impl": { "class": "implement", "description": "Builds pack features", "routes": "pack scenes and scripts", "model": "opus" },
     "pk-rev": { "class": "review", "description": "Reviews pack changes", "model": "opus" },
-    "pk-des": { "class": "design", "description": "Designs pack features", "model": "opus" }
+    "pk-des": { "class": "design", "description": "Designs pack features", "model": "opus" },
+    "pk-leg": { "class": "legwork", "description": "Runs pack errands", "model": "haiku" }
   }
 }
 J
@@ -119,7 +121,7 @@ echo '{"name":"plain","version":"2.0.0"}' > "$PACKS/plain/.claude-plugin/plugin.
 installed "{\"pk@mk\":[\"$PACKS/a\"],\"plain@mk\":[\"$PACKS/plain\"]}"
 rm_ pack list --json
 check "P1 pack list finds the plugin with ah-roles.json and skips the one without" \
-  '[ $RC = 0 ] && [ "$(jget "o.packs.map(p => p.plugin + \"@\" + p.marketplace + \":\" + p.version).join()")" = "pk@mk:1.0.0" ] && [ "$(jget "o.packs[0].roles.map(r => r.name + \"/\" + r.class).join()")" = "pk-impl/implement,pk-rev/review,pk-des/design" ]'
+  '[ $RC = 0 ] && [ "$(jget "o.packs.map(p => p.plugin + \"@\" + p.marketplace + \":\" + p.version).join()")" = "pk@mk:1.0.0" ] && [ "$(jget "o.packs[0].roles.map(r => r.name + \"/\" + r.class).join()")" = "pk-impl/implement,pk-rev/review,pk-des/design,pk-leg/legwork" ]'
 check "P1 ... and counts what else the plugin carries" '[ "$(jget "o.packs[0].also_in_plugin")" = 3 ]'
 
 # ================================================================ P2 manifest and text checks
@@ -150,6 +152,18 @@ printf -- '---\nname: pk-des\ndescription: Designs\xe2\x80\x8b things\nmodel: op
 showpath "$PACKS/hidden"
 check "P2 pack-hidden-chars: a bidi control and a tag character in a field, a zero-width character in the agent file" \
   '[ "$(roleerr pk-impl)" = pack-hidden-chars ] && [ "$(roleerr pk-rev)" = pack-hidden-chars ] && [[ "$(roleerr pk-des)" == *pack-hidden-chars* ]]'
+bad "$PACKS/hidden2" 'm.roles["pk-impl"].description = "sel︀︁️end"; m.roles["pk-rev"].routes = "line sep"; m.roles["pk-des"].description = "fillㅤer"; m.roles["pk-leg"].description = "warn ⚠️ sign"'
+node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("You review pack changes.","abc\u{E0100}def"))' "$PACKS/hidden2/agents/pk-extra.md"
+node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,"---\nname: pk-extra\ndescription: not a role\ntools: Read\n---\nabc\u{E0100}def\n")' "$PACKS/hidden2/agents/pk-extra.md"
+showpath "$PACKS/hidden2"
+check "P2 pack-hidden-chars: variation selectors, U+2028, the U+3164 filler and an emoji written with U+FE0F in fields" \
+  '[ "$(roleerr pk-impl)" = pack-hidden-chars ] && [ "$(roleerr pk-rev)" = pack-hidden-chars ] && [ "$(roleerr pk-des)" = pack-hidden-chars ] && [ "$(roleerr pk-leg)" = pack-hidden-chars ]'
+check "P2 ... and the finding names the code point, line and column" '[[ "$(jget "o.roles.find(r => r.name === \"pk-impl\").findings[0].message")" == *"U+FE00 at line 1, column 4"* ]]'
+rm -rf "$PACKS/hidden3"; cp -R "$PACKS/a" "$PACKS/hidden3"
+node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],"---\nname: pk-rev\ndescription: Reviews\nmodel: opus\ntools: Read, Grep, SendMessage\n---\nabc\u{E0100}def\n")' "$PACKS/hidden3/agents/pk-rev.md"
+showpath "$PACKS/hidden3"
+check "P2 a U+E0100 variation selector in the agent file is refused, at line 7, column 4" \
+  '[[ "$(roleerr pk-rev)" == *pack-hidden-chars* ]] && [[ "$(jget "o.roles.find(r => r.name === \"pk-rev\").findings.map(f => f.message).join()")" == *"U+E0100 at line 7, column 4"* ]]'
 rm -rf "$PACKS/utf"; cp -R "$PACKS/a" "$PACKS/utf"; printf -- '---\nname: pk-impl\ndescription: bad \xff byte\nmodel: opus\ntools: Read, Edit, Write, Bash, SendMessage\n---\nBody.\n' > "$PACKS/utf/agents/pk-impl.md"
 installed "{\"pk@mk\":[\"$PACKS/utf\"]}"
 rm_ role set u1 --from pk@mk:pk-impl --dry-run
@@ -237,7 +251,7 @@ p6() { # <label> <shell edit of $PACKS/a>
   rolerow gd
   local state; state=$(jget o.pin_state)
   sessionstart; local routed=no; [[ "$OUT" == *"for \\\"pack scenes and scripts\\\""* ]] && routed=yes
-  rm_ spawn-ad-hoc gd --model opus --route peer --dry-run --orchestrator-pid $$
+  rm_ spawn-ad-hoc gd --model opus --route peer --auto-mode auto --dry-run --orchestrator-pid $$
   local spawnrc=$RC
   check "P6 $1: pack-changed in role list, out of SessionStart's routing, spawn refused, agent file untouched" \
     '[ "$state" = pack-changed ] && [ $routed = no ] && [ $spawnrc != 0 ] && [ "$(shasum "$PACKS/a/agents/pk-impl.md" | cut -d" " -f1)" = "$AGENT_SUM" ]'
@@ -315,10 +329,30 @@ fm "a line that can't be classified" 'tools: Read, Grep, SendMessage\njust some 
 fm "a tools value folded onto a second line" 'tools: Read, Grep, SendMessage\n  Write, Bash'
 fm "an indented line under a one-line value" 'tools: Read, Grep, SendMessage\ncolor: red\n  bad: indentation'
 fm "a list item under a key that has a value" 'tools: Read, Grep, SendMessage\ncolor: red\n  - Bash'
+fm "a tab in the indentation" 'tools:\n\t- Read\n\t- SendMessage'
+fm "a # comment on its own line" 'tools: Read, Grep, SendMessage\n# a note'
+fm "a # comment after a value" 'tools: Read, Grep, SendMessage\ncolor: red # a note'
+fm "a quoted tool entry" 'tools: "Read", Grep, SendMessage'
+fm "a [flow] tool list" 'tools: [Read, Grep, SendMessage]'
+fm "an Agent(x) tool entry" 'tools: Read, Agent(x), SendMessage'
+fm "a | block under tools" 'tools: |\n  Read, Grep, SendMessage'
+fm "a - item list under a key other than tools" 'tools: Read, Grep, SendMessage\ncolor:\n  - red'
 rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
 printf -- '---\nname: pk-rev\ndescription: >\n  Reviews pack\n  changes carefully.\nmodel: opus\ntools:\n  - Read\n  - Grep\n- SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
 showpath "$PACKS/fm"
 check "P8 a block list and a > block scalar are allowed" '[[ "$(roleerr pk-rev)" != *pack-agent* ]] && [ "$(jget "o.roles.find(r => r.name === \"pk-rev\").tools.effective.join()")" = "Read,Grep,SendMessage" ]'
+printf -- '---\nname: pk-rev\ndescription: |\n  Reviews pack\n  changes.\nmodel: opus\ntools:\n  - Read\n  - Grep\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 a | block scalar is allowed, and the tools shown are the ones the contract judges" \
+  '[[ "$(roleerr pk-rev)" != *pack-agent* ]] && [ "$(jget "o.roles.find(r => r.name === \"pk-rev\").tools.effective.join()")" = "Read,Grep" ] && [[ "$(roleerr pk-rev)" == *"missing-tool:SendMessage"* ]]'
+printf -- '---\nname: pk-rev\ndescription: Reviews\nmodel: opus\ntools:\n  - Read\n  - Grep\n  # - Bash\n  - SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 a refused file shows the tools the strict read found, the list the contract judged" \
+  '[[ "$(roleerr pk-rev)" == *pack-agent-line* ]] && [ "$(jget "o.roles.find(r => r.name === \"pk-rev\").tools.effective.join()")" = "Read,Grep,SendMessage" ]'
+installed "{\"pk@mk\":[\"$PACKS/fm\"]}"
+rm_ role set fc --from pk@mk:pk-rev --dry-run
+check "P8 ... and so does the adoption dry run" '[ "$(jget "o.pack.tools.effective.join()")" = "Read,Grep,SendMessage" ]'
+installed "{\"pk@mk\":[\"$PACKS/a\"]}"
 rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
 printf -- '---\nname: pk-impl\ndescription: Builds\nmodel: opus\ntools: Read, Edit, Write, Bash, Agent, mcp__srv__run, SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-impl.md"
 showpath "$PACKS/fm"
@@ -353,7 +387,7 @@ fresh
 rm -rf "$PACKS/new"; cp -R "$PACKS/a" "$PACKS/new"
 mkdir -p "$PACKS/new/commands"; echo '{}' > "$PACKS/new/.mcp.json"; echo 'x' > "$PACKS/new/commands/go.md"
 showpath "$PACKS/new"
-check "P10 pack show --path on an uninstalled dir lists the roles" '[ $RC = 0 ] && [ "$(jget o.installed)" = false ] && [ "$(jget "o.roles.map(r => r.name).join()")" = "pk-impl,pk-rev,pk-des" ]'
+check "P10 pack show --path on an uninstalled dir lists the roles" '[ $RC = 0 ] && [ "$(jget o.installed)" = false ] && [ "$(jget "o.roles.map(r => r.name).join()")" = "pk-impl,pk-rev,pk-des,pk-leg" ]'
 check "P10 ... and also: the hooks dir, .mcp.json, commands/ and an agent not in the manifest" \
   '[ "$(jget "o.also_in_plugin.map(e => e.kind + \":\" + e.name).join()")" = "root:.mcp.json,root:bin,root:commands,root:hooks,agent:agents/pk-extra.md" ]'
 
@@ -421,23 +455,40 @@ check "P15 a live pipeline run denies the commit" '[ "$(decision)" = deny ] && [
 mkdir -p "$SANDBOX/elsewhere"
 gate "$ROSTER role trust gd --pin sha256:abc --cwd $SANDBOX/elsewhere"
 check "P15 a --cwd pointed elsewhere doesn't hide the session's own live run" '[ "$(decision)" = deny ] && [[ "$OUT" == *"pipeline run is live"* ]]'
-# A trailing shell comment drops what follows it from what runs, so `# --dry-run` must not read as a
-# dry run: such a command is outside the grammar, and neither hook decides it.
-for c in "$SET # --dry-run" "$TRUST # --dry-run"; do
-  label=${c#*role }; label=${label%% *}
-  OUT=$(node --input-type=module -e "const L = await import('$H/lib-ah-cli.mjs'); process.stdout.write(String(L.parseAhCommand(process.argv[1])))" "$c" 2>&1)
-  check "P15 role $label … # --dry-run doesn't parse" '[ "$OUT" = null ]'
-  gate "$c"
-  check "P15 role $label … # --dry-run: the gate makes no decision (Claude Code's own prompt applies)" '[ -z "$OUT" ]'
-  gate "$c" '{"agent_id":"sub1","agent_type":"general-purpose"}'
-  check "P15 role $label … # --dry-run from a subagent: the gate makes no decision either" '[ -z "$OUT" ]'
-  OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"g1",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$c" | HOME="$FAKEHOME" node "$H/pretooluse-ah-cli.mjs" 2>&1)
-  check "P15 role $label … # --dry-run: the allow hook stays silent" '[ -z "$OUT" ]'
-done
 fresh
 mkdir -p "$SANDBOX/badhier"; echo "not a dir" > "$SANDBOX/badhier/msgs"
 OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"g1",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$SET" | AGENT_HIERARCHY_DIR="$SANDBOX/badhier" HOME="$FAKEHOME" node "$H/pretooluse-roster-skill-gate.mjs" 2>&1)
 check "P15 an error while judging denies (fails closed)" '[ "$(decision)" = deny ] && [[ "$OUT" == *"couldn'"'"'t judge"* ]]'
+# Commands the ah grammar can't parse whose text names a commit are judged as one, --dry-run or not.
+ahcli() { OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"g1",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$1" | HOME="$FAKEHOME" node "$H/pretooluse-ah-cli.mjs" 2>&1); }
+for verb in "role trust gd --pin sha256:abc" "role set gd --from pk@mk:pk-impl --pin sha256:abc"; do
+  label=${verb%% --*}
+  forms=(
+    "$ROSTER $verb --cwd $PROJ # --dry-run"
+    "cd /tmp && $ROSTER $verb --cwd $PROJ"
+    "FOO=1 $ROSTER $verb --cwd $PROJ"
+    "node hooks/roster.mjs $verb --cwd $PROJ"
+    "node \$ROOT/hooks/roster.mjs $verb --cwd $PROJ"
+    "bash -c \"$ROSTER $verb --cwd $PROJ\""
+    "bash <<'EOF'
+$ROSTER $verb --cwd $PROJ
+EOF"
+  )
+  names=("a trailing # --dry-run" "cd … &&" "an env prefix" "a relative script path" "\$ROOT" "bash -c" "a heredoc")
+  for i in "${!forms[@]}"; do
+    c=${forms[$i]}; short=${names[$i]}
+    gate "$c"
+    check "P15 unparsed $label [$short…]: asked in a top-level session" '[ "$(decision)" = ask ] && [[ "$OUT" == *"one plain command"* ]]'
+    gate "$c" '{"agent_id":"sub1","agent_type":"general-purpose"}'
+    check "P15 unparsed $label [$short…]: denied in a subagent" '[ "$(decision)" = deny ]'
+    ahcli "$c"
+    check "P15 unparsed $label [$short…]: the allow hook stays silent" '[ -z "$OUT" ]'
+  done
+done
+gate "grep -n 'role trust' $H/roster.mjs"
+check "P15 the order rule: grep -n 'role trust' hooks/roster.mjs passes" '[ -z "$OUT" ]'
+gate "$ROSTER role set gd --from pk@mk:pk-impl --description \"has # inside\" --dry-run --cwd $PROJ"
+check "P15 a quoted # stays literal: a dry run that says \"…#…\" parses and passes" '[ -z "$OUT" ]'
 for c in "$ROSTER role set gd --from pk@mk:pk-impl --dry-run --cwd $PROJ" "$ROSTER role trust gd --dry-run --cwd $PROJ" "$ROSTER role list --cwd $PROJ" "$ROSTER pack list --cwd $PROJ" "$ROSTER pack show pk --cwd $PROJ"; do
   gate "$c"
   check "P15 passes: ${c#node $H/roster.mjs }" '[ -z "$OUT" ]'
@@ -449,6 +500,37 @@ check "P15 ... and passes after" '[ -z "$OUT" ]'
 OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"g1",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$SET" | HOME="$FAKEHOME" node "$H/pretooluse-ah-cli.mjs" 2>&1)
 check "P15 the allow hook stays silent on a trust commit, so the gate's ask stands alone" '[ -z "$OUT" ]'
 
+# ================================================================ P15b the in-process refusal
+fresh
+adopt gd pk@mk:pk-impl
+TRUST_CFG=$(cat "$GLOBAL_CFG")
+echo "more" >> "$PACKS/a/bin/tool.sh"
+rm_ role trust gd --dry-run
+NEW_PIN=$(jget o.pin)
+AH_TEAM_FILE="$PROJ/.claude/hierarchy/teams/t.json" rm_ role trust gd --pin "$NEW_PIN"
+check "P15b role trust with AH_TEAM_FILE set is refused, and nothing is written" '[ $RC != 0 ] && [[ "$ERR" == *"team member"* ]] && [ "$(cat "$GLOBAL_CFG")" = "$TRUST_CFG" ]'
+rm_ role set g2 --from pk@mk:pk-rev --dry-run
+G2_PIN=$(jget o.pin)
+AH_TEAM_FILE="$PROJ/.claude/hierarchy/teams/t.json" rm_ role set g2 --from pk@mk:pk-rev --pin "$G2_PIN"
+check "P15b role set --from with AH_TEAM_FILE set is refused, and nothing is written" '[ $RC != 0 ] && [[ "$ERR" == *"team member"* ]] && [ "$(cat "$GLOBAL_CFG")" = "$TRUST_CFG" ]'
+AH_TEAM_FILE="$PROJ/.claude/hierarchy/teams/t.json" rm_ role trust gd --dry-run
+check "P15b ... the dry run still works with AH_TEAM_FILE set" '[ $RC = 0 ] && [ "$(jget o.pin)" = "$NEW_PIN" ]'
+anchor
+rm_ role trust gd --pin "$NEW_PIN"
+check "P15b a live anchor for the --cwd checkout refuses the commit" '[ $RC != 0 ] && [[ "$ERR" == *"pipeline run is live"* ]] && [ "$(cat "$GLOBAL_CFG")" = "$TRUST_CFG" ]'
+rm_ role trust gd --dry-run
+check "P15b ... the dry run still works during the run" '[ $RC = 0 ]'
+mkdir -p "$SANDBOX/other"; git -C "$SANDBOX/other" init -q
+OUT=$(cd "$PROJ" && HOME="$FAKEHOME" node "$H/roster.mjs" role trust gd --pin "$NEW_PIN" --cwd "$SANDBOX/other" 2>"$SANDBOX/err"); RC=$?; ERR=$(cat "$SANDBOX/err")
+check "P15b a live anchor at the process's own cwd refuses too, when --cwd names another checkout" '[ $RC != 0 ] && [[ "$ERR" == *"pipeline run is live"* ]] && [ "$(cat "$GLOBAL_CFG")" = "$TRUST_CFG" ]'
+fresh
+adopt gd pk@mk:pk-impl
+echo "more" >> "$PACKS/a/bin/tool.sh"
+rm_ role trust gd --dry-run
+NEW_PIN=$(jget o.pin)
+AH_TEAM_FILE= rm_ role trust gd --pin "$NEW_PIN"
+check "P15b AH_TEAM_FILE=\"\" counts as unset" '[ $RC = 0 ] && filejs "$GLOBAL_CFG" "d.roles.gd.pin === \"$NEW_PIN\""'
+
 # ================================================================ P16 pipeline spawn backstop
 fresh
 adopt prv pk@mk:pk-rev
@@ -459,10 +541,10 @@ mkpack "$PACKS/c" pk2
 installed "{\"pk@mk\":[\"$PACKS/a\"],\"pk2@mk\":[\"$PACKS/c\"]}"
 adopt reviewer pk2@mk:pk-rev --level repo
 check "P16 (setup) the built-in reviewer is overridden by a pack role" 'filejs "$REPO_CFG" "d.roles.reviewer.from === \"pk2@mk:pk-rev\""'
-mutate "$REPO_CFG" 'd.roster = {route: "peer", members: [{role: "reviewer", model: "opus"}, {role: "pimpl", model: "opus"}]}'
+mutate "$REPO_CFG" 'd.roster = {route: "peer", members: [{role: "reviewer", model: "opus", autoMode: "auto"}, {role: "pimpl", model: "opus", autoMode: "auto"}]}'
 spawnall() { # <expect: refused|spawned> <label>
   for r in prv pdes reviewer; do
-    rm_ spawn-ad-hoc $r --model opus --route peer --dry-run --orchestrator-pid $$
+    rm_ spawn-ad-hoc $r --model opus --route peer --auto-mode auto --dry-run --orchestrator-pid $$
     if [ "$1" = refused ]; then check "P16 $2: spawn-ad-hoc $r is refused" '[ $RC != 0 ] && [[ "$ERR" == *"pipeline run is live"* ]]'
     else check "P16 $2: spawn-ad-hoc $r spawns" '[ $RC = 0 ]'; fi
   done
@@ -473,7 +555,7 @@ spawnall() { # <expect: refused|spawned> <label>
 spawnall spawned "without a live run"
 anchor
 spawnall refused "with a live run"
-rm_ spawn-ad-hoc pimpl --model opus --route peer --dry-run --orchestrator-pid $$
+rm_ spawn-ad-hoc pimpl --model opus --route peer --auto-mode auto --dry-run --orchestrator-pid $$
 check "P16 with a live run: an implement-class pack role spawns" '[ $RC = 0 ]'
 rm_ spawn-one pimpl --dry-run --orchestrator-pid $$
 check "P16 with a live run: spawn-one of an implement-class pack role spawns" '[ $RC = 0 ]'
@@ -483,15 +565,54 @@ fresh
 adopt pimpl pk@mk:pk-impl
 mkdir -p "$FAKEHOME/.claude/agents"; printf -- '---\nname: own-impl\ndescription: mine\ntools: Read, Edit, Write, Bash, SendMessage\n---\nMine.\n' > "$FAKEHOME/.claude/agents/own-impl.md"
 rm_ role set own-impl --class implement --level global
-mutate "$REPO_CFG" 'd.roster = {route: "peer", members: [{role: "pimpl", model: "opus", autoMode: "bypassPermissions"}, {role: "own-impl", model: "opus", autoMode: "bypassPermissions"}]}'
-rm_ spawn-ad-hoc pimpl --model opus --route peer --auto-mode bypassPermissions --dry-run --orchestrator-pid $$
-check "P17 spawn-ad-hoc refuses a pack role under bypassPermissions" '[ $RC != 0 ] && [[ "$ERR" == *"never runs with auto-mode bypassPermissions"* ]]'
+refused() { [[ "$ERR$OUT" == *"never runs with permission checks off"* ]] && [[ "$ERR$OUT" == *"edit --member"*"--auto-mode"* ]]; }
+for mode in bypassPermissions unset; do
+  if [ $mode = unset ]; then pm='{role: "pimpl", model: "opus"}'; om='{role: "own-impl", model: "opus"}'; flag=""
+  else pm='{role: "pimpl", model: "opus", autoMode: "bypassPermissions"}'; om='{role: "own-impl", model: "opus", autoMode: "bypassPermissions"}'; flag="--auto-mode bypassPermissions"; fi
+  mutate "$REPO_CFG" "d.roster = {route: \"peer\", members: [$pm, $om]}"
+  rm_ spawn-ad-hoc pimpl --model opus --route peer $flag --dry-run --orchestrator-pid $$
+  check "P17 ($mode) spawn-ad-hoc refuses a pack role, with the fix" '[ $RC != 0 ] && refused'
+  rm_ spawn-one pimpl --dry-run --orchestrator-pid $$
+  check "P17 ($mode) spawn-one refuses it" '[ $RC != 0 ] && refused'
+  rm_ create --plan --orchestrator-pid $$
+  check "P17 ($mode) create refuses it" 'refused'
+  rm_ spawn-one own-impl --dry-run --orchestrator-pid $$
+  check "P17 ($mode) a non-pack member behaves as today" '[ $RC = 0 ] && ! refused'
+done
+mutate "$REPO_CFG" 'd.roster = {route: "peer", members: [{role: "pimpl", model: "opus", autoMode: "auto"}]}'
 rm_ spawn-one pimpl --dry-run --orchestrator-pid $$
-check "P17 spawn-one refuses it" '[ $RC != 0 ] && [[ "$ERR$OUT" == *"never runs with auto-mode bypassPermissions"* ]]'
-rm_ create --plan --orchestrator-pid $$
-check "P17 create refuses it" '[[ "$ERR$OUT" == *"never runs with auto-mode bypassPermissions"* ]]'
-rm_ spawn-one own-impl --dry-run --orchestrator-pid $$
-check "P17 a non-pack member with bypassPermissions behaves as today" '[ $RC = 0 ] && [[ "$ERR$OUT" != *"never runs with auto-mode bypassPermissions"* ]]'
+check "P17 a pack member with auto spawns with --permission-mode auto" '[ $RC = 0 ] && [[ "$OUT" == *"--permission-mode auto"* ]]'
+
+# ================================================================ P17b the route gate
+fresh
+adopt pimpl pk@mk:pk-impl
+adopt pleg pk@mk:pk-leg
+mkpack "$PACKS/c" pk2
+installed "{\"pk@mk\":[\"$PACKS/a\"],\"pk2@mk\":[\"$PACKS/c\"]}"
+adopt reviewer pk2@mk:pk-rev
+route() { # <subagent_type> <permission_mode> [node --import module]
+  OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"rg",cwd:process.argv[1],tool_name:"Agent",permission_mode:process.argv[3],tool_input:{subagent_type:process.argv[2],prompt:"x"}}))' "$PROJ" "$1" "$2" | HOME="$FAKEHOME" node ${3:+--import "$3"} "$H/pretooluse-route-gate.mjs" 2>&1); RC=$?
+}
+packheld() { [ "$(decision)" = deny ] && [[ "$OUT" == *"permission checks off"* ]]; }
+for ref in pk:pk-leg pk:pk-impl pk2:pk-rev; do
+  route "$ref" bypassPermissions
+  check "P17b an Agent dispatch of pack agent $ref in bypassPermissions is denied" 'packheld'
+done
+for mode in auto acceptEdits default; do
+  route pk:pk-leg "$mode"
+  check "P17b the same legwork dispatch in $mode passes" '[ -z "$OUT" ]'
+  route pk2:pk-rev "$mode"
+  check "P17b the overridden built-in's agent in $mode isn't held by the pack rule" '! packheld'
+done
+route other:agent bypassPermissions
+check "P17b a non-pack agent in bypassPermissions passes" '[ -z "$OUT" ]'
+THROWS="$PLUGIN/tests/fixtures/resolve-config-throws.mjs"
+route pk:pk-leg bypassPermissions "$THROWS"
+check "P17b a forced throw denies a <plugin>:<agent> outside ah: in bypassPermissions" 'packheld && [[ "$OUT" == *"internal error"* ]]'
+route ah:task-runner bypassPermissions "$THROWS"
+check "P17b ... and leaves an ah: legwork agent to the existing error handling (passes)" '[ -z "$OUT" ]'
+route ah:architect bypassPermissions "$THROWS"
+check "P17b ... and an ah: chain agent to it too (held as a chain ref, not as a pack role)" '[ "$(decision)" = deny ] && [[ "$OUT" != *"permission checks off"* ]]'
 
 # ================================================================ P18 the content digest
 fresh

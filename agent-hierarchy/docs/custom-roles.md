@@ -259,14 +259,22 @@ one at a time. Roles only you use can stay where they are, in
 - `agent` names a file in the plugin, `agents/<agent>.md`, and defaults to the
   role's name. It can't point at another plugin's agent or at a path.
 - No hidden text: control characters other than newline and tab, invisible
-  formatting characters (bidirectional controls, zero-width characters) and
-  Unicode tag characters are refused, in the fields and in the agent file. The
-  agent file must be valid UTF-8.
+  formatting characters (bidirectional controls, zero-width characters),
+  Unicode tag characters, variation selectors, the line and paragraph
+  separators, and invisible filler characters are refused, in the fields and
+  in the agent file; the finding names the character, its line and column.
+  That refuses an emoji written with a variation selector (⚠️, say): write
+  the plain character instead. The agent file must be valid UTF-8.
 - A pack agent's frontmatter may hold only `name`, `description`, `model`,
   `tools`, `disallowedTools`, `color`, `effort` and `maxTurns`, each once, as a
-  plain unquoted key. `tools` is required: a non-empty list with no wildcard.
-  Anything else — `permissionMode`, `hooks`, MCP server settings, `skills`, `memory`,
-  a YAML anchor — is an error. Your own agent files aren't held to this.
+  plain unquoted key. `tools` is required, and every tool entry is a plain
+  name (no quotes, `[…]` list, or `Tool(scope)` form). A value continues onto
+  more lines only as `- item` lines under an empty `tools` or
+  `disallowedTools`, or as a `|` or `>` block under `description`. Tabs in the
+  indentation, `#` comments, and anything else — `permissionMode`, `hooks`, MCP
+  server settings, `skills`, `memory`, a YAML anchor — are errors. ah reads the
+  file this strictly so that it sees exactly the tools YAML would grant. Your
+  own agent files aren't held to this.
 
 ### Installing, adopting and trusting
 
@@ -314,7 +322,17 @@ implement work in an unattended run (its dry run says so), but it never fills
 the reviewer or designer slot there: those stay first-party, and while a run
 is live the spawn verbs refuse a pack reviewer or designer. If the built-in
 Reviewer or Architect itself is overridden by a pack role, the run halts
-before it starts. A pack role never runs with auto mode `bypassPermissions`.
+before it starts.
+
+ah never launches or dispatches a pack role with permission checks off. The
+spawn verbs refuse a pack role's member whose auto mode is
+`bypassPermissions`, or unset (it would take your settings' default mode,
+which can be bypass); give it one with `roster.mjs edit --member <name>
+--auto-mode auto`. And a session in bypass mode can't dispatch a pack role's
+agent as a subagent. What remains: you can switch a running pane into bypass
+yourself, or launch `claude --agent <plugin>:<agent>` in bypass outside ah;
+and every agent in an installed plugin is a subagent type in every session,
+adopted or not, which is Claude Code's side.
 
 ### What this does and doesn't protect
 
@@ -325,12 +343,23 @@ before it starts. A pack role never runs with auto mode `bypassPermissions`.
 - Nothing runs in the hierarchy until you adopt it, one role at a time.
 - The pin is a tripwire, not a gate: it makes a changed role unavailable
   until you review it, but it can't stop the plugin's own hooks or MCP
-  servers from running the new content.
+  servers from running the new content. It covers the plugin's files as they
+  sit on disk, and nothing the role reaches while it runs: not the network
+  (for a role with Bash or WebFetch), not other files, and not a `.git`
+  directory inside the plugin, which the pin skips because a fetch rewrites
+  it; a role could read other versions out of it. `pack show` lists a `.git`
+  directory, so you see it before install.
 - Adopting and trusting need the exact pin, and your approval in your own
-  session; role, peer and subagent sessions and pipeline runs are refused. A
-  session with Bash could still edit the config or the stored copies by hand.
+  session; role, peer and subagent sessions and pipeline runs are refused.
+  A command that isn't one plain ah command is treated as a trust commit
+  when its text names one, and `roster.mjs` itself refuses a commit from a
+  team member or during a pipeline run, however the command was written.
+  What remains: a subagent in a mode that runs commands without asking could
+  hide the words from the gate, and a session with Bash could still edit the
+  config or the stored copies by hand.
 - Tool limits are role discipline, not a sandbox: a reviewer with Bash can
-  still write files. The real boundary is the session's permission mode.
+  still write files. The real boundary is the session's permission mode,
+  which is why a pack role never runs with permission checks off.
 - The fields that reach every session's context keep the one-line,
   160-character, no-backtick limits, and you see them verbatim before you
   trust them.

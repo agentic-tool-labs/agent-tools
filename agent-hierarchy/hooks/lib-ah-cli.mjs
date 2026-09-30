@@ -57,7 +57,7 @@ export const ROSTER_BOOL_FLAGS = new Set([
 export const MSG_BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all"]);
 
 const SCRIPTS = { "roster.mjs": "roster", "msg.mjs": "msg" };
-// `#` starts a shell comment, which drops the rest of the command from what actually runs.
+// An unquoted `#` can start a shell comment, which drops the rest of the command from what runs.
 const META = new Set([";", "&", "|", "<", ">", "(", ")", "`", "$", "\\", "\n", "\r", "#"]);
 // The shell expands `{ } * ? [ ] ~` before node ever sees the command, so any of them outside quotes
 // makes the text parsed here and the command executed two different things. Checked one CHARACTER at
@@ -102,7 +102,8 @@ function tokenize(command) {
       const end = command.indexOf('"', i + 1);
       if (end === -1) return null;
       const body = command.slice(i + 1, end);
-      for (const ch of body) if (META.has(ch)) return null;
+      // Inside double quotes `#` is literal to the shell, so only an unquoted one ends the parse.
+      for (const ch of body) if (META.has(ch) && ch !== "#") return null;
       add(body, true);
       i = end;
       continue;

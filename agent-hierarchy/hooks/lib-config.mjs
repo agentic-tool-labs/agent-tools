@@ -1747,9 +1747,13 @@ const FLAGGED_TOOLS = ["Bash", "Agent", "Write", "Edit"];
 const MCP_TOOL_PREFIX = "mcp__";
 export const PIN_RE = /^sha256:[0-9a-f]{64}$/;
 const FROM_RE = /^([A-Za-z0-9][A-Za-z0-9_.-]*)(?:@([^:@\s]+))?:([^:@\s]+)$/;
-/** Control characters other than newline and tab, Unicode format characters (category Cf, the
-    bidirectional controls and zero-width characters among them) and the tag block. */
-const HIDDEN_CHAR_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u{E0000}-\u{E007F}]/u;
+/** A pack agent's tool entry: a plain name, so no quoting, flow list or `Tool(scope)` form. */
+const PACK_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+/** Characters that hide text: control characters other than newline and tab, Unicode format
+    characters (category Cf: the bidirectional controls and zero-width characters among them), the
+    tag block, variation selectors (a known way to carry an invisible payload, so an emoji written
+    with U+FE0F is refused too), the line and paragraph separators, and the invisible fillers. */
+const HIDDEN_CHAR_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u{E0000}-\u{E007F}\uFE00-\uFE0F\u{E0100}-\u{E01EF}\u2028\u2029\u034F\u115F\u1160\u3164\uFFA0]/u;
 const HIDDEN_CHAR_RE_G = new RegExp(HIDDEN_CHAR_RE.source, "gu");
 
 /** Every install record with an install path: `{key, plugin, marketplace, installPath, version, scope}`. */
@@ -1783,10 +1787,16 @@ export function isFromRow(raw) {
   return !!raw && typeof raw === "object" && !Array.isArray(raw) && typeof raw.from === "string";
 }
 
-/** The first hidden character in `text`, as `U+XXXX`, or null. */
+/** The first hidden character in `text`, as `U+XXXX at line L, column C` (1-based, columns in
+    code points), or null. */
 export function hiddenCharAt(text) {
-  const m = HIDDEN_CHAR_RE.exec(String(text));
-  return m ? `U+${m[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}` : null;
+  const s = String(text);
+  const m = HIDDEN_CHAR_RE.exec(s);
+  if (!m) return null;
+  const before = s.slice(0, m.index);
+  const line = before.split("\n").length;
+  const column = [...before.slice(before.lastIndexOf("\n") + 1)].length + 1;
+  return `U+${m[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")} at line ${line}, column ${column}`;
 }
 
 /** Pack text made safe to print: every hidden character (ANSI escapes included) shown as `\u{…}`. */
@@ -2034,54 +2044,90 @@ export function expandFromRow(entry) {
 }
 
 /**
- * The frontmatter a pack agent may have: only `PACK_AGENT_KEYS`, each written once as an unquoted
- * top-level key, `tools` an explicit non-empty list with no wildcard, no YAML anchor, alias or merge
- * key, and no line that can't be classified. It fails closed: a quoted `"permissionMode":` is valid
- * YAML to Claude Code even though ah's lenient reader skips it. A user's own files aren't held to it.
+ * The one reader of a pack agent's frontmatter, strict so that it reads exactly what YAML would:
+ * only `PACK_AGENT_KEYS`, each written once as an unquoted top-level key; a continuation only as a
+ * `- item` under an empty-valued `tools` or `disallowedTools`, or as a line of a `|` / `>` block
+ * scalar under `description`; no tab in indentation, no `#` comment, no YAML anchor, alias or merge
+ * key, no line that can't be classified; `tools` required and non-empty, and every tool entry a
+ * plain name. `{findings, fm}`: every finding is an error, and `fm` (the shape
+ * `parseAgentFrontmatter` returns) is what the dry run shows and the class contract judges. It fails
+ * closed: a quoted `"permissionMode":` is valid YAML to Claude Code even though ah's lenient reader
+ * skips it. A user's own files aren't held to it.
  */
-export function packAgentFindings(text, path = null) {
-  const out = [];
+export function packAgentParse(text, path = null) {
+  const findings = [];
+  const fm = { frontmatter: false, name: null, description: null, model: null, tools: null, disallowedTools: null, parseErrors: [] };
   const err = (code, message) =>
-    out.push(finding("error", code, path, null, message, [{ kind: "edit-frontmatter", detail: `a pack agent's frontmatter may hold only ${PACK_AGENT_KEYS.join(", ")}, as plain unquoted keys` }]));
+    findings.push(finding("error", code, path, null, message, [{ kind: "edit-frontmatter", detail: `a pack agent's frontmatter may hold only ${PACK_AGENT_KEYS.join(", ")}, as plain unquoted keys` }]));
   const lines = String(text).split("\n");
   const end = lines[0] === "---" ? lines.findIndex((l, i) => i > 0 && l === "---") : -1;
   if (end === -1) {
     err("pack-agent-frontmatter", "no --- frontmatter block");
-    return out;
+    return { findings, fm };
   }
+  fm.frontmatter = true;
   const seen = new Set();
-  // What may follow the last key line: "list" (its value was empty: only `- item` lines), "block"
-  // (a `|` or `>` block scalar: indented text), "none" (a one-line value), or null (no key yet). A
-  // plain value folded over several lines is refused, since ah's reader and YAML read it differently.
-  let open = null;
+  // The key whose continuation lines may follow: kind "list" (an empty tools or disallowedTools:
+  // `- item` lines), "block" (description's `|` or `>` block: indented text) or "none".
+  let cur = null;
+  const toolEntries = (key, entries) => {
+    const bad = entries.filter((e) => !PACK_TOOL_NAME_RE.test(e));
+    for (const e of bad) err("pack-agent-tools", `${key} entry ${JSON.stringify(e)} isn't a plain tool name (letters, digits, _ and -)`);
+    fm[key] = entries.filter((e) => PACK_TOOL_NAME_RE.test(e));
+  };
+  const finish = () => {
+    if (!cur) return;
+    const { key, kind } = cur;
+    if (key === "tools" || key === "disallowedTools") toolEntries(key, kind === "list" ? cur.items : cur.value.split(",").map((e) => e.trim()));
+    else if (key === "description") {
+      if (kind === "block") {
+        const block = [...cur.block];
+        while (block.length && !block[block.length - 1]) block.pop();
+        fm.description = cur.style[0] === "|" ? block.join("\n") : block.filter((l) => l).join(" ");
+      } else fm.description = unquote(cur.value) || null;
+    } else if (key === "name" || key === "model") fm[key] = unquote(cur.value) || null;
+    cur = null;
+  };
   for (const line of lines.slice(1, end)) {
-    if (!line.trim()) continue;
+    if (!line.trim()) {
+      if (cur && cur.kind === "block") cur.block.push("");
+      continue;
+    }
+    if (/^[ ]*\t/.test(line)) {
+      err("pack-agent-line", `line ${JSON.stringify(line)} is indented with a tab`);
+      continue;
+    }
+    if (/(^|\s)#/.test(line)) {
+      err("pack-agent-line", `line ${JSON.stringify(line)} holds a # comment, which YAML would drop`);
+      continue;
+    }
     if (/^\s/.test(line) || /^-(\s|$)/.test(line)) {
-      if (!open) err("pack-agent-line", `line ${JSON.stringify(line)} continues no key`);
-      else if (open === "block") {
+      if (!cur) err("pack-agent-line", `line ${JSON.stringify(line)} continues no key`);
+      else if (cur.kind === "list") {
+        const item = /^\s*-\s+(\S.*)$/.exec(line);
+        if (!item) err("pack-agent-line", `line ${JSON.stringify(line)} isn't a "- item" of the list above`);
+        else if (/^[&*]/.test(item[1]) || /<<\s*:/.test(item[1])) err("pack-agent-yaml", `YAML anchor, alias or merge key: ${JSON.stringify(line.trim())}`);
+        else cur.items.push(item[1].trim());
+      } else if (cur.kind === "block") {
         if (!/^\s/.test(line)) err("pack-agent-line", `line ${JSON.stringify(line)} isn't indented inside the block above`);
-      } else if (open === "list") {
-        if (!/^\s*-\s+\S/.test(line)) err("pack-agent-line", `line ${JSON.stringify(line)} isn't a "- item" of the list above`);
-        else if (/^\s*-\s+[&*]/.test(line) || /(^|\s)<<\s*:/.test(line)) err("pack-agent-yaml", `YAML anchor, alias or merge key: ${JSON.stringify(line.trim())}`);
+        else cur.block.push(line.replace(/^\s+/, ""));
       } else {
-        err("pack-agent-line", `line ${JSON.stringify(line)} continues a one-line value — write a "- item" list under an empty key, or a | or > block`);
+        err("pack-agent-line", `line ${JSON.stringify(line)} continues a one-line value — use "- item" lines under an empty tools or disallowedTools, or a | or > block under description`);
       }
       continue;
     }
+    finish();
     if (/^<<\s*:/.test(line)) {
       err("pack-agent-yaml", `YAML merge key: ${JSON.stringify(line)}`);
-      open = null;
       continue;
     }
     if (/^["']/.test(line)) {
       err("pack-agent-quoted-key", `quoted key: ${JSON.stringify(line)}`);
-      open = null;
       continue;
     }
     const m = /^([A-Za-z][A-Za-z0-9_-]*):(?:\s(.*)|$)/.exec(line);
     if (!m) {
       err("pack-agent-line", `line ${JSON.stringify(line)} can't be classified`);
-      open = null;
       continue;
     }
     const key = m[1];
@@ -2090,21 +2136,33 @@ export function packAgentFindings(text, path = null) {
     if (seen.has(key)) err("pack-agent-duplicate-key", `key ${key} appears twice`);
     seen.add(key);
     if (/^[&*]/.test(value)) err("pack-agent-yaml", `YAML anchor or alias: ${JSON.stringify(line)}`);
-    open = value === "" ? "list" : /^[|>][-+]?$/.test(value) ? "block" : "none";
+    const toolKey = key === "tools" || key === "disallowedTools";
+    if (/^[|>][-+]?$/.test(value)) {
+      if (key === "description") cur = { key, kind: "block", style: value, block: [] };
+      else {
+        err("pack-agent-line", `only description may use a | or > block, not ${key}`);
+        cur = { key, kind: "none", value: "" };
+      }
+    } else if (value === "" && toolKey) cur = { key, kind: "list", items: [] };
+    else cur = { key, kind: "none", value };
   }
-  const fm = parseAgentFrontmatter(text);
+  finish();
   if (!seen.has("tools")) err("pack-agent-tools", "tools is required: without it the agent inherits every tool, MCP tools and Agent included");
-  else if (!Array.isArray(fm.tools) || !fm.tools.length) err("pack-agent-tools", "tools must be a non-empty list");
-  else if (fm.tools.some((t) => t.includes("*"))) err("pack-agent-tools", "tools must not hold a wildcard");
-  return out;
+  else if (!fm.tools || !fm.tools.length) err("pack-agent-tools", "tools must be a non-empty list");
+  return { findings, fm };
 }
 
-/** A pack agent's effective tools (its `tools` less `disallowedTools`) and the ones worth flagging. */
-export function packToolReport(text) {
-  const fm = parseAgentFrontmatter(text);
+/** The pack-agent frontmatter findings — `packAgentParse`'s. */
+export function packAgentFindings(text, path = null) {
+  return packAgentParse(text, path).findings;
+}
+
+/** A pack agent's effective tools (its `tools` less `disallowedTools`) and the ones worth flagging,
+    from `fm`, the frontmatter `packAgentParse` read. */
+export function packToolReport(fm) {
   const disallowed = fm.disallowedTools || [];
-  const effective = (fm.tools || []).filter((t) => !disallowed.some((d) => d === t || t.startsWith(`${d}(`)));
-  const flagged = effective.filter((t) => FLAGGED_TOOLS.includes(t.replace(/\(.*$/, "")) || t.startsWith(MCP_TOOL_PREFIX));
+  const effective = (fm.tools || []).filter((t) => !disallowed.includes(t));
+  const flagged = effective.filter((t) => FLAGGED_TOOLS.includes(t) || t.startsWith(MCP_TOOL_PREFIX));
   return { effective, flagged };
 }
 
@@ -2286,8 +2344,10 @@ function finding(level, code, path, field, message, fix) {
  */
 export function validateAgentContract({ role, cls, agent, description = null, builtin = false, cwd, inMemory = null }) {
   const findings = [];
+  // `inMemory.fm`, when given, is frontmatter already read (a pack agent's strict parse): it is
+  // judged as it is, so the contract and the dry run read one parse.
   const file = inMemory
-    ? { ...parseAgentFrontmatter(inMemory.text), found: inMemory.path, location: { kind: "bare", path: inMemory.path, level: null, shadowed: null, error: null, candidates: [inMemory.path] } }
+    ? { ...(inMemory.fm || parseAgentFrontmatter(inMemory.text)), found: inMemory.path, location: { kind: "bare", path: inMemory.path, level: null, shadowed: null, error: null, candidates: [inMemory.path] } }
     : readAgentFile(agent, cwd);
   const loc = file.location;
   const scaffoldFix = [
@@ -2412,19 +2472,34 @@ export function formatFindings(findings) {
 export function validateRole(role, resolved) {
   const entry = resolved && resolved.roles && resolved.roles[role];
   if (!entry) return null;
+  // A pack agent is judged from the text the pin covers, through its one strict parse.
+  const parsed = entry.pack && typeof entry.pack.agentText === "string" ? packAgentParse(entry.pack.agentText, entry.pack.agentPath) : null;
+  const inMemory = parsed ? { path: entry.pack.agentPath, text: entry.pack.agentText, fm: parsed.fm } : null;
   let result;
   if (isBuiltinRole(role)) {
     if (!isOverride(role, entry)) return null;
-    result = validateAgentContract({ role, cls: BUILTIN_CLASS[role], agent: roleAgent(role, entry), builtin: true, cwd: resolved.cwd });
+    result = validateAgentContract({ role, cls: BUILTIN_CLASS[role], agent: roleAgent(role, entry), builtin: true, cwd: resolved.cwd, inMemory });
   } else {
-    result = validateAgentContract({ role, cls: entry.class, agent: entry.agent, description: entry.description || null, cwd: resolved.cwd });
+    result = validateAgentContract({ role, cls: entry.class, agent: entry.agent, description: entry.description || null, cwd: resolved.cwd, inMemory });
   }
-  return entry.pack ? { ...result, findings: [...packFindings(role, entry.pack), ...result.findings] } : result;
+  return entry.pack ? { ...result, findings: [...packFindings(role, entry.pack, parsed), ...result.findings] } : result;
+}
+
+/** The agents adopted pack roles resolve to — a `from` row's, or a built-in's agent a pack
+    overrides — whether or not the role is available now. */
+export function packAgentRefs(resolved) {
+  const out = new Set();
+  for (const role of registryRoles(resolved)) {
+    const entry = resolved.roles[role];
+    if (entry && entry.from) out.add(roleAgent(role, entry));
+  }
+  return out;
 }
 
 /** An adopted role's pack findings: its pack reason when it isn't "ok", then the pack-agent
-    frontmatter checks. Every one is an error, so the role is unavailable through the usual path. */
-export function packFindings(role, pack) {
+    frontmatter checks (`parsed`, its `packAgentParse`, when the caller holds it). Every one is an
+    error, so the role is unavailable through the usual path. */
+export function packFindings(role, pack, parsed = null) {
   const out = [];
   if (pack.status !== "ok") {
     const fix =
@@ -2435,7 +2510,8 @@ export function packFindings(role, pack) {
           : [{ kind: "remove", detail: `\`roster.mjs role remove ${role}\`, or reinstall the pack` }];
     out.push(finding("error", pack.status, pack.agentPath, null, `${role} (from ${pack.from}): ${pack.message}${pack.subcode && pack.subcode !== pack.status ? ` [${pack.subcode}]` : ""}`, fix));
   }
-  if (typeof pack.agentText === "string") out.push(...packAgentFindings(pack.agentText, pack.agentPath));
+  if (parsed) out.push(...parsed.findings);
+  else if (typeof pack.agentText === "string") out.push(...packAgentFindings(pack.agentText, pack.agentPath));
   return out;
 }
 

@@ -45,12 +45,17 @@
  * `msgs:"off"` there is no request file to carry `reason:`, so the denial
  * text drops the `reason:` instruction.
  *
+ * Role packs: in bypassPermissions mode, an Agent/Task dispatch of the agent an adopted pack role
+ * resolves to (a `from` row's, or a built-in's agent a pack overrides) is DENIED, available or not:
+ * a pack role never runs with permission checks off.
+ *
  * Fails open on an internal error, except that a dispatch of a built-in chain ref is denied: the
- * gate could not check it. Runs after the ultra approval gate and the msg gate, which are
+ * gate could not check it. So is a `<plugin>:<agent>` outside `ah:` in bypassPermissions mode, which
+ * might be a pack role's. Runs after the ultra approval gate and the msg gate, which are
  * independent.
  */
 
-import { chainRoles, classProp, hierarchyRoleOf, HOOK_ERROR_LOG, isSubagent, KIND_DEFAULT, logHookError, readHookInput, resolveConfig, resolvedPeerTargets, resolveKind, ROLE_LABELS, roleLabel, ROSTER_CLI, roleFromName, rosterMemberFor, teamPrefix, tierOf } from "./lib-config.mjs";
+import { chainRoles, classProp, hierarchyRoleOf, HOOK_ERROR_LOG, isSubagent, KIND_DEFAULT, logHookError, packAgentRefs, readHookInput, resolveConfig, resolvedPeerTargets, resolveKind, ROLE_LABELS, roleLabel, ROSTER_CLI, roleFromName, rosterMemberFor, teamPrefix, tierOf } from "./lib-config.mjs";
 import {
   appendGate,
   describeInstance,
@@ -117,6 +122,21 @@ function failClosedReason(input) {
   const role = ref.slice("ah:".length);
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : "<abs cwd>";
   return `${head} ${ROLE_LABELS[role]} never runs as a subagent: SendMessage its live peer, or start one with \`node "${ROSTER_CLI}" spawn-one ${role} --cwd ${cwd}\`.`;
+}
+
+/** Why a dispatch of pack role agent `ref` is held: the session runs with permission checks off. */
+function packBypassReason(ref) {
+  return `ah: ${ref} is the agent of a role adopted from a role pack, and a pack role never runs with permission checks off — this session is in bypassPermissions mode. Switch the session to another mode, or dispatch the built-in role instead.`;
+}
+
+/** When the gate failed: a `<plugin>:<agent>` outside `ah:` dispatched in bypassPermissions might be
+    a pack role's, so it is held. Built from the input alone. Null for anything else. */
+function packBypassFailClosedReason(input) {
+  const tool = input && input.tool_name;
+  const ref = input && input.tool_input && typeof input.tool_input.subagent_type === "string" ? input.tool_input.subagent_type.trim() : "";
+  if ((tool !== "Agent" && tool !== "Task") || input.permission_mode !== "bypassPermissions") return null;
+  if (!/^[^:\s]+:[^:\s]+$/.test(ref) || ref.startsWith("ah:")) return null;
+  return `ah: the route gate hit an internal error and could not check this dispatch (logged to ${HOOK_ERROR_LOG}). ${packBypassReason(ref)}`;
 }
 
 function peersDenyReason(role, live, resolved, cwd) {
@@ -189,6 +209,11 @@ try {
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const sessionId = typeof input.session_id === "string" && input.session_id ? input.session_id : "__nosession__";
   const resolved = resolveConfig(cwd, { sessionId: sessionId !== "__nosession__" ? sessionId : undefined });
+  // A pack role never runs with permission checks off: dispatching an adopted role's agent, or a
+  // built-in's agent a pack overrides, available or not, is held in bypassPermissions mode.
+  if (isDispatch && input.permission_mode === "bypassPermissions" && packAgentRefs(resolved).has(subagentType)) {
+    decide("deny", packBypassReason(subagentType), "ah: held a pack role's dispatch in bypassPermissions mode.");
+  }
   if (!resolved.enabled) decide(null);
   if (isDispatch && subagentType === "ah:orchestrator") decide("deny", ORCHESTRATOR_REASON, "ah: the Orchestrator does not run as a subagent; this work stays in this session.");
   registry = resolved;
@@ -285,6 +310,6 @@ try {
   decide(null);
 } catch (err) {
   logHookError("pretooluse-route-gate.mjs", err);
-  const reason = failClosedReason(input);
+  const reason = packBypassFailClosedReason(input) || failClosedReason(input);
   decide(reason ? "deny" : null, reason, reason && "ah: the route gate could not check this dispatch, so it was held; see the hook error log.");
 }
