@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'github-pr-toolkit: for GitHub PR work, dispatch the Agent tool with subagent_type \"github-pr-toolkit:github-worker\" instead of calling GitHub MCP tools or the gh CLI yourself. Your first direct GitHub call this session is held once (a deny, nothing broken); the unchanged re-run then proceeds. Skip the hold by delegating up front.'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|mcp__plugin_github-pr-toolkit_github__.*|mcp__github__.*",
