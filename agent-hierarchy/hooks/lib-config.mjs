@@ -1752,6 +1752,9 @@ const YAML_NULL_BOOL_RE = /^(~|null|true|false|yes|no|on|off|y|n)$/i;
 /** A pack agent's tool entry: a plain name, so no quoting, flow list or `Tool(scope)` form. */
 const PACK_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const isPackToolName = (e) => PACK_TOOL_NAME_RE.test(e) && !YAML_NULL_BOOL_RE.test(e);
+/** What a pack agent's description can't hold beyond the hidden characters: a space YAML keeps but
+    trim() strips, a character outside YAML's printable set, or a private-use character. */
+const PACK_DESCRIPTION_BAD_RE = /[\uFFFE\uFFFF\uE000-\uF8FF\u{F0000}-\u{10FFFF}]|(?! )\p{Zs}/u;
 /** Characters that hide text: control characters other than newline and tab, Unicode format
     characters (category Cf: the bidirectional controls and zero-width characters among them), the
     tag block, variation selectors (a known way to carry an invisible payload, so an emoji written
@@ -1797,9 +1800,13 @@ export function hiddenCharAt(text) {
   const m = HIDDEN_CHAR_RE.exec(s);
   if (!m) return null;
   const before = s.slice(0, m.index);
-  const line = before.split("\n").length;
-  const column = [...before.slice(before.lastIndexOf("\n") + 1)].length + 1;
-  return `U+${m[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")} at line ${line}, column ${column}`;
+  const lineStart = before.lastIndexOf("\n") + 1;
+  return charWhere(before.split("\n").length, s.slice(lineStart), m.index - lineStart);
+}
+
+/** `U+XXXX at line L, column C` for the character at `index` of `line` (columns in code points). */
+function charWhere(lineNo, line, index) {
+  return `U+${line.codePointAt(index).toString(16).toUpperCase().padStart(4, "0")} at line ${lineNo}, column ${[...line.slice(0, index)].length + 1}`;
 }
 
 /** Pack text made safe to print: every hidden character (ANSI escapes included) shown as `\u{…}`. */
@@ -1960,7 +1967,7 @@ export function writeStoredCopy(pin, { row, agentText, files }) {
  */
 function declaredAgentName(text) {
   const lines = text.split(/\r?\n/);
-  if (lines[0].replace(/^﻿/, "").trim() !== "---") return { none: true };
+  if (lines[0].replace(/^\uFEFF/, "").trim() !== "---") return { none: true };
   const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
   if (end === -1) return { none: true };
   const unsure = { unsure: true };
@@ -2256,7 +2263,14 @@ export function packAgentParse(text, path = null) {
     } else if (key === "name" || key === "model") fm[key] = unquote(cur.value) || null;
     cur = null;
   };
-  for (const line of lines.slice(1, end)) {
+  for (const [i, line] of lines.slice(1, end).entries()) {
+    // Outside the description's content the frontmatter is printable ASCII, since JavaScript's
+    // whitespace (trim, \s) takes Unicode spaces that YAML's indentation and separators don't.
+    const content = cur && cur.kind === "block" && line[0] === " " ? /^ */.exec(line)[0].length : line.startsWith("description: ") ? "description: ".length : line.length;
+    const outside = /[^\x20-\x7E]/.exec(line.slice(0, content));
+    if (outside) err("pack-agent-line", `${charWhere(i + 2, line, outside.index)} is outside printable ASCII, which a pack agent's frontmatter keeps to outside its description`);
+    const inside = PACK_DESCRIPTION_BAD_RE.exec(line.slice(content));
+    if (inside) err("pack-agent-line", `${charWhere(i + 2, line, content + inside.index)} can't be in a pack agent's description (a space other than U+0020, a private-use character, U+FFFE or U+FFFF)`);
     if (!line.trim()) {
       if (cur && cur.kind === "block") cur.block.push("");
       continue;

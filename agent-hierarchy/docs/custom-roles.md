@@ -277,7 +277,10 @@ one at a time. Roles only you use can stay where they are, in
   (`\` or `''`). A value or tool entry that YAML reads as null or a boolean
   (`null`, `~`, `true`, `false`, `yes`, `no`, `on`, `off`, `y`, `n`, in any
   case) is refused: `tools: null` would mean every tool. `maxTurns` must be a
-  plain decimal integer. Tabs in the indentation, `#` comments, and anything else —
+  plain decimal integer. Outside the description's text the frontmatter is
+  printable ASCII: no tab, no other kind of space, no accented letter in a
+  name. The description may hold other characters, but not a space other
+  than the ordinary one, a private-use character, U+FFFE or U+FFFF. Tabs in the indentation, `#` comments, and anything else —
   `permissionMode`, `hooks`, MCP server settings, `skills`, `memory`, a YAML
   anchor — are errors. ah reads the file this strictly so that it sees exactly
   what YAML would, tools included. Your own agent files aren't held to this.

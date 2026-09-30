@@ -147,12 +147,12 @@ check "P2 a field over 160 characters, with a newline or with a backtick is refu
 bad "$PACKS/unknown" 'm.roles["pk-impl"].color = "red"; m.extra = 1'
 showpath "$PACKS/unknown"
 check "P2 an unknown key warns" '[ "$(roleerr pk-impl)" != pack-invalid ] && [[ "$(jget "o.roles[0].warnings.join()")" == *"unknown key \"color\""* ]] && [[ "$(jget "o.manifest.warnings.join()")" == *"unknown key \"extra\""* ]]'
-bad "$PACKS/hidden" 'm.roles["pk-impl"].description = "safe‮evil"; m.roles["pk-rev"].routes = "tag\u{E0041}char"'
+bad "$PACKS/hidden" 'm.roles["pk-impl"].description = "safe\u202Eevil"; m.roles["pk-rev"].routes = "tag\u{E0041}char"'
 printf -- '---\nname: pk-des\ndescription: Designs\xe2\x80\x8b things\nmodel: opus\ntools: Read, Grep, Write, SendMessage\n---\nBody.\n' > "$PACKS/hidden/agents/pk-des.md"
 showpath "$PACKS/hidden"
 check "P2 pack-hidden-chars: a bidi control and a tag character in a field, a zero-width character in the agent file" \
   '[ "$(roleerr pk-impl)" = pack-hidden-chars ] && [ "$(roleerr pk-rev)" = pack-hidden-chars ] && [[ "$(roleerr pk-des)" == *pack-hidden-chars* ]]'
-bad "$PACKS/hidden2" 'm.roles["pk-impl"].description = "sel︀︁️end"; m.roles["pk-rev"].routes = "line sep"; m.roles["pk-des"].description = "fillㅤer"; m.roles["pk-leg"].description = "warn ⚠️ sign"'
+bad "$PACKS/hidden2" 'm.roles["pk-impl"].description = "sel\uFE00\uFE01\uFE0Fend"; m.roles["pk-rev"].routes = "line\u2028sep"; m.roles["pk-des"].description = "fill\u3164er"; m.roles["pk-leg"].description = "warn ⚠\uFE0F sign"'
 node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("You review pack changes.","abc\u{E0100}def"))' "$PACKS/hidden2/agents/pk-extra.md"
 node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,"---\nname: pk-extra\ndescription: not a role\ntools: Read\n---\nabc\u{E0100}def\n")' "$PACKS/hidden2/agents/pk-extra.md"
 showpath "$PACKS/hidden2"
@@ -346,6 +346,11 @@ fm "tools: yes" 'tools: yes'
 fm "a - null tool item" 'tools:\n  - Read\n  - null\n  - SendMessage'
 fm "a - ~ tool item" 'tools:\n  - Read\n  - ~\n  - SendMessage'
 fm "an inline False tool entry" 'tools: Read, False, SendMessage'
+fm "list items indented with U+00A0" 'tools:\n\xc2\xa0\xc2\xa0- Read\n\xc2\xa0\xc2\xa0- SendMessage'
+fm "list items indented with U+3000" 'tools:\n\xe3\x80\x80- Read\n\xe3\x80\x80- SendMessage'
+fm "U+00A0 after tools:" 'tools:\xc2\xa0Read, Grep, SendMessage'
+fm "U+3000 after tools:" 'tools:\xe3\x80\x80Read, Grep, SendMessage'
+fm "U+2003 in a tools entry" 'tools: Read,\xe2\x80\x83Grep, SendMessage'
 fm "maxTurns: 1e3" 'tools: Read, Grep, SendMessage\nmaxTurns: 1e3'
 fm "maxTurns: 0x10" 'tools: Read, Grep, SendMessage\nmaxTurns: 0x10'
 fmd() { # <label> <description and other lines (printf %b)>: pk-rev with no fixed description
@@ -374,6 +379,22 @@ check "P8 a quoted \"yes\", tool names that only start with no or n, and maxTurn
 printf -- '---\nname: false\ndescription: Reviews\nmodel: opus\ntools: Read, Grep, SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
 showpath "$PACKS/fm"
 check "P8 name: false is an error" '[[ "$(roleerr pk-rev)" == *pack-agent-line* ]]'
+printf -- '---\nname: h\xc3\xa9lper\ndescription: Reviews\nmodel: opus\ntools: Read, Grep, SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 name: hélper is an error, naming the code point, line and column" \
+  '[[ "$(roleerr pk-rev)" == *pack-agent-line* ]] && [[ "$(jget "o.roles.find(r => r.name === \"pk-rev\").findings.map(f => f.message).join()")" == *"U+00E9 at line 2, column 8"* ]]'
+fmd "U+2003 after model:" 'description: Reviews\nmodel:\xe2\x80\x83sonnet'
+fmd "a tab after a colon" 'description: Reviews\nmodel:\topus'
+fmd "a tab after a block line's indenting spaces" 'description: |\n  \tReviews'
+fmd "U+00A0 in a description" 'description: Reviews\xc2\xa0code'
+fmd "U+E000 in a description" 'description: Reviews \xee\x80\x80'
+fmd "U+FFFF in a description" 'description: Reviews \xef\xbf\xbf'
+fmd "U+00A0 after description:" 'description:\xc2\xa0Reviews'
+for d in 'description: Caf\xc3\xa9 r\xc3\xa9sum\xc3\xa9' 'description: \xe3\x82\xb3\xe3\x83\xbc\xe3\x83\x89\xe3\x82\x92\xe7\xa2\xba\xe8\xaa\x8d\xe3\x81\x99\xe3\x82\x8b' 'description: >\n  R\xc3\xa9vise le code\n  tr\xc3\xa8s soigneusement'; do
+  printf -- "---\nname: pk-rev\n$d\nmodel: opus\ntools: Read, Grep, SendMessage\n---\nBody.\n" > "$PACKS/fm/agents/pk-rev.md"
+  showpath "$PACKS/fm"
+  check "P8 a non-ASCII description is accepted: $(printf -- "$d" | head -1)" '[[ "$(roleerr pk-rev)" != *pack-agent* ]]'
+done
 rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
 printf -- "---\nname: pk-rev\ndescription: \"Reviews code: carefully\"\nmodel: 'opus'\ncolor: a:b\ntools: Read, Grep, SendMessage\n---\nBody.\n" > "$PACKS/fm/agents/pk-rev.md"
 showpath "$PACKS/fm"

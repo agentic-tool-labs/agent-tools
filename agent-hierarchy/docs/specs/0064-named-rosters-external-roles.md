@@ -826,6 +826,33 @@ an **allowlist**, which fails closed. This is on top of the class contract.
     `false`, `yes`, `no`, `on`, `off`, `y`, `n`. YAML reads `tools: null`
     as no tools, and no tools means every tool. `maxTurns` must be a plain
     decimal integer.
+  - **Printable ASCII outside `description`.** Every character between the
+    `---` fences, the fences included, is printable ASCII (U+0020–U+007E),
+    apart from line breaks and the content of the `description` value.
+    - That content is the text after the single ASCII space that follows
+      `description:` and, for a block scalar, each block line after its
+      indentation.
+    - So indentation, the space after a key's colon, keys, and every other
+      value (`tools` entries and `name` included) are ASCII.
+    - A tab, U+00A0, U+2003, U+3000 or any other character there is
+      `pack-agent-line`, and the finding gives the code point, line and
+      column.
+    - This closes the whole class of Unicode whitespace that YAML rejects,
+      or reads differently from JavaScript's `trim()`.
+  - **Inside the `description` content,** non-ASCII text is allowed, for
+    example accented letters or CJK. These are refused:
+    - Unicode space separators (category Zs) other than U+0020. JavaScript's
+      `trim()` strips them but YAML keeps them, so the two readings would
+      differ;
+    - anything outside YAML's printable set, such as U+FFFE and U+FFFF;
+    - private-use code points (U+E000–U+F8FF and U+F0000–U+10FFFF), which
+      render as boxes nobody can review;
+    - everything on the §4.2 hidden-text list, which applies to the whole
+      agent file anyway.
+
+    What remains in a description is visible text that YAML and ah read
+    alike. It can be reviewed as it is printed. The agent body below the
+    frontmatter follows only the §4.2 rules.
 - **No other file may take the role's agent name.** Claude Code registers a
   plugin agent under its frontmatter `name`, not its file name. A second
   file declaring `name: helper` could be what Claude Code launches as
@@ -1374,7 +1401,14 @@ next run reports the stale anchor anyway.
     `name: false` [admit YAML's null and boolean words];
   - `maxTurns: 1e3` and `maxTurns: 0x10`.
 
-  Also accepted: `description: "Reviews code: carefully"` and `maxTurns: 5`.
+  - U+00A0 as indentation, U+3000 after `tools:`, U+2003 inside a `tools`
+    entry, a tab after a colon, `name: hélper`
+    [allow Unicode whitespace outside `description`];
+  - in `description`: a U+00A0, a U+E000, a U+FFFF.
+
+  Also accepted: `description: "Reviews code: carefully"`, `maxTurns: 5`,
+  `description: Café résumé`, `description: コードを確認する`, and a `>`
+  block whose lines hold accented text.
 
   These are accepted: a `>` or `|` block scalar under `description`, and
   `tools:` with an empty value followed by `- Read` / `- Bash` items. For
