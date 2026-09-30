@@ -564,6 +564,11 @@ function isUnder(path, dir) {
 const outsidePool = (dir) =>
   `file is outside this session's message pool (${msgsDir(dir)}) — the pool follows the session cwd; if cwd moved into a worktree or another repo, the file is fine and the cwd is wrong`;
 
+// A response lives beside the request it answers, wherever that pool is; the remedy for a
+// stray one is to re-create it with --req, not to move the session's cwd.
+const outsideRequestDir = (reqDir, reqPath) =>
+  `response file is not in its request's directory (${reqDir}) — write it with msg.mjs new --type response … --req ${reqPath}, which places it beside the request`;
+
 /**
  * Validate the request pointer a dispatch carries. Returns `{ok:true, path,
  * fm}` or `{ok:false, why}` where `why` is one of the deny reasons in the spec.
@@ -572,9 +577,9 @@ export function validateRequestToken(text, dir, expectedTo) {
   const path = extractMsgToken(text);
   if (!path) return { ok: false, why: "missing token" };
   if (!isAbsolute(path) || !existsSync(path)) return { ok: false, why: `path not found (${path})` };
+  if (!path.endsWith("--request.md")) return { ok: false, why: "not a request file" };
   const parsed = readMsgFile(path);
   if (!isUnder(path, msgsDir(dir)) && !messageHome(path, parsed && parsed.fm)) return { ok: false, why: outsidePool(dir) };
-  if (!path.endsWith("--request.md")) return { ok: false, why: "not a request file" };
   if (!parsed || !parsed.fm || parsed.fm.type !== "request") return { ok: false, why: "not a request file" };
   if (expectedTo && parsed.fm.to !== expectedTo) {
     return { ok: false, why: `wrong to: (file says ${parsed.fm.to}, dispatch is ${expectedTo})` };
@@ -590,13 +595,18 @@ export function validateRequestToken(text, dir, expectedTo) {
  * with a document about something else — worse than a missing token, because
  * it looks answered. Returns `{ok:true, path, fm}` or `{ok:false, why}`.
  */
-export function validateResponseToken(text, dir, expectedFrom, expectedId) {
+export function validateResponseToken(text, dir, expectedFrom, expectedId, reqPath = null) {
   const path = extractMsgToken(text);
   if (!path) return { ok: false, why: "missing token" };
   if (!isAbsolute(path) || !existsSync(path)) return { ok: false, why: `path not found (${path})` };
-  const parsed = readMsgFile(path);
-  if (!isUnder(path, msgsDir(dir)) && !messageHome(path, parsed && parsed.fm)) return { ok: false, why: outsidePool(dir) };
   if (!path.endsWith("--response.md")) return { ok: false, why: "not a response file" };
+  const parsed = readMsgFile(path);
+  if (!isUnder(path, msgsDir(dir)) && !messageHome(path, parsed && parsed.fm)) {
+    const anchored = typeof reqPath === "string" && isAbsolute(reqPath) && reqPath.endsWith("--request.md") && existsSync(reqPath);
+    if (!anchored) return { ok: false, why: outsidePool(dir) };
+    const reqDir = dirname(realCwd(reqPath));
+    if (dirname(realCwd(path)) !== reqDir) return { ok: false, why: outsideRequestDir(reqDir, reqPath) };
+  }
   if (!parsed || !parsed.fm || parsed.fm.type !== "response") return { ok: false, why: "not a response file" };
   if (expectedFrom && parsed.fm.from !== expectedFrom) {
     return { ok: false, why: `wrong from: (file says ${parsed.fm.from}, expected ${expectedFrom})` };
