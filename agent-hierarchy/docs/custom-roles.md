@@ -297,6 +297,49 @@ one at a time. Roles only you use can stay where they are, in
   same for every role. Only these files' names are read; they aren't held to
   the rules above.
 
+### Writing a pack
+
+A pack is a plugin directory with this shape:
+
+    my-pack/
+      .claude-plugin/plugin.json    # name, version, description (ah doesn't require it)
+      ah-roles.json                 # the roles, as above
+      agents/godot-implementor.md   # one file per role: agents/<agent>.md
+
+ah finds a pack through `~/.claude/plugins/installed_plugins.json`, so a pack is whatever
+Claude Code has installed that holds an `ah-roles.json`; a plugin directory that isn't installed
+can be checked, not adopted (`roster.mjs pack show --path <dir>`). The agent ref at run time is
+`<plugin>:<agent>`, with the plugin name from the install record.
+
+An agent file that passes:
+
+```markdown
+---
+name: godot-implementor
+description: Builds Godot 4 features in GDScript
+model: opus
+tools: Read, Grep, Glob, Edit, Write, Bash
+---
+You build Godot 4 features …
+```
+
+- `name` is the agent's name, equal to `agent` in the manifest (the class contract checks it).
+- `tools` is required and is a plain list (`Read, Grep` on one line, or `- item` lines). There is
+  no `*`, no `Bash(git:*)` scope, and no quoting. Leaving it out would give the agent every
+  tool, MCP tools included, so it is an error. A review-class agent can't hold `Edit`, `Write`
+  or `NotebookEdit`.
+- `permissionMode`, `hooks`, MCP server settings, `skills`, `memory` and every other
+  frontmatter key Claude Code knows are refused in a pack agent. Put what you need in the prompt body.
+- Check it before you publish: `roster.mjs pack show --path <dir>` runs the manifest, the class
+  contract and the frontmatter rules for every role and prints each finding with the line.
+
+Every change to any file in the plugin, yours or a version bump, makes every adopted role
+`pack-changed` for the people who have it, so they have to look at the change and trust it
+again. Keep packs small, and keep hooks and MCP servers out of them: users see everything the
+plugin carries before they install it, under "also in this plugin". What each `pack-…` reason
+means, and what the user does about it, is in
+[troubleshooting.md](./troubleshooting.md#role-packs).
+
 ### Installing, adopting and trusting
 
 `/ah:agent-role install <source>` takes a git URL, `owner/repo` or a local

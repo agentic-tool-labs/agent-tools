@@ -383,9 +383,9 @@ under [docs/specs/](./docs/specs/). Good places to start:
 /hierarchy peers                    # live peer roster
 /hierarchy sweep [days]             # archive old closed exchanges
 /hierarchy on | off                 # toggle without losing the config
-/agent-roster [show|init|add|edit|remove]   # define the roster
+/agent-roster [show|init|add|edit|remove|list|copy|delete|use]   # define the roster, or keep several and pick one
 /agent-team [create [auto|manual]|spawn-one <role>|spawn-ad-hoc <role>|dismiss <name>|disband|untrack|teams|resync|move|adopt|reap|history]   # stand up, reshape, or tear down a live team
-/agent-role [list|add|edit|remove|check] [name]   # define your own roles
+/agent-role [list|add|edit|remove|check|install|update|uninstall|adopt|trust] [name]   # define your own roles, or take them from a role pack
 /pipeline <plan-or-spec-path> [--branch <name>]   # run a plan to completion on its own
 ```
 
@@ -394,6 +394,15 @@ reviewer. It adds, edits, or removes a custom role and its agent file, `list`
 shows which roles exist, and `check` looks for problems with your roles (or
 one role) and walks you through fixing them. Putting a new role on the roster
 afterwards is `/agent-roster`, and starting it in a live team is `/agent-team`.
+Roles can also come from someone else's plugin, a *role pack*: `install`
+shows you everything the plugin carries, and nothing from it is used until you
+adopt a role and approve its pin. See
+[docs/custom-roles.md](./docs/custom-roles.md#6-role-packs).
+
+`/agent-roster` can also hold several rosters side by side (`list`, `copy`,
+`delete`, `use`, or `--roster <name>` / `AH_ROSTER` for one command or
+session), so different workloads get different teams. See
+[docs/getting-started.md](./docs/getting-started.md#named-rosters).
 
 `/pipeline` takes a plan, a spec, or a list of acceptance criteria and runs it
 to completion by itself: round after round of Architect, Implementor, and

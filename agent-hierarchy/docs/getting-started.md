@@ -109,6 +109,27 @@ the default block in a repo whose `activeRoster` is `game-dev`.
 A running team keeps the roster it was built from; changing the selection
 affects only teams created later.
 
+Different rosters for different workloads is the use: a lean one for routine
+fixes, a fuller one for a feature.
+
+    /agent-roster init repo-user --route peer --roster docs    # an empty `docs` roster
+    /agent-roster add repo-user --roster docs --role implementor   # …then fill it
+    /agent-roster copy default game-dev                        # or start from the default block
+    /agent-roster use game-dev                                 # build the next team from it
+    /agent-roster list                                         # what exists, where, and which is selected
+
+A name is 1–32 letters, digits or `-`, starting with a letter or digit;
+`default` is reserved for the unnamed block, so it can't be created, copied
+to or deleted. `delete` refuses a roster a live team was built from: disband
+the team first. `--team` names a live team, never a roster; to build a team
+from `rosters.docs`, pass `--roster docs` to `create`.
+
+If the selection names a roster no level defines, commands exit 2 with the
+roster's source and the fixes; hooks fall back to the default block and warn;
+`doctor` shows a red `roster-selection` row. See
+[troubleshooting.md](./troubleshooting.md#named-rosters). Roles other people
+publish come separately, as [role packs](./custom-roles.md#6-role-packs).
+
 ## 5. Spawning a team
 
 `/agent-roster create` spawns the resolved roster as a live **Team** — a

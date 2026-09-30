@@ -28,6 +28,9 @@ Then: symptom → likely cause → what to run.
 | Peers in different repos share no messages | Cross-repo limitation, documented in [README.md](../README.md) — different repos resolve different hierarchy dirs | Set `AGENT_HIERARCHY_DIR` to the same path in both sessions |
 | A dispatch is denied for a missing `[hierarchy-msg]` pointer | The dispatch/response gate requires a message-file pointer in-band | Follow the deny text's `msg.mjs new` instructions — see [docs/comms-protocol.md](./comms-protocol.md) §5/§6 |
 | Tier gate denies a dispatch | Dispatching Architect or Ultra-Advisor at or below your own model's tier | Do it inline, or set `reason: context\|second-opinion\|parallel` in the request file and re-issue |
+| A command says `… selects roster "<name>", but there is no rosters.<name> block at any level` | `--roster`, `AH_ROSTER` or `activeRoster` names a roster no level defines | [Named rosters](#named-rosters) below |
+| A custom or pack role is missing from routing, or `role list` shows `UNAVAILABLE` with a `pack-…` reason | the pack changed, went missing, or was never trusted on this machine | [Role packs](#role-packs) below |
+| A response is denied with "not in its request's directory" or "outside this session's message pool" | the response file is not beside the request it answers | [Response pointers](#response-pointers) below |
 | Usage report shows nothing, or looks smaller than expected | **Known limitation:** usage collection is `SubagentStop`-driven (`hooks/subagentstop-usage.mjs` requires an `agent_id`, i.e. a subagent). A **peer** is a separate top-level session, not a subagent, and never fires this hook — its token usage is not captured by `/hierarchy usage` at all | No workaround in this plugin; peer-routed work's token cost has to be read from that peer session directly |
 
 ## The ah CLI
@@ -52,6 +55,110 @@ Code Bash tool (a plain terminal, a CI job, a wrapper that strips the environmen
 **"`Cannot find module …/hooks/roster.mjs`."** The version directory your context names was removed
 by an update. Old and new version dirs normally coexist, so the old CLI keeps working until the
 session ends; when it does not, start a new session and use the `ah CLI root:` line it prints.
+
+## Named rosters
+
+Selection order, and the verbs that change it, are in
+[getting-started.md](./getting-started.md#named-rosters) and
+[cli-tools.md](./cli-tools.md) (“Which roster a command uses”).
+
+**"`… selects roster "<name>", but there is no rosters.<name> block at any level`."** The
+message names where the selection came from (`--roster`, `AH_ROSTER`, or `activeRoster at
+<level> in <path>`) and lists the rosters that are defined. `show`, `add`, `edit`, `remove` and
+`create` exit 2 on it; `init` does not, because it creates the roster. Hooks don't fail: they use
+the default block and put the message in the session's warnings, which is how you meet it with
+no command of your own to blame. `doctor` reports it as a red `roster-selection` row, so
+`doctor --check` exits 1. Fix it one of three ways, all named in the message:
+`roster.mjs roster use default`, `roster use <other>`, or `init --roster <name>`. If it is
+`AH_ROSTER`, unset the variable in that shell instead.
+
+**"`roster delete`: … uses it — nothing was deleted."** A team file here, or in the main
+checkout, records that roster. Disband the team (`roster.mjs disband`), or clear an orphaned
+record with `roster.mjs reap --commit`. A running team keeps the roster it was built from
+whatever you select later.
+
+**"`roster delete`: … `activeRoster` in <path> selects it."** Select another roster first
+(`roster use <other> --level <level>`) or `roster use --clear --level <level>`. A selection at a
+*different* level does not refuse: the roster is deleted, and the command warns that commands
+there will refuse until that selection changes.
+
+**"`roster delete`: … is in the main checkout's file."** From a worktree, a roster that only the
+main checkout's file holds at that level can't be deleted. The message gives the command: the
+same `roster delete` with `--cwd` set to the main checkout.
+
+**`roster copy` refuses the destination.** A roster can't be called `default` (that means the
+unnamed `roster` block), must be 1–32 characters of letters, digits and `-` starting with a
+letter or digit, and can't already exist at that level (from a worktree, in either checkout's
+file). Delete it first, or pick another name.
+
+**A `rosters.<team>` block is ignored by `create --team <team>`.** `--team` names only the team.
+Pass `--roster <team>` to build from that block; `create` warns when it sees the block and you
+didn't.
+
+## Role packs
+
+How packs work: [custom-roles.md §6](./custom-roles.md#6-role-packs). When a role adopted from a
+pack is unavailable it is dropped from routing (a built-in whose agent a pack overrides
+reverts to its shipped agent), and the session's start-up note lists it. `roster.mjs role list`
+shows the reason as a `pack-…` code, and `roster.mjs doctor` shows a `warn` `config` row that
+says the role is unavailable without naming the reason. A pack role already running as a peer
+is untouched.
+
+| Reason | Cause | Fix |
+|---|---|---|
+| `pack-changed` | something in the plugin changed since you trusted the role. The pin covers every file in the plugin, so a plain `claude plugin update`, even a version bump, trips it for every role adopted from that plugin | `roster.mjs role trust <role> --dry-run` to review, then commit with the pin it prints |
+| `pack-untrusted-here` | the pin matches the installed plugin, but this machine holds no stored copy of what was pinned, as with a repo-level row someone else committed, or a new machine | the same `role trust` |
+| `pack-missing` | the plugin isn't installed (under that marketplace), or its `ah-roles.json` doesn't offer the role. A same-named plugin from another marketplace never stands in | reinstall the pack, or `roster.mjs role remove <role>` |
+| `pack-invalid` | the manifest or the role's row is unreadable or breaks the custom-role rules; the agent file is missing, not UTF-8, or holds a hidden character; or another agent file in the plugin takes the role's agent name | fix the pack and update it, or `role remove` |
+| `pack-ambiguous` | two installs of the plugin differ (two marketplaces, or user and project scope), so which one Claude Code loads can't be known | uninstall all but one |
+| `pack-symlink` | the plugin holds a symbolic link, which the pin can't cover | reinstall a pack without one, or `role remove` |
+
+`role trust` only works when the pack itself reads cleanly; for `pack-missing`, `pack-invalid`,
+`pack-ambiguous` and `pack-symlink` the fix is on the install side. To see what is wrong with
+the pack, `roster.mjs pack show <plugin>@<marketplace>` lists every finding, and
+`pack show --path <dir>` checks a pack that isn't installed.
+
+Agent-file problems are separate findings under the `pack-agent-…` codes (`pack-agent-key` for a
+frontmatter key that isn't allowed, `pack-agent-tools` for a missing or non-plain `tools` entry,
+`pack-agent-line` for a line YAML would read differently, and so on), and the class contract's
+`name-mismatch` when the frontmatter `name` isn't the agent's name. Each names the line and
+says how to fix it; the allowed frontmatter is in
+[custom-roles.md](./custom-roles.md#writing-a-pack). A hidden character is reported as
+`pack-hidden-chars` with its code point, line and column, in the manifest and in the agent file.
+
+**"`roster.mjs role set … --from`/`role trust` was denied, or asked me to approve."** By design:
+adopting or trusting pack content is the user's decision, made in their own top-level session
+and approved at Claude Code's own prompt. It is refused in subagent, role and peer sessions, in a
+team member's session (`AH_TEAM_FILE` set), and while a pipeline run is live in the checkout; in
+a permission mode where the prompt isn't known to reach you it is refused too, with the mode
+named. A Bash command that isn't one plain `roster.mjs` command is judged a commit whenever its
+text names `roster.mjs`, `role` and `trust` or `--from` in that order, even for `--dry-run`; run
+the command on its own, with the absolute path and no `cd`, env prefix, `$VAR` or pipe.
+
+**"A pack role `was not launched`."** Two refusals: the member's auto mode is
+`bypassPermissions` or unset, so it would take your settings' default, which may be bypass (give
+it one with `roster.mjs edit --member <name> --auto-mode auto`); or a pipeline run is live and
+the role is a pack's reviewer or designer, which stay first-party (use the built-in for the run).
+
+## Response pointers
+
+A response to a request is written with `msg.mjs new --type response --id <id> --req <request
+path>`, which puts it **beside the request**, in the request's own `msgs/` directory, whichever
+checkout the responder's cwd is in. The pointer you then send, `[hierarchy-msg <response path>]`,
+is accepted when that file is in the request's directory, in the responder's own pool, or in the
+home pool of the message's team file.
+
+**"`response file is not in its request's directory (<dir>) — write it with msg.mjs new --type
+response … --req <request path>`."** The file the pointer names sits somewhere else. Don't move
+the session's cwd; re-create the response with `--req` set to the request's own path and point at
+that. A request's own pointer is different: a peer cwd that drifted (into a worktree, another
+repo) gets "file is outside this session's message pool … the file is fine and the cwd is
+wrong", and the fix there is the cwd.
+
+The beside-request acceptance arrived in 0.107.1. Before it, a peer in the main checkout
+answering an Orchestrator in a linked worktree was denied the pointer it was told to send, the
+Stop hook kept nudging for it, and the obligation was logged as undelivered. If you see that
+on an older install, update.
 
 After an update, the six things no unit test can see are in
 [live-checks.md](./live-checks.md) — one line each, per machine.
