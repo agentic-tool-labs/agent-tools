@@ -57,7 +57,8 @@ export const ROSTER_BOOL_FLAGS = new Set([
 export const MSG_BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all"]);
 
 const SCRIPTS = { "roster.mjs": "roster", "msg.mjs": "msg" };
-const META = new Set([";", "&", "|", "<", ">", "(", ")", "`", "$", "\\", "\n", "\r"]);
+// `#` starts a shell comment, which drops the rest of the command from what actually runs.
+const META = new Set([";", "&", "|", "<", ">", "(", ")", "`", "$", "\\", "\n", "\r", "#"]);
 // The shell expands `{ } * ? [ ] ~` before node ever sees the command, so any of them outside quotes
 // makes the text parsed here and the command executed two different things. Checked one CHARACTER at
 // a time in the unquoted branch: a token-level check misses a token that mixes quoting, where an

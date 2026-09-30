@@ -819,13 +819,14 @@ function adoptionsOf(reg, from) {
     .map((r) => ({ name: r, level: levelOfScope(reg.sources[r]), state: packPinState(reg.roles[r].pack) }));
 }
 
-/** The version a plugin at `dir` declares in its plugin.json, else `fallback`. */
+/** The version a plugin at `dir` declares in its plugin.json, else `fallback`, escaped for printing. */
 function pluginVersionAt(dir, fallback) {
+  let version = fallback;
   try {
     const pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
-    if (pj && typeof pj.version === "string") return pj.version;
+    if (pj && typeof pj.version === "string") version = pj.version;
   } catch {}
-  return fallback;
+  return typeof version === "string" ? escapeTerminal(version) : version;
 }
 
 /** One manifest role as `pack list` shows it. */
@@ -840,8 +841,8 @@ function packList() {
   const packs = packRecords().map((r) => {
     const manifest = readPackManifest(r.installPath, r.plugin);
     return {
-      plugin: r.plugin,
-      marketplace: r.marketplace,
+      plugin: escapeTerminal(r.plugin),
+      marketplace: r.marketplace === null ? null : escapeTerminal(r.marketplace),
       version: pluginVersionAt(r.installPath, r.version),
       path: r.installPath,
       ...(manifest.error ? { manifest_error: manifest.error } : {}),
@@ -912,8 +913,8 @@ function packShow(target) {
     return shown;
   });
   const result = {
-    plugin,
-    marketplace: record ? record.marketplace : null,
+    plugin: escapeTerminal(plugin),
+    marketplace: record && record.marketplace !== null ? escapeTerminal(record.marketplace) : null,
     installed: Boolean(record),
     version: pluginVersionAt(dir, record ? record.version : null),
     path: dir,
@@ -924,7 +925,7 @@ function packShow(target) {
     ...(tree.symlink ? { symlink: escapeTerminal(tree.symlink) } : {}),
   };
   if (opts.json === true) return out(result);
-  const lines = [`${plugin}${result.marketplace ? `@${result.marketplace}` : ""} ${result.version || "?"} — ${dir}${result.installed ? "" : " (not installed)"}`, `digest ${result.digest}`];
+  const lines = [`${result.plugin}${result.marketplace ? `@${result.marketplace}` : ""} ${result.version || "?"} — ${dir}${result.installed ? "" : " (not installed)"}`, `digest ${result.digest}`];
   if (result.manifest.error) lines.push(`manifest: ${result.manifest.error.code}: ${result.manifest.error.message}`);
   for (const w of result.manifest.warnings) lines.push(`manifest warning: ${w}`);
   for (const r of roles) {

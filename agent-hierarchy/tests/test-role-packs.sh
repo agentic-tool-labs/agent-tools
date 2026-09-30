@@ -158,6 +158,19 @@ installed "{\"pk@mk\":[\"$PACKS/a\"]}"
 bad "$PACKS/ansi" 'm.roles["pk-impl"].description = "red \u001b[31mALERT\u001b[0m end"'
 rm_ pack show --path "$PACKS/ansi"
 check "P2 an ANSI sequence in a field prints escaped" '[ $RC = 0 ] && [[ "$OUT" == *"\\u{1b}[31mALERT"* ]] && ! printf "%s" "$OUT" | grep -q $'"'"'\x1b'"'"''
+rawctl() { printf "%s" "$OUT" | LC_ALL=C grep -q $'"'"'\x1b\|\xc2\x9b'"'"'; } # a raw ESC or C1 CSI in OUT
+rm -rf "$PACKS/pj"; cp -R "$PACKS/a" "$PACKS/pj"
+node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({name: "pk\u009b31m", version: "1.0\u001b[31m\u009b0m"}))' "$PACKS/pj/.claude-plugin/plugin.json"
+rm_ pack show --path "$PACKS/pj"
+check "P2 plugin.json's name and version print escaped in pack show (text)" '[ $RC = 0 ] && ! rawctl && [[ "$OUT" == *"pk\\u{9b}31m"* ]] && [[ "$OUT" == *"1.0\\u{1b}[31m"* ]]'
+rm_ pack show --path "$PACKS/pj" --json
+check "P2 ... and in pack show --json" '[ $RC = 0 ] && ! rawctl && [ "$(jget o.plugin)" = "pk\\u{9b}31m" ]'
+installed "{\"pk@mk\":[\"$PACKS/pj\"]}"
+rm_ pack list
+check "P2 ... and in pack list (text)" '[ $RC = 0 ] && ! rawctl && [[ "$OUT" == *"1.0\\u{1b}[31m\\u{9b}0m"* ]]'
+rm_ pack list --json
+check "P2 ... and in pack list --json" '[ $RC = 0 ] && ! rawctl && [ "$(jget "o.packs[0].version")" = "1.0\\u{1b}[31m\\u{9b}0m" ]'
+installed "{\"pk@mk\":[\"$PACKS/a\"]}"
 
 # ================================================================ P3 role set --from
 fresh
@@ -299,6 +312,13 @@ fm "a <<: merge key" 'tools: Read, Grep, SendMessage\n<<: *base'
 fm "a missing tools" 'color: red'
 fm "tools with a wildcard" 'tools: Read, mcp__srv__*, SendMessage'
 fm "a line that can't be classified" 'tools: Read, Grep, SendMessage\njust some text'
+fm "a tools value folded onto a second line" 'tools: Read, Grep, SendMessage\n  Write, Bash'
+fm "an indented line under a one-line value" 'tools: Read, Grep, SendMessage\ncolor: red\n  bad: indentation'
+fm "a list item under a key that has a value" 'tools: Read, Grep, SendMessage\ncolor: red\n  - Bash'
+rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
+printf -- '---\nname: pk-rev\ndescription: >\n  Reviews pack\n  changes carefully.\nmodel: opus\ntools:\n  - Read\n  - Grep\n- SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-rev.md"
+showpath "$PACKS/fm"
+check "P8 a block list and a > block scalar are allowed" '[[ "$(roleerr pk-rev)" != *pack-agent* ]] && [ "$(jget "o.roles.find(r => r.name === \"pk-rev\").tools.effective.join()")" = "Read,Grep,SendMessage" ]'
 rm -rf "$PACKS/fm"; cp -R "$PACKS/a" "$PACKS/fm"
 printf -- '---\nname: pk-impl\ndescription: Builds\nmodel: opus\ntools: Read, Edit, Write, Bash, Agent, mcp__srv__run, SendMessage\n---\nBody.\n' > "$PACKS/fm/agents/pk-impl.md"
 showpath "$PACKS/fm"
@@ -322,6 +342,11 @@ rolerow gd
 check "P9 with its record removed, the role is pack-missing" '[ "$(jget o.pin_state)" = pack-missing ] && [[ "$(jget o.status)" == UNAVAILABLE* ]]'
 rm_ role remove gd
 check "P9 ... and role remove still works" '[ $RC = 0 ] && ! filejs "$GLOBAL_CFG" "\"gd\" in (d.roles || {})"'
+fresh
+adopt gd pk@mk:pk-impl
+installed "{\"pk@other\":[\"$PACKS/a\"]}"
+rolerow gd
+check "P9 the plugin installed only from another marketplace is pack-missing, never a stand-in" '[ "$(jget o.pin_state)" = pack-missing ]'
 
 # ================================================================ P10 pack show --path
 fresh
@@ -393,6 +418,22 @@ done
 anchor
 gate "$SET"
 check "P15 a live pipeline run denies the commit" '[ "$(decision)" = deny ] && [[ "$OUT" == *"pipeline run is live"* ]]'
+mkdir -p "$SANDBOX/elsewhere"
+gate "$ROSTER role trust gd --pin sha256:abc --cwd $SANDBOX/elsewhere"
+check "P15 a --cwd pointed elsewhere doesn't hide the session's own live run" '[ "$(decision)" = deny ] && [[ "$OUT" == *"pipeline run is live"* ]]'
+# A trailing shell comment drops what follows it from what runs, so `# --dry-run` must not read as a
+# dry run: such a command is outside the grammar, and neither hook decides it.
+for c in "$SET # --dry-run" "$TRUST # --dry-run"; do
+  label=${c#*role }; label=${label%% *}
+  OUT=$(node --input-type=module -e "const L = await import('$H/lib-ah-cli.mjs'); process.stdout.write(String(L.parseAhCommand(process.argv[1])))" "$c" 2>&1)
+  check "P15 role $label … # --dry-run doesn't parse" '[ "$OUT" = null ]'
+  gate "$c"
+  check "P15 role $label … # --dry-run: the gate makes no decision (Claude Code's own prompt applies)" '[ -z "$OUT" ]'
+  gate "$c" '{"agent_id":"sub1","agent_type":"general-purpose"}'
+  check "P15 role $label … # --dry-run from a subagent: the gate makes no decision either" '[ -z "$OUT" ]'
+  OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"g1",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$c" | HOME="$FAKEHOME" node "$H/pretooluse-ah-cli.mjs" 2>&1)
+  check "P15 role $label … # --dry-run: the allow hook stays silent" '[ -z "$OUT" ]'
+done
 fresh
 mkdir -p "$SANDBOX/badhier"; echo "not a dir" > "$SANDBOX/badhier/msgs"
 OUT=$(node -e 'process.stdout.write(JSON.stringify({session_id:"g1",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$SET" | AGENT_HIERARCHY_DIR="$SANDBOX/badhier" HOME="$FAKEHOME" node "$H/pretooluse-roster-skill-gate.mjs" 2>&1)

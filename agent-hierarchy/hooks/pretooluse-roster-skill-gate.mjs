@@ -71,12 +71,14 @@ function ask(reason) {
 const ASK_MODES = new Set(["default", "acceptEdits", "auto", "plan", "dontAsk", "bypassPermissions"]);
 const TRUST_REFUSED = "ah: BLOCKED — trusting role-pack content is the user's decision, made in their own top-level session.";
 
-function judgeTrustCommit(input, cwd) {
+/** `cwds` are the command's `--cwd` and the session's own: a live run at either one denies, so a
+    `--cwd` pointed elsewhere doesn't hide the run the session is in. */
+function judgeTrustCommit(input, cwds) {
   if (isSubagent(input)) return { deny: `${TRUST_REFUSED} A subagent can't commit it; tell the user to run the command themselves.` };
   const { role } = resolveHierarchyRole(input);
   if (role && role !== "orchestrator") return { deny: `${TRUST_REFUSED} This is a ${role} session; tell your orchestrator, and the user runs it.` };
   if (process.env.AH_TEAM_FILE) return { deny: `${TRUST_REFUSED} This session is a team member; tell your orchestrator, and the user runs it.` };
-  if (pipelineRunLive(cwd)) return { deny: `${TRUST_REFUSED} A pipeline run is live in this checkout; adopt or trust pack roles once it has finished.` };
+  if (cwds.some((cwd) => pipelineRunLive(cwd))) return { deny: `${TRUST_REFUSED} A pipeline run is live in this checkout; adopt or trust pack roles once it has finished.` };
   const mode = input.permission_mode;
   if (typeof mode === "string" && !ASK_MODES.has(mode)) return { deny: `${TRUST_REFUSED} In permission mode ${JSON.stringify(mode)} the approval prompt isn't known to reach the user; switch to the default mode and run it again.` };
   return { ask: "ah: trusting role-pack content — approve only if you reviewed this role's dry run (its fields, tools and pin) yourself." };
@@ -111,7 +113,8 @@ try {
     // Fails closed, unlike the skill rule below: an error while judging denies.
     let verdict;
     try {
-      verdict = judgeTrustCommit(input, cwdOf());
+      const own = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+      verdict = judgeTrustCommit(input, [...new Set([cwdOf(), own])]);
     } catch (err) {
       logHookError("pretooluse-roster-skill-gate.mjs", err);
       verdict = { deny: `${TRUST_REFUSED} The gate couldn't judge this command (${err && err.message ? err.message : String(err)}), so it is refused.` };

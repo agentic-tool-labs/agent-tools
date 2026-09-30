@@ -1978,9 +1978,15 @@ export function packRoleState(from, pin = null) {
   if (!f || !f.marketplace) return { status: "pack-invalid", message: `from ${JSON.stringify(from)} must be <plugin>@<marketplace>:<role>`, from: f, records: [] };
   const records = installRecords().filter((r) => r.plugin === f.plugin);
   if (!records.length) return { status: "pack-missing", message: `plugin ${f.plugin} is not installed`, from: f, records: [] };
+  const listed = records.map((r) => `${r.key} (${r.installPath})`);
+  // Only the recorded marketplace's install counts as this pack: another marketplace's plugin of the
+  // same name is someone else's content, never a stand-in for it.
+  if (!records.some((r) => r.marketplace === f.marketplace)) {
+    return { status: "pack-missing", message: `${f.plugin}@${f.marketplace} is not installed (installed under that name: ${listed.join(", ")})`, from: f, records: listed };
+  }
   const candidates = records.map((r) => packCandidate(r, f.role));
-  const chosen = candidates.find((c) => c.record.marketplace === f.marketplace) || candidates[0];
-  const state = { ...chosen, from: f, records: records.map((r) => `${r.key} (${r.installPath})`) };
+  const chosen = candidates.find((c) => c.record.marketplace === f.marketplace);
+  const state = { ...chosen, from: f, records: listed };
   if (chosen.status === "pack-missing" || chosen.status === "pack-invalid") return state;
   if (new Set(candidates.map((c) => c.pin || c.status)).size > 1) {
     return { ...state, status: "pack-ambiguous", message: `${records.length} install records of ${f.plugin} differ, and which one Claude Code loads can't be known: ${state.records.join(", ")}` };
@@ -2044,36 +2050,47 @@ export function packAgentFindings(text, path = null) {
     return out;
   }
   const seen = new Set();
-  let open = false;
+  // What may follow the last key line: "list" (its value was empty: only `- item` lines), "block"
+  // (a `|` or `>` block scalar: indented text), "none" (a one-line value), or null (no key yet). A
+  // plain value folded over several lines is refused, since ah's reader and YAML read it differently.
+  let open = null;
   for (const line of lines.slice(1, end)) {
     if (!line.trim()) continue;
     if (/^\s/.test(line) || /^-(\s|$)/.test(line)) {
       if (!open) err("pack-agent-line", `line ${JSON.stringify(line)} continues no key`);
-      else if (/^\s*(-\s+)?[&*]/.test(line) || /(^|\s)<<\s*:/.test(line)) err("pack-agent-yaml", `YAML anchor, alias or merge key: ${JSON.stringify(line.trim())}`);
+      else if (open === "block") {
+        if (!/^\s/.test(line)) err("pack-agent-line", `line ${JSON.stringify(line)} isn't indented inside the block above`);
+      } else if (open === "list") {
+        if (!/^\s*-\s+\S/.test(line)) err("pack-agent-line", `line ${JSON.stringify(line)} isn't a "- item" of the list above`);
+        else if (/^\s*-\s+[&*]/.test(line) || /(^|\s)<<\s*:/.test(line)) err("pack-agent-yaml", `YAML anchor, alias or merge key: ${JSON.stringify(line.trim())}`);
+      } else {
+        err("pack-agent-line", `line ${JSON.stringify(line)} continues a one-line value — write a "- item" list under an empty key, or a | or > block`);
+      }
       continue;
     }
     if (/^<<\s*:/.test(line)) {
       err("pack-agent-yaml", `YAML merge key: ${JSON.stringify(line)}`);
-      open = false;
+      open = null;
       continue;
     }
     if (/^["']/.test(line)) {
       err("pack-agent-quoted-key", `quoted key: ${JSON.stringify(line)}`);
-      open = false;
+      open = null;
       continue;
     }
     const m = /^([A-Za-z][A-Za-z0-9_-]*):(?:\s(.*)|$)/.exec(line);
     if (!m) {
       err("pack-agent-line", `line ${JSON.stringify(line)} can't be classified`);
-      open = false;
+      open = null;
       continue;
     }
     const key = m[1];
+    const value = (m[2] || "").trim();
     if (!PACK_AGENT_KEYS.includes(key)) err("pack-agent-key", `key ${key} isn't allowed in a pack agent`);
     if (seen.has(key)) err("pack-agent-duplicate-key", `key ${key} appears twice`);
     seen.add(key);
-    if (/^[&*]/.test((m[2] || "").trim())) err("pack-agent-yaml", `YAML anchor or alias: ${JSON.stringify(line)}`);
-    open = true;
+    if (/^[&*]/.test(value)) err("pack-agent-yaml", `YAML anchor or alias: ${JSON.stringify(line)}`);
+    open = value === "" ? "list" : /^[|>][-+]?$/.test(value) ? "block" : "none";
   }
   const fm = parseAgentFrontmatter(text);
   if (!seen.has("tools")) err("pack-agent-tools", "tools is required: without it the agent inherits every tool, MCP tools and Agent included");
