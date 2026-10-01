@@ -26,8 +26,9 @@
 //   node pretooluse-push-guard.mjs merge-check --pr <N> --cwd <abs>
 
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
-import { logHookError, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
+import { existsSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { logHookError, mainHierarchyDir, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
 import { conventionSettings, git, globMatch, globRegExp, loadConventions, refExists, tryGit } from "./lib-conventions.mjs";
 
 // ---------------------------------------------------------------------------------------------
@@ -574,7 +575,7 @@ function apiRule(args) {
     /repos\/[^/\s]+\/[^/\s]+\/merges\b/.exec(text)?.[0] ||
     (/git\/refs(\/|\b)/.test(text) && ((method && method !== "GET") || withFields) && "a write to git/refs") ||
     API_MERGE_WORDS.find((w) => text.includes(w)) ||
-    (ghWords(args)[1] === "graphql" && args.some((a) => a.startsWith("query=@") || a === "--input" || a.startsWith("--input=")) && "a graphql query the guard can't read");
+    (ghWords(args)[1] === "graphql" && args.some((a) => a.includes("query=@") || a === "--input" || a.startsWith("--input=")) && "a graphql query the guard can't read");
   return hit ? { rule: "PG-API-MERGE", short: "PR merge or review through the API", detail: `gh api: ${hit}` } : null;
 }
 
@@ -658,6 +659,18 @@ function pinnedMerge(input, cwd, form, D) {
 
 const PROMPTING_MODES = new Set(["default", "auto", "acceptEdits"]);
 
+/**
+ * pipelineRunLive for the merge rules, except that a hierarchy dir (or its msgs/) that exists but
+ * can't be listed throws: liveness is then unknown, which the rules treat like a live run.
+ */
+async function runLive(cwd) {
+  const { hierarchyDir, pipelineRunLive } = await import("./lib-hier.mjs");
+  for (const dir of [hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean)) {
+    for (const d of [dir, join(dir, "msgs")]) if (existsSync(d)) readdirSync(d);
+  }
+  return pipelineRunLive(cwd);
+}
+
 /** Set once mergeGuard has found a run live, so a later failure is denied without asking again. */
 let mergeRunLive = false;
 
@@ -668,9 +681,10 @@ let mergeRunLive = false;
 async function mergeGuard(input, command, cwd, invs, ghs) {
   const gitOps = invs.filter((inv) => inv.sub === "merge" || inv.sub === "pull" || inv.sub === "push");
   if (!ghs.length && !gitOps.length) return;
-  const { pipelineRunLive } = await import("./lib-hier.mjs");
   const dirs = [...new Set([cwd, ...ghs.map((g) => g.cwd), ...gitOps.map((inv) => inv.cwd)])];
-  if (!dirs.some((dir) => pipelineRunLive(dir))) return;
+  const live = [];
+  for (const dir of dirs) live.push(await runLive(dir));
+  if (!live.some(Boolean)) return;
   mergeRunLive = true;
   const D = await import("./lib-decisions.mjs");
   const form = D.parseMergeForm(command);
@@ -694,8 +708,7 @@ async function mergeError(cwd, err) {
   let live = mergeRunLive;
   if (!live) {
     try {
-      const { pipelineRunLive } = await import("./lib-hier.mjs");
-      live = pipelineRunLive(cwd);
+      live = await runLive(cwd);
     } catch {
       live = true;
     }

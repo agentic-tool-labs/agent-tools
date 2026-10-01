@@ -115,6 +115,9 @@ G1=(
   "PG-API-MERGE|gh api repos/o/r/git/refs -f ref=refs/heads/x -f sha=$SHA"
   "PG-API-MERGE|gh api graphql -f query='mutation { mergeBranch(input: {repositoryId: \"x\", base: \"main\", head: \"x\"}) { clientMutationId } }'"
   "PG-API-MERGE|gh api graphql -F query=@q.graphql"
+  "PG-API-MERGE|gh api graphql -Fquery=@q.graphql"
+  "PG-API-MERGE|gh api graphql --field=query=@q.graphql"
+  "PG-API-MERGE|gh api graphql --raw-field=query=@q.graphql"
 )
 for row in "${G1[@]}"; do
   RULE=${row%%|*} CMD=${row#*|}
@@ -240,6 +243,12 @@ check "G6 a gh command that isn't merge-related, same throw → no output" 'allo
 guard "ls"
 check "G6 ls, same throw → no output" 'allowed'
 unset GUARD
+chmod 000 "$REPO/.claude/hierarchy"
+guard "gh pr merge 7"
+check "G6 an unreadable hierarchy dir is unknown liveness: a merge → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR'
+guard "gh pr view 7"
+check "G6 ... while a gh command that isn't merge-related passes" 'allowed'
+chmod 755 "$REPO/.claude/hierarchy"
 rm -rf "$REPO/.claude/hierarchy"
 guard "$PIN"
 check "G6 no run live → no output" 'allowed'
