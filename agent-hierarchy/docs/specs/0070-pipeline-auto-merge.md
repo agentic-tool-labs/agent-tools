@@ -75,20 +75,39 @@ today.
 | `PG-AUTOMERGE` | `gh pr merge` with `--auto`, `--disable-auto` or `--admin`, always |
 | `PG-APPROVE` | `gh pr review` with `--approve` or `-a` |
 | `PG-READY` | `gh pr ready` except in §4's compound form |
-| `PG-API-MERGE` | `gh api` whose arguments hit `pulls/<n>/merge` or `pulls/<n>/reviews`, or contain `mergePullRequest`, `enablePullRequestAutoMerge`, `markPullRequestReadyForReview`, `addPullRequestReview`, `submitPullRequestReview` or `event=APPROVE` |
+| `PG-API-MERGE` | `gh api` whose arguments hit `pulls/<n>/merge`, `pulls/<n>/reviews`, or `repos/<o>/<r>/merges` (any method); or any non-GET request, or any request with `-f`/`-F`/`--field`/`--raw-field`/`--input`, to a `git/refs/` path; or whose arguments contain `mergePullRequest`, `mergeBranch`, `updateRef`, `updateRefs`, `enablePullRequestAutoMerge`, `markPullRequestReadyForReview`, `addPullRequestReview`, `submitPullRequestReview` or `event=APPROVE`; or `gh api graphql` whose query isn't inline text (`query=@<file>`, `--input`), because the guard can't read it |
+| `PG-RUN-PUSH` | `git push` whose destination is the default branch or a protected branch, in **any** repo, opted in or not. The default branch is origin/HEAD's target; when that can't be resolved, both `main` and `master` count as default. Protected branches come from the conventions when the repo has them |
 | `PG-GIT-MERGE` | `git merge` or `git pull` while HEAD is the default branch or a protected branch (`branchProtected`, :310-312) |
 | `PG-MERGE-ROLE` | §4's form from any caller but the top-level Orchestrator (§4.2) |
+| `PG-MERGE-ERROR` | the merge rules threw on a merge-related command while a run is live, or while liveness couldn't be determined (§4.2a) |
 
 - **Parsing:** reuse the push guard's shell parsing, so wrappers, `env`,
   `bash -c`, subshells and `cd` chains are seen exactly as push rules see
   them. Don't write a second parser. Shared lib or same file is your call.
+  - **Which directory counts:** each merge-type invocation's own working
+    directory (after `cd`), as well as the session's cwd. If
+    `pipelineRunLive` is true for any of them, the rules apply.
+  - **The `gh pr` subcommand** is the first positional argument after
+    `pr`, skipping `-R <v>`, `-R<v>`, `--repo <v>` and `--repo=<v>`. So
+    `gh pr -R o/r merge 7` is a merge.
+- **Push rules overlap:** in an opted-in repo the push guard's own rules
+  still apply to every push, and `PG-RUN-PUSH` adds nothing new there.
+  `PG-RUN-PUSH` is what covers a repo that hasn't opted in while a run is
+  live.
 - **Skill handling:** every rule above already falls under the skill's
   existing "any other `ah-push-guard:*` deny → halt and notify" (:876-877).
   §4's form never reaches a deny in the right caller.
-- **Not covered,** listed in § Residual risk: `curl` and other API clients,
-  `hub`, `gh` aliases and extensions, and any evasion of command-text
-  matching. The threat model is the push guard's: it stops a compliant,
-  mistaken model.
+- **Not covered,** listed in § Residual risk:
+  - `curl` and other API clients, `hub`, `gh` aliases and extensions;
+  - `xargs`- and `find -exec`-launched commands, which the shared parser
+    doesn't unwrap;
+  - a local `git merge` after a `git checkout`/`git switch` to the default
+    branch in the same command (`PG-GIT-MERGE` keys on HEAD at hook time).
+    Pushing that merge is caught by `PG-RUN-PUSH`;
+  - any other evasion of command-text matching.
+
+  The threat model is the push guard's: it stops a compliant, mistaken
+  model.
 
 ## 3. The opt-in
 
@@ -163,6 +182,12 @@ as it is today.
   `--auto`, `--admin`). In the compound form, both `<N>` match and
   `gh pr ready` has no other argument.
 - The run must be open, with `merge-opt-in: yes`.
+- The payload's `permission_mode` must be `default`, `auto` or
+  `acceptEdits`. Under `bypassPermissions`, `dontAsk`, or a missing value,
+  a hook's `ask` may not reach a human, so deny `PG-MERGE`. Pipeline runs
+  require auto mode anyway (SKILL.md:71-73), so a compliant run loses
+  nothing. This replaces an evidence step: it costs less than the probe
+  and holds whatever bypass mode does.
 - The caller must be **the top-level Orchestrator**, fail-closed:
   - the payload has no `agent_id`;
   - and either `agent_type` is absent with a persisted role (from
@@ -172,7 +197,9 @@ as it is today.
   It depends on §9 E3.
 
 All hold → return `permissionDecision: "ask"` with a reason naming:
-- the repo, the PR and the full sha;
+- the repo, the PR and the full sha. The repo comes from
+  `remote.origin.url` with any userinfo (`user:token@`) stripped, so no
+  credential reaches the prompt or the transcript;
 - the run's `decision list --summary` line;
 - "flagged decisions for this PR are in its body under 'Decisions made on
   your behalf'";
@@ -180,6 +207,27 @@ All hold → return `permissionDecision: "ask"` with a reason naming:
 
 The form is right but any other condition fails → deny `PG-MERGE-ROLE` for
 a caller failure, or `PG-MERGE` for anything else. Never `allow`.
+
+### 4.2a When the guard itself fails
+
+The merge rules **fail closed during a run**: a guard whose job is to stop
+merges can't let one through because it crashed. Scope it so that a guard
+bug can't block unrelated commands:
+- **Merge-related command:** the command's raw text contains `gh` together
+  with one of `merge`, `review`, `ready` or `api`, or `git` together with
+  `merge`, `pull` or `push`. This is a plain substring test on the raw text, so it
+  works even when parsing threw.
+- **A merge-related command, and the merge rules throw** (parsing, reading
+  the anchor or the decision log, resolving the caller):
+  - `pipelineRunLive` returned true, or itself threw → deny with
+    `ah-push-guard:PG-MERGE-ERROR <error message>`. The skill's existing
+    "any other deny → halt and notify" covers it.
+  - `pipelineRunLive` returned false (no run, determined without error) →
+    fail open (exit 0, no output). Outside a run the merge rules have no
+    job.
+- **Never `ask` or `allow` on an error path,** the §4.1 form included.
+- **Commands that aren't merge-related,** and the push rules: unchanged.
+  They keep the push guard's existing fail-open on error.
 
 ### 4.3 merge-check (read-only)
 
@@ -189,8 +237,8 @@ nothing. It is advisory: it decides what the run offers. The click is the
 approval, and the hook doesn't require that merge-check ran. All of these
 must hold for `ok`:
 
-1. **The run:** exactly one open anchor, with `merge-opt-in: yes`
-   [`no-run`, `off`].
+1. **The run:** exactly one open anchor, with `merge-opt-in: yes`, and a
+   valid `merge-method` [`no-run`, `off`, `no-method`].
 2. **The item:**
    - the head is `ah/issue-<N>` with an open item record under the run's
      tag;
@@ -224,10 +272,17 @@ must hold for `ok`:
 ### 4.4 The record
 
 A merge is not a decision, but the report must show it. A **PostToolUse**
-Bash handler sees each §4 command that ran, which happens only after the
-user approved the prompt. It appends a `merge` line to the run's decision
-log through 0068's writer core: `{ kind: "merge", pr, sha, method, time,
-approval: "permission prompt" }`.
+Bash handler sees each §4 command that ran. That happens only after the
+user approved the prompt, because the hook never returns `allow` for the
+form. It appends a `merge` line to the run's decision log through 0068's
+writer core: `{ kind: "merge", pr, sha, method, time, approval:
+"permission prompt", ran: true }`.
+
+**What the line may claim:** only that the pinned command for that PR and
+sha ran after the hook asked the user. It never claims the PR merged. The
+handler fires whether gh succeeded or failed, so it writes no outcome
+field. Whether the merge happened is read from GitHub at report time (§6),
+never from this line.
 
 - `msg.mjs decision add` refuses `kind: "merge"`, so the model's CLI path
   can't write one.
@@ -273,14 +328,25 @@ approval: "permission prompt" }`.
 
 ## 6. Final report
 
-The final message gets **"Merges performed under your authorisation"**,
-built from the `merge` lines and `gh pr view` at report time. Per PR: the
-sha, the time, the approval ("your click on the permission prompt"), and
-the merge commit, or "ran but not merged: <state>".
+The final message gets **"Merges performed under your authorisation"**.
+The merge state always comes from `gh pr view <N> --json
+state,mergeCommit,mergedAt,headRefOid` at report time; the `merge` lines
+say only which commands ran.
+- **Listed as merged:** a PR with a `merge` line whose GitHub state is
+  MERGED, and whose merged head equals the line's sha. Per PR: the sha,
+  `mergedAt`, the approval ("your click on the permission prompt"), and
+  the merge commit.
+- **A `merge` line, but GitHub doesn't show it merged at that sha:**
+  listed under "Not merged" as "head moved or merge refused", with the
+  state GitHub reports.
 
 Then **"Not merged",** for every other `pr-open` item: the merge-check
 reasons, or "you declined", and the manual command
 `gh pr merge <N> --match-head-commit <sha> --<method>`.
+
+A PR that GitHub shows MERGED with no `merge` line was merged outside the
+run. It is listed as "merged outside the run" and never counted as a merge
+under your authorisation.
 
 The section opens with the run-start line, copied.
 
@@ -311,8 +377,31 @@ push guard's existing test pattern.
   - `git merge x` and `git pull` on the default branch.
 
   Plus the wrapped forms `env X=1 …`, `bash -c "…"` and `(cd sub && …)`.
+  Plus:
+  - `gh pr -R o/r merge 7`, `gh pr --repo o/r merge 7`, `gh pr --repo=o/r
+    review 7 --approve`, `gh pr -R o/r ready 7`;
+  - `gh api repos/o/r/merges -f base=main -f head=x`;
+  - `gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=…`;
+  - `gh api repos/o/r/git/refs -f ref=refs/heads/x -f sha=…`;
+  - `gh api graphql -f query='mutation{mergeBranch…}'`, and
+    `gh api graphql -F query=@q.graphql`;
+  - session cwd outside the repo, with `cd <run repo> && gh pr merge 7`.
 
-  [drop each rule in turn] [skip wrapper parsing]
+  [drop each rule in turn] [skip wrapper parsing] [read the verb as
+  args[1]] [use only the session cwd]
+- **G1b Push during a run, repo not opted in.** No conventions file, a run
+  live:
+  - `git push origin ah/issue-5:main` → `PG-RUN-PUSH`;
+  - `git push origin HEAD:master` with no origin/HEAD → `PG-RUN-PUSH`;
+  - `git push origin ah/issue-5` → no output.
+
+  [apply only in opted-in repos] [skip the main/master fallback]
+- **G4b Permission mode.** The pinned form, top-level and opted in, with
+  `permission_mode` set to `bypassPermissions`, `dontAsk`, or missing →
+  `PG-MERGE`; with `auto` → `ask`. [ignore permission_mode]
+- **G4c No credentials in the prompt.** With
+  `remote.origin.url=https://u:tok@github.com/o/r.git`, the `ask` reason
+  contains `github.com/o/r` and not `tok`. [print the URL verbatim]
 - **G2 No run, no effect.** No open anchor → no deny for any of them.
   [deny outside a run]
 - **G3 Ask.** With an open run, `merge-opt-in: yes` and a top-level
@@ -339,12 +428,34 @@ push guard's existing test pattern.
 - **C1 merge-check.** Each §4.3 reason in its own row, from fixture output.
   All good → `ok` with the exact `command`, and draft → the compound form.
   It never writes a file. [drop each precondition in turn]
+- **G6 Fail-closed on error.** Force a throw in the merge rules (e.g. an
+  unreadable decision log, or a stubbed `pipelineRunLive` that throws):
+  - a merge-related command with a run live, or with `pipelineRunLive`
+    throwing → deny `PG-MERGE-ERROR`. One row is the pinned form with the
+    run's `decisions.jsonl` unreadable (a directory in its place) → deny,
+    not fall-through and not `ask`;
+  - with no run live → no output;
+  - a non-merge command (`ls`) with a run live and the same throw → no
+    output.
+
+  [fail open during a run] [fail closed for every command]
 - **R1 Record.**
-  - The PostToolUse handler appends one `merge` line for a §4 command.
+  - The PostToolUse handler appends one `merge` line for a §4 command,
+    with `ran: true` and no outcome field.
   - It writes none for any other Bash command.
   - `msg.mjs decision add` refuses `kind: "merge"`.
 
-  [record every gh command] [allow the CLI to write merge]
+  [record every gh command] [allow the CLI to write merge] [write an
+  outcome field]
+- **R2 Report state.** With a fixture `gh pr view`:
+  - a `merge` line plus MERGED at the same sha → listed as merged;
+  - a `merge` line plus OPEN → "head moved or merge refused";
+  - MERGED with no line → "merged outside the run".
+
+  The report section's builder is skill text, so assert these through the
+  K anchors if no code builds the section.
+
+  [trust the line as merged]
 - **V1** `pr.merge_method` is validated, defaulted and printed by `check`.
 - **K Skill anchors:**
   - `--auto-merge` and the plain-language line;
@@ -352,6 +463,10 @@ push guard's existing test pattern.
   - the plan-run refusal;
   - the two run-start lines, verbatim;
   - "head moved or merge refused";
+  - "merged outside the run", and "never from this line";
+  - `PG-MERGE-ERROR`, `PG-RUN-PUSH`;
+  - § Residual risk: the `xargs`/`find -exec` and checkout-then-merge
+    lines;
   - the footer;
   - "Merge approvals are waiting for you in the session";
   - the end-of-run-only merge point;
@@ -421,6 +536,10 @@ Then run the full suite.
   doesn't change the head sha.
 - A PostToolUse Bash event fires only after the command ran, so a declined
   prompt writes no `merge` line.
+- A hook's `ask` still shows the prompt when the user's settings carry an
+  allow rule matching `gh pr merge`. If such a rule could skip the prompt,
+  the record's `approval` field would overclaim. The report's merge state
+  comes from GitHub either way.
 - The run's Orchestrator session is interactive, as E1 tested. In a
   non-interactive session (`claude -p`) nobody can answer an `ask`; that
   wasn't tested and is not supported for auto-merge.

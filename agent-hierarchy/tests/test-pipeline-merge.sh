@@ -67,13 +67,14 @@ anchor() {
   LOG="$REPO/.claude/hierarchy/pipeline/$A/decisions.jsonl"
 }
 
-# <command> [js object of extra payload fields]: the push guard's answer in OUT.
+# <command> [js object of extra payload fields] [session cwd]: the push guard's answer in OUT. The
+# payload carries permission_mode auto, as a pipeline run's does; GUARD overrides the hook.
 guard() {
   OUT=$(node -e '
     const [d, c, x] = process.argv.slice(1);
-    const p = { session_id: "s", hook_event_name: "PreToolUse", cwd: d, tool_name: "Bash", tool_input: { command: c } };
+    const p = { session_id: "s", hook_event_name: "PreToolUse", cwd: d, permission_mode: "auto", tool_name: "Bash", tool_input: { command: c } };
     process.stdout.write(JSON.stringify(Object.assign(p, (new Function("return (" + (x || "{}") + ")"))())));
-  ' "$REPO" "$1" "$2" | node "$HOOK" 2>&1); RC=$?
+  ' "${3:-$REPO}" "$1" "$2" | node "${GUARD:-$HOOK}" 2>&1); RC=$?
 }
 decision() { jout "$OUT" "(o.hookSpecificOutput || {}).permissionDecision"; }
 reason() { jout "$OUT" "(o.hookSpecificOutput || {}).permissionDecisionReason"; }
@@ -103,6 +104,17 @@ G1=(
   "PG-MERGE|env X=1 gh pr merge 7"
   "PG-MERGE|bash -c \"gh pr merge 7\""
   "PG-MERGE|(cd sub && gh pr merge 7)"
+  "PG-MERGE|gh pr -R o/r merge 7"
+  "PG-MERGE|gh pr --repo o/r merge 7"
+  "PG-MERGE|gh -R o/r pr merge 7"
+  "PG-APPROVE|gh pr --repo=o/r review 7 --approve"
+  "PG-READY|gh pr -R o/r ready 7"
+  "PG-READY|gh pr -Ro/r ready 7"
+  "PG-API-MERGE|gh api repos/o/r/merges -f base=main -f head=x"
+  "PG-API-MERGE|gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=$SHA"
+  "PG-API-MERGE|gh api repos/o/r/git/refs -f ref=refs/heads/x -f sha=$SHA"
+  "PG-API-MERGE|gh api graphql -f query='mutation { mergeBranch(input: {repositoryId: \"x\", base: \"main\", head: \"x\"}) { clientMutationId } }'"
+  "PG-API-MERGE|gh api graphql -F query=@q.graphql"
 )
 for row in "${G1[@]}"; do
   RULE=${row%%|*} CMD=${row#*|}
@@ -111,6 +123,22 @@ for row in "${G1[@]}"; do
 done
 guard "gh pr view 7"
 check "G1 a read-only gh command passes during a run" 'allowed'
+guard "gh api repos/o/r/git/refs/heads/main"
+check "G1 a GET of git/refs passes during a run" 'allowed'
+guard "cd $REPO && gh pr merge 7" '{}' "$SANDBOX"
+check "G1 from a session outside the repo, cd into the run's repo then merge → PG-MERGE" 'denied PG-MERGE'
+
+# ---------------------------------------------------------------- G1b push during a run, repo not opted in
+guard "git push origin ah/issue-5:main"
+check "G1b a push to the default branch during a run → PG-RUN-PUSH" 'denied PG-RUN-PUSH'
+git -C "$REPO" remote set-head origin -d
+guard "git push origin HEAD:master"
+check "G1b with no origin/HEAD, a push to master → PG-RUN-PUSH" 'denied PG-RUN-PUSH'
+guard "git push origin HEAD:main"
+check "G1b with no origin/HEAD, a push to main → PG-RUN-PUSH" 'denied PG-RUN-PUSH'
+git -C "$REPO" remote set-head origin main
+guard "git push origin ah/issue-5"
+check "G1b a push of the item's own branch passes" 'allowed'
 git -C "$REPO" checkout -q -b feat
 guard "git merge x"
 check "G1 git merge on the run's own branch passes" 'allowed'
@@ -159,6 +187,24 @@ anchor yes squash
 guard "$PIN"
 check "G4 a method other than the run's → deny PG-MERGE" 'denied PG-MERGE'
 
+# ---------------------------------------------------------------- G4b permission mode
+anchor yes
+for mode in bypassPermissions dontAsk; do
+  guard "$PIN" "{ permission_mode: \"$mode\" }"
+  check "G4b permission_mode $mode → PG-MERGE" 'denied PG-MERGE'
+done
+guard "$PIN" '{ permission_mode: undefined }'
+check "G4b no permission_mode → PG-MERGE" 'denied PG-MERGE'
+guard "$PIN" '{ permission_mode: "auto" }'
+check "G4b permission_mode auto → ask" 'asked'
+
+# ---------------------------------------------------------------- G4c no credentials in the prompt
+ORIGIN_URL=$(git -C "$REPO" config --get remote.origin.url)
+git -C "$REPO" config remote.origin.url "https://u:tok@github.com/o/r.git"
+guard "$PIN"
+check "G4c the prompt names the repo without the URL's credentials" 'asked && [[ "$(reason)" == *"github.com/o/r"* ]] && [[ "$(reason)" != *"tok"* ]]'
+git -C "$REPO" config remote.origin.url "$ORIGIN_URL"
+
 # ---------------------------------------------------------------- G5 callers
 anchor yes
 guard "$PIN" '{ agent_id: "a1", agent_type: "general-purpose" }'
@@ -173,6 +219,30 @@ check "G5 a persisted implementor role with no agent_type → PG-MERGE-ROLE" 'de
 rm -f "$HOME/.claude/agent-hierarchy.session-roles.json"
 guard "$PIN" '{ agent_type: "general-purpose" }'
 check "G5 a non-ah agent_type → PG-MERGE-ROLE" 'denied PG-MERGE-ROLE'
+
+# ---------------------------------------------------------------- G6 fail closed on error
+anchor yes
+mkdir -p "$LOG"
+guard "$PIN"
+check "G6 the pinned form with the decision log unreadable → PG-MERGE-ERROR, never ask" 'denied PG-MERGE-ERROR'
+rm -rf "$LOG"
+# A copy of the hooks whose pipelineRunLive throws.
+mkdir -p "$SANDBOX/stub"
+cp -R "$PLUGIN/hooks" "$SANDBOX/stub/hooks"
+perl -0pi -e 's/(export function pipelineRunLive\(cwd\) \{\n)/$1  throw new Error("stubbed liveness failure");\n/' "$SANDBOX/stub/hooks/lib-hier.mjs"
+GUARD="$SANDBOX/stub/hooks/pretooluse-push-guard.mjs"
+guard "gh pr merge 7"
+check "G6 a merge-related command when liveness throws → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR && [[ "$(reason)" == *"stubbed liveness failure"* ]]'
+guard "git push origin ah/issue-5:main"
+check "G6 a push when liveness throws → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR'
+guard "gh pr view 7"
+check "G6 a gh command that isn't merge-related, same throw → no output" 'allowed'
+guard "ls"
+check "G6 ls, same throw → no output" 'allowed'
+unset GUARD
+rm -rf "$REPO/.claude/hierarchy"
+guard "$PIN"
+check "G6 no run live → no output" 'allowed'
 
 # ---------------------------------------------------------------- C1 merge-check
 mkdir -p "$SANDBOX/bin" "$SANDBOX/fix"
@@ -225,6 +295,9 @@ check "C1 no open run → no-run" 'has_reason no-run'
 item_run no
 mc
 check "C1 merge-opt-in: no → off" 'has_reason off'
+item_run yes; anchor yes fast; record ab12-i5 "issue: 5" "branch: ah/issue-5" "depends-on: none"; record ab12-i5-ok; close_record "$ID" ab12-i5-ok
+mc
+check "C1 no valid merge-method → no-method" 'has_reason no-method && ! has_reason off'
 item_run
 mc 'v.headRefName = "ah/issue-9"'
 check "C1 a head with no item record in this run → not-this-run" 'has_reason not-this-run'
@@ -285,7 +358,7 @@ post() { # <command>
   node -e 'const [d,c]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:"s",hook_event_name:"PostToolUse",cwd:d,tool_name:"Bash",tool_input:{command:c},tool_response:{stdout:"",stderr:""}}))' "$REPO" "$1" | node "$RECORD"
 }
 post "$PIN"
-check "R1 the pinned merge command appends one merge line" '[ -f "$LOG" ] && [ "$(wc -l < "$LOG" | tr -d " ")" = 1 ] && node -e "const l=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\").trim());process.exit(l.kind===\"merge\"&&l.pr===12&&l.sha===process.argv[2]&&l.method===\"merge\"&&l.approval===\"permission prompt\"&&!(\"id\" in l)&&!isNaN(Date.parse(l.time))?0:1)" "$LOG" "$SHA"'
+check "R1 the pinned merge command appends one merge line: ran true, no outcome field" '[ -f "$LOG" ] && [ "$(wc -l < "$LOG" | tr -d " ")" = 1 ] && node -e "const l=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\").trim());process.exit(l.kind===\"merge\"&&l.pr===12&&l.sha===process.argv[2]&&l.method===\"merge\"&&l.approval===\"permission prompt\"&&l.ran===true&&JSON.stringify(Object.keys(l))===JSON.stringify([\"kind\",\"pr\",\"sha\",\"method\",\"time\",\"approval\",\"ran\"])&&!isNaN(Date.parse(l.time))?0:1)" "$LOG" "$SHA"'
 post "gh pr view 12"
 post "gh pr merge 12"
 post "git status"
@@ -325,6 +398,15 @@ kanchor '**"Not merged"**'
 kanchor 'or edit a PR the run didn'"'"'t open — except § Merge on your approval.'
 kanchor '"head moved or merge refused", with gh'"'"'s own message verbatim'
 kanchor 'A merge done under the user'"'"'s own per-run merge authorisation (§ Merge on your approval) is not a decision'
+
+kanchor 'listed as "merged outside the run", and never counted as merged under your authorisation'
+kanchor 'never from this line or from memory'
+kanchor 'A PR with a `merge` line that GitHub shows MERGED at the line'"'"'s sha is listed here'
+kanchor 'for a `merge` line GitHub doesn'"'"'t show merged at that sha, "head moved or merge refused"'
+kanchor '(`PG-RUN-PUSH`)'
+kanchor '(`PG-MERGE-ERROR`)'
+kanchor 'commands launched by `xargs` or `find -exec`, which the guard'"'"'s parser doesn'"'"'t unwrap'
+kanchor 'a local `git merge` after a `git checkout` or `git switch` to the default branch in the same command'
 
 echo
 echo "SUMMARY: $PASS passed, $FAIL failed"

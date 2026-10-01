@@ -999,7 +999,11 @@ cover:
   (known gaps: `docs/pipeline-conventions.md`, "What it cannot stop");
 - merging, approving or readying a PR around the guard's merge rules
   (§ Merge on your approval), which match command text only: `curl` and
-  other API clients, `hub`, `gh` aliases and extensions, and any other
+  other API clients, `hub`, `gh` aliases and extensions; commands launched
+  by `xargs` or `find -exec`, which the guard's parser doesn't unwrap; a
+  local `git merge` after a `git checkout` or `git switch` to the default
+  branch in the same command, since `PG-GIT-MERGE` keys on HEAD when the
+  command starts (pushing that merge is still `PG-RUN-PUSH`); and any other
   evasion of command-text matching;
 - tracker writes, which only prose governs.
 
@@ -1360,8 +1364,13 @@ Once every item is terminal:
 Only in a run with `merge-opt-in: yes` (step 3b). Merging stays the user's:
 it is never classified, decided, or logged as `decided` (§ Decisions on the
 user's behalf). The push guard denies every other way the run could merge,
-approve, ready or auto-merge a PR, from the anchor's writing to its close;
-any such `ah-push-guard:*` deny halts the run (§ Per-item execution).
+approve, ready or auto-merge a PR, from the anchor's writing to its close,
+and a push to the default or a protected branch in any repo
+(`PG-RUN-PUSH`). If its own check fails on such a command while the run is
+live, it denies that too (`PG-MERGE-ERROR`). Any such `ah-push-guard:*`
+deny halts the run (§ Per-item execution). The pinned command gets its
+prompt only in the `default`, `auto` or `acceptEdits` permission mode,
+since another mode might never show it to you.
 
 **The merge point is once only, at the end of the run:** after § Degraded
 approval when there is one, and before the final message. Never mid-run: a
@@ -1373,7 +1382,7 @@ it, so nothing merges.
    `node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs merge-check --pr <N> --cwd <root>`.
    It is read-only and advisory: it decides what the run offers, and prints
    `{ ok, pr, sha, method, reasons, command }`. Reasons: `no-run`, `off`,
-   `not-this-run`, `not-signed-off`, `exception`, `closed`, `head-moved`,
+   `no-method`, `not-this-run`, `not-signed-off`, `exception`, `closed`, `head-moved`,
    `stacked-base-open`, `base-not-default`, `not-mergeable:<status>`,
    `no-checks`, `checks-pending`, `checks-failed`, `changes-requested`,
    `unresolved-threads` (`docs/cli-tools.md`). No branches are deleted, so a
@@ -1416,14 +1425,19 @@ status; the PR URL or branch; the reason code; stack relationships.
 - § Decisions on the user's behalf's report: "Decisions made on your
   behalf", then "Waiting for you".
 - **"Merges performed under your authorisation"**, opening with the
-  run-start auto-merge line, copied. Built from the log's `merge` lines and
-  `gh pr view` now, never from memory; per PR: the sha, the time, the
-  approval ("your click on the permission prompt"), and the merge commit,
-  or "ran but not merged: <state>".
+  run-start auto-merge line, copied. A log `merge` line says only that the
+  pinned command ran after the prompt; whether it merged comes from
+  `gh pr view <N> --json state,mergeCommit,mergedAt,headRefOid` now, never
+  from this line or from memory. A PR with a `merge` line that GitHub shows
+  MERGED at the line's sha is listed here: the sha, `mergedAt`, the
+  approval ("your click on the permission prompt"), and the merge commit.
 - **"Not merged"**: every other `pr-open` item, with its merge-check
-  reasons, or "you declined", or "head moved or merge refused" and gh's
-  message, and the manual command
+  reasons, or "you declined", or, for a `merge` line GitHub doesn't show
+  merged at that sha, "head moved or merge refused" with the state GitHub
+  reports and gh's message; and the manual command
   `gh pr merge <N> --match-head-commit <sha> --<method>`.
+- A PR GitHub shows MERGED with no `merge` line is listed as "merged
+  outside the run", and never counted as merged under your authorisation.
 
 Then close the anchor, the `<tag>-verdicts` record, and every item,
 exception and `-done` record: write a response file for each with

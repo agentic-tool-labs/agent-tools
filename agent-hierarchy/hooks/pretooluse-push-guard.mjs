@@ -9,7 +9,9 @@
 // errors after it fail closed (PG-ERROR).
 //
 // While a run is open, in any repo, it denies every way the run could merge, approve, ready or
-// auto-merge a PR, and `git merge`/`git pull` on the default or a protected branch. The one exception
+// auto-merge a PR, `git merge`/`git pull` on the default or a protected branch, and a push to either.
+// If those rules throw on such a command, it denies while a run is live or liveness is unknown
+// (PG-MERGE-ERROR), and stays out of the way otherwise. The one exception
 // is the pinned merge command (lib-decisions.mjs mergeCommand) from the run's top-level Orchestrator
 // in a run that opted into auto-merge: that gets the native permission prompt, so the user's click
 // is the approval.
@@ -381,9 +383,11 @@ function defaultDestination(repo, mode, cur) {
   throw new Error(`unknown push.default ${mode}`);
 }
 
-function pushRule(inv, repo, conv) {
+const srcOf = (spec) => spec.replace(/^\+/, "").split(":")[0];
+
+/** What a `git push` invocation sends: its flags, remote, refspecs, push.default mode, current branch, and `{spec, src, dst}` pairs. */
+function pushPlan(inv, repo) {
   const { flags, remote: named, refspecs: given } = parsePush(inv.args);
-  const flag = (test) => flags.find(test);
   const cur = currentBranch(repo);
   const remote =
     named ??
@@ -391,7 +395,21 @@ function pushRule(inv, repo, conv) {
   // With no refspec, git pushes remote.<remote>.push if set, else by push.default.
   const refspecs = given.length ? given : configValues(repo, `remote.${remote}.push`);
   const mode = refspecs.length ? null : configValue(repo, "push.default") || "simple";
-  const srcOf = (spec) => spec.replace(/^\+/, "").split(":")[0];
+  const pairs = () =>
+    refspecs.length
+      ? refspecs.map((spec) => {
+          const c = spec.replace(/^\+/, "").indexOf(":");
+          const src = srcOf(spec);
+          const dst = c >= 0 ? spec.replace(/^\+/, "").slice(c + 1) : src === "HEAD" || src === "@" ? cur : src;
+          return { spec, src, dst: dst && shortName(dst) };
+        })
+      : [defaultDestination(repo, mode, cur)].filter(Boolean);
+  return { flags, remote, refspecs, mode, cur, pairs };
+}
+
+function pushRule(inv, repo, conv) {
+  const { flags, remote, refspecs, mode, pairs: destinations } = pushPlan(inv, repo);
+  const flag = (test) => flags.find(test);
 
   const force =
     flag((f) => ["--force", "--force-with-lease", "--force-if-includes"].includes(f) || f.startsWith("--force-with-lease=") || (SHORT_GROUP.test(f) && f.includes("f"))) ||
@@ -419,14 +437,7 @@ function pushRule(inv, repo, conv) {
 
   if (remote !== "origin") return { rule: "PG-REMOTE", short: "remote other than origin", detail: `remote ${remote}` };
 
-  const pairs = refspecs.length
-    ? refspecs.map((spec) => {
-        const c = spec.replace(/^\+/, "").indexOf(":");
-        const src = srcOf(spec);
-        const dst = c >= 0 ? spec.replace(/^\+/, "").slice(c + 1) : src === "HEAD" || src === "@" ? cur : src;
-        return { spec, src, dst: dst && shortName(dst) };
-      })
-    : [defaultDestination(repo, mode, cur)].filter(Boolean);
+  const pairs = destinations();
   for (const p of pairs) {
     if (!p.dst) return { rule: "PG-BRANCH", short: "unresolved destination", detail: `destination of ${p.spec} unresolved (detached HEAD)` };
     if (branchProtected(conv, p.dst)) return { rule: "PG-BRANCH", short: `protected branch ${p.dst}`, detail: `branch ${p.dst}` };
@@ -530,26 +541,71 @@ function deny(v, conv) {
 // ---------------------------------------------------------------------------------------------
 // Merge rules (while a /pipeline run is open, in any repo).
 
-const API_MERGE_WORDS = ["mergePullRequest", "enablePullRequestAutoMerge", "markPullRequestReadyForReview", "addPullRequestReview", "submitPullRequestReview", "event=APPROVE"];
+// `updateRef` matches `updateRefs` too.
+const API_MERGE_WORDS = ["mergePullRequest", "mergeBranch", "updateRef", "enablePullRequestAutoMerge", "markPullRequestReadyForReview", "addPullRequestReview", "submitPullRequestReview", "event=APPROVE"];
+
+/** gh's command group and verb: its first two positional words, skipping the repo flag (-R v, -Rv, --repo v, --repo=v) wherever it sits. */
+function ghWords(args) {
+  const words = [];
+  for (let k = 0; k < args.length && words.length < 2; k++) {
+    if (args[k] === "-R" || args[k] === "--repo") k++;
+    else if (!args[k].startsWith("-")) words.push(args[k]);
+  }
+  return words;
+}
+
+/** `gh api`'s method when one is given (-X v, -Xv, --method v, --method=v), upper-cased; null when gh picks it. */
+function apiMethod(args) {
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "-X" || a === "--method") return String(args[k + 1] ?? "").toUpperCase();
+    if (a.startsWith("--method=")) return a.slice("--method=".length).toUpperCase();
+    if (/^-X./.test(a)) return a.slice(2).toUpperCase();
+  }
+  return null;
+}
+
+function apiRule(args) {
+  const text = args.join(" ");
+  const method = apiMethod(args);
+  const withFields = args.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF]./.test(a));
+  const hit =
+    /pulls\/[^/\s]+\/(merge|reviews)\b/.exec(text)?.[0] ||
+    /repos\/[^/\s]+\/[^/\s]+\/merges\b/.exec(text)?.[0] ||
+    (/git\/refs(\/|\b)/.test(text) && ((method && method !== "GET") || withFields) && "a write to git/refs") ||
+    API_MERGE_WORDS.find((w) => text.includes(w)) ||
+    (ghWords(args)[1] === "graphql" && args.some((a) => a.startsWith("query=@") || a === "--input" || a.startsWith("--input=")) && "a graphql query the guard can't read");
+  return hit ? { rule: "PG-API-MERGE", short: "PR merge or review through the API", detail: `gh api: ${hit}` } : null;
+}
 
 function ghRule(args) {
-  const [group, verb] = args;
-  if (group === "pr" && verb === "merge") {
+  const [group, verb] = ghWords(args);
+  if (group === "api") return apiRule(args);
+  if (group !== "pr") return null;
+  if (verb === "merge") {
     const flag = args.find((a) => /^--(auto|disable-auto|admin)(=|$)/.test(a));
     return flag
       ? { rule: "PG-AUTOMERGE", short: "PR auto-merge or admin merge", detail: `gh pr merge ${flag}` }
       : { rule: "PG-MERGE", short: "PR merge", detail: "gh pr merge outside the run's pinned, approved merge command" };
   }
-  if (group === "pr" && verb === "review" && args.some((a) => a === "--approve" || a.startsWith("--approve=") || /^-[A-Za-z]*a[A-Za-z]*$/.test(a))) {
+  if (verb === "review" && args.some((a) => a === "--approve" || a.startsWith("--approve=") || /^-[A-Za-z]*a[A-Za-z]*$/.test(a))) {
     return { rule: "PG-APPROVE", short: "PR approval", detail: "gh pr review --approve" };
   }
-  if (group === "pr" && verb === "ready") return { rule: "PG-READY", short: "PR ready", detail: "gh pr ready outside the run's pinned, approved merge command" };
-  if (group === "api") {
-    const text = args.join(" ");
-    const hit = /pulls\/[^/\s]+\/(merge|reviews)\b/.exec(text)?.[0] || API_MERGE_WORDS.find((w) => text.includes(w));
-    if (hit) return { rule: "PG-API-MERGE", short: "PR merge or review through the API", detail: `gh api ${hit}` };
-  }
+  if (verb === "ready") return { rule: "PG-READY", short: "PR ready", detail: "gh pr ready outside the run's pinned, approved merge command" };
   return null;
+}
+
+/** A push to the default or a protected branch, in any repo. The default is origin/HEAD's target; when that can't be resolved, main and master both count. */
+function runPushRule(inv) {
+  const repo = repoAt(inv);
+  if (!(tryGit(repo, ["rev-parse", "--show-toplevel"]) || "").trim()) return null;
+  const head = (tryGit(repo, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]) || "").trim();
+  const defaults = head.startsWith("refs/remotes/origin/") ? [head.slice("refs/remotes/origin/".length)] : ["main", "master"];
+  const globs = loadConventions(repo).conventions?.protected_branches ?? [];
+  const hit = pushPlan(inv, repo)
+    .pairs()
+    .find((p) => p.dst && (defaults.includes(p.dst) || globs.some((g) => globMatch(g, p.dst))));
+  return hit ? { rule: "PG-RUN-PUSH", short: `push to ${hit.dst}`, detail: `git push to ${hit.dst}, the default or a protected branch, while a /pipeline run is open` } : null;
 }
 
 function gitMergeRule(inv) {
@@ -582,6 +638,8 @@ function ask(reason) {
 function pinnedMerge(input, cwd, form, D) {
   const refuse = (rule, detail) => deny({ rule, short: "PR merge", detail }, null);
   if (!topLevelOrchestrator(input)) refuse("PG-MERGE-ROLE", "the pinned merge command runs only from the run's top-level Orchestrator session");
+  // Under bypassPermissions or dontAsk, or with no mode reported, an `ask` may never reach a person.
+  if (!PROMPTING_MODES.has(input.permission_mode)) refuse("PG-MERGE", `permission mode ${input.permission_mode || "unreported"} may not show you the merge prompt`);
   const run = D.liveRun(cwd);
   if (!run) refuse("PG-MERGE", "there is no single open /pipeline run to merge under");
   if (run.constraints["merge-opt-in"] !== "yes") refuse("PG-MERGE", "this run has no auto-merge approval (merge-opt-in is not yes)");
@@ -589,7 +647,8 @@ function pinnedMerge(input, cwd, form, D) {
   const log = D.readDecisions(D.decisionLogPath(run.dir, run.id));
   const { line } = D.decisionSummary(log.decisions, log.skipped);
   const top = (tryGit(cwd, ["rev-parse", "--show-toplevel"]) || "").trim();
-  const origin = top ? (tryGit(top, ["config", "--get", "remote.origin.url"]) || "").trim() : "";
+  // Userinfo in the URL may be a token; it must not reach the prompt or the transcript.
+  const origin = top ? (tryGit(top, ["config", "--get", "remote.origin.url"]) || "").trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1") : "";
   ask(
     `Merge PR #${form.pr} of ${origin || top || cwd} at ${form.sha}${form.draft ? ", marking the draft ready first" : ""} (--${form.method}). ` +
       `/pipeline run ${run.id}, ${line}. Flagged decisions for this PR are in its body under 'Decisions made on your behalf'. ` +
@@ -597,11 +656,22 @@ function pinnedMerge(input, cwd, form, D) {
   );
 }
 
-/** Denies or asks for any merge-type command while a run is open; returns when the command isn't one. */
+const PROMPTING_MODES = new Set(["default", "auto", "acceptEdits"]);
+
+/** Set once mergeGuard has found a run live, so a later failure is denied without asking again. */
+let mergeRunLive = false;
+
+/**
+ * Denies or asks for any merge-type command while a run is open: live for the session's cwd or any
+ * merge-type invocation's own directory. Returns when the command isn't one, or no run is live.
+ */
 async function mergeGuard(input, command, cwd, invs, ghs) {
-  if (!ghs.length && !invs.some((inv) => inv.sub === "merge" || inv.sub === "pull")) return;
+  const gitOps = invs.filter((inv) => inv.sub === "merge" || inv.sub === "pull" || inv.sub === "push");
+  if (!ghs.length && !gitOps.length) return;
   const { pipelineRunLive } = await import("./lib-hier.mjs");
-  if (!pipelineRunLive(cwd)) return;
+  const dirs = [...new Set([cwd, ...ghs.map((g) => g.cwd), ...gitOps.map((inv) => inv.cwd)])];
+  if (!dirs.some((dir) => pipelineRunLive(dir))) return;
+  mergeRunLive = true;
   const D = await import("./lib-decisions.mjs");
   const form = D.parseMergeForm(command);
   if (form) pinnedMerge(input, cwd, form, D);
@@ -609,11 +679,28 @@ async function mergeGuard(input, command, cwd, invs, ghs) {
     const v = ghRule(g.args);
     if (v) deny(v, null);
   }
-  for (const inv of invs) {
-    if (inv.sub !== "merge" && inv.sub !== "pull") continue;
-    const v = gitMergeRule(inv);
+  for (const inv of gitOps) {
+    const v = inv.sub === "push" ? runPushRule(inv) : gitMergeRule(inv);
     if (v) deny(v, null);
   }
+}
+
+/** The raw text names a merge-type command, so the test holds even when parsing threw: `gh` with merge, review, ready or api; `git` with merge, pull or push. */
+const mergeRelated = (c) =>
+  (c.includes("gh") && ["merge", "review", "ready", "api"].some((w) => c.includes(w))) || (c.includes("git") && ["merge", "pull", "push"].some((w) => c.includes(w)));
+
+/** The merge rules threw on a merge-related command: deny while a run is live or liveness is unknown, never ask or allow; stay silent when no run is live. */
+async function mergeError(cwd, err) {
+  let live = mergeRunLive;
+  if (!live) {
+    try {
+      const { pipelineRunLive } = await import("./lib-hier.mjs");
+      live = pipelineRunLive(cwd);
+    } catch {
+      live = true;
+    }
+  }
+  if (live) deny({ rule: "PG-MERGE-ERROR", short: "PR merge or push the guard couldn't check", detail: `the merge rules failed: ${err && err.message ? err.message : String(err)}` }, null);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -685,7 +772,8 @@ async function mergeCheck(argv) {
     if (!run) result(["no-run"]);
     const method = D.MERGE_METHODS.includes(run.constraints["merge-method"]) ? run.constraints["merge-method"] : null;
     const reasons = [];
-    if (run.constraints["merge-opt-in"] !== "yes" || !method) reasons.push("off");
+    if (run.constraints["merge-opt-in"] !== "yes") reasons.push("off");
+    if (!method) reasons.push("no-method");
 
     const view = gh(repo, ["pr", "view", String(pr), "--json", "state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup"]);
     const tag = run.constraints["run-tag"];
@@ -738,8 +826,14 @@ async function main() {
   if (input.tool_name !== "Bash" || !(command.includes("git") || command.includes("gh"))) return;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const ghs = [];
-  const invs = gitInvocations(parseShell(command).events, { cwd, stack: [] }, cwd, [], ghs);
-  await mergeGuard(input, command, cwd, invs, ghs);
+  let invs;
+  try {
+    invs = gitInvocations(parseShell(command).events, { cwd, stack: [] }, cwd, [], ghs);
+    await mergeGuard(input, command, cwd, invs, ghs);
+  } catch (err) {
+    if (mergeRelated(command)) await mergeError(cwd, err);
+    throw err;
+  }
   for (const inv of invs) {
     if (!needsOptIn(inv)) continue;
     const repo = repoAt(inv);

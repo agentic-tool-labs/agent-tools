@@ -224,7 +224,7 @@ export function parseMergeForm(command) {
 
 /** Appends a `merge` line for a pinned merge command that ran: no id, and counted toward nothing. */
 export function appendMergeRecord(path, { pr, sha, method }) {
-  appendLine(path, { kind: "merge", pr, sha, method, time: new Date().toISOString(), approval: "permission prompt" });
+  appendLine(path, { kind: "merge", pr, sha, method, time: new Date().toISOString(), approval: "permission prompt", ran: true });
 }
 
 /** One append of `obj` as a line, led by a newline when the file doesn't end in one (a torn line after a crash), so it never joins the fragment. */
