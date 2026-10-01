@@ -9,9 +9,9 @@
 // errors after it fail closed (PG-ERROR).
 //
 // While a run is open, in any repo, it denies every way the run could merge, approve, ready or
-// auto-merge a PR, `git merge`/`git pull` on the default or a protected branch, and a push to either.
-// If those rules throw on such a command, it denies while a run is live or liveness is unknown
-// (PG-MERGE-ERROR), and stays out of the way otherwise. The one exception
+// auto-merge a PR; no git command is a merge form, and pushes are left to GitHub's branch
+// protection. If those rules throw on a merge form, or it can't tell whether a run is live, it
+// denies (PG-MERGE-ERROR); any other command is never blocked by a guard failure. The one exception
 // is the pinned merge command (lib-decisions.mjs mergeCommand) from the run's top-level Orchestrator
 // in a run that opted into auto-merge: that gets the native permission prompt, so the user's click
 // is the approval.
@@ -21,14 +21,15 @@
 // git, git aliases, non-literal paths, other API clients (curl, hub), gh aliases and extensions all
 // get past it. See docs/pipeline-conventions.md.
 //
-// CLI mode, the same evaluation without a push, and the read-only merge readiness check:
+// CLI mode, the same evaluation without a push, the read-only merge readiness check, and the
+// branch-protection line a run prints at bootstrap:
 //   node pretooluse-push-guard.mjs check --branch <name> --cwd <abs>
 //   node pretooluse-push-guard.mjs merge-check --pr <N> --cwd <abs>
+//   node pretooluse-push-guard.mjs protection --cwd <abs>
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { logHookError, mainHierarchyDir, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
+import { resolve } from "node:path";
+import { logHookError, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
 import { conventionSettings, git, globMatch, globRegExp, loadConventions, refExists, tryGit } from "./lib-conventions.mjs";
 
 // ---------------------------------------------------------------------------------------------
@@ -596,28 +597,6 @@ function ghRule(args) {
   return null;
 }
 
-/** A push to the default or a protected branch, in any repo. The default is origin/HEAD's target; when that can't be resolved, main and master both count. */
-function runPushRule(inv) {
-  const repo = repoAt(inv);
-  if (!(tryGit(repo, ["rev-parse", "--show-toplevel"]) || "").trim()) return null;
-  const head = (tryGit(repo, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]) || "").trim();
-  const defaults = head.startsWith("refs/remotes/origin/") ? [head.slice("refs/remotes/origin/".length)] : ["main", "master"];
-  const globs = loadConventions(repo).conventions?.protected_branches ?? [];
-  const hit = pushPlan(inv, repo)
-    .pairs()
-    .find((p) => p.dst && (defaults.includes(p.dst) || globs.some((g) => globMatch(g, p.dst))));
-  return hit ? { rule: "PG-RUN-PUSH", short: `push to ${hit.dst}`, detail: `git push to ${hit.dst}, the default or a protected branch, while a /pipeline run is open` } : null;
-}
-
-function gitMergeRule(inv) {
-  const repo = repoAt(inv);
-  if (!(tryGit(repo, ["rev-parse", "--show-toplevel"]) || "").trim()) return null;
-  const conv = loadConventions(repo);
-  const name = currentBranch(repo);
-  if (!conv.default || !name || !branchProtected(conv, name)) return null;
-  return { rule: "PG-GIT-MERGE", short: `git ${inv.sub} on ${name}`, detail: `git ${inv.sub} while HEAD is ${name}, the default or a protected branch` };
-}
-
 /**
  * No `agent_id`, and either no `agent_type` with a persisted role that is null or orchestrator, or
  * the `ah:orchestrator` agent itself — matched by name, because resolveHierarchyRole maps only the
@@ -659,61 +638,61 @@ function pinnedMerge(input, cwd, form, D) {
 
 const PROMPTING_MODES = new Set(["default", "auto", "acceptEdits"]);
 
-/**
- * pipelineRunLive for the merge rules, except that a hierarchy dir (or its msgs/) that exists but
- * can't be listed throws: liveness is then unknown, which the rules treat like a live run.
- */
-async function runLive(cwd) {
-  const { hierarchyDir, pipelineRunLive } = await import("./lib-hier.mjs");
-  for (const dir of [hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean)) {
-    for (const d of [dir, join(dir, "msgs")]) if (existsSync(d)) readdirSync(d);
-  }
-  return pipelineRunLive(cwd);
+/** The liveness mergeGuard found ("live", "unknown" or "not"), so a later failure is judged without asking again. */
+let runState = null;
+
+/** Liveness over several directories: live if any is, else unknown if any is, else not. */
+function livenessOf(dirs, D) {
+  const states = dirs.map((dir) => D.runLiveness(dir));
+  return states.includes("live") ? "live" : states.includes("unknown") ? "unknown" : "not";
 }
 
-/** Set once mergeGuard has found a run live, so a later failure is denied without asking again. */
-let mergeRunLive = false;
-
 /**
- * Denies or asks for any merge-type command while a run is open: live for the session's cwd or any
- * merge-type invocation's own directory. Returns when the command isn't one, or no run is live.
+ * Denies or asks for any merge form while a run is live for the session's cwd or any gh
+ * invocation's own directory; no git command is a merge form. Returns when the command has no gh
+ * invocation, or no run is live.
  */
 async function mergeGuard(input, command, cwd, invs, ghs) {
-  const gitOps = invs.filter((inv) => inv.sub === "merge" || inv.sub === "pull" || inv.sub === "push");
-  if (!ghs.length && !gitOps.length) return;
-  const dirs = [...new Set([cwd, ...ghs.map((g) => g.cwd), ...gitOps.map((inv) => inv.cwd)])];
-  const live = [];
-  for (const dir of dirs) live.push(await runLive(dir));
-  if (!live.some(Boolean)) return;
-  mergeRunLive = true;
+  if (!ghs.length) return;
   const D = await import("./lib-decisions.mjs");
+  runState = livenessOf([...new Set([cwd, ...ghs.map((g) => g.cwd)])], D);
+  if (runState === "not") return;
+  if (runState === "unknown") throw new Error("whether a /pipeline run is live can't be determined");
   const form = D.parseMergeForm(command);
   if (form) pinnedMerge(input, cwd, form, D);
   for (const g of ghs) {
     const v = ghRule(g.args);
     if (v) deny(v, null);
   }
-  for (const inv of gitOps) {
-    const v = inv.sub === "push" ? runPushRule(inv) : gitMergeRule(inv);
-    if (v) deny(v, null);
-  }
 }
 
-/** The raw text names a merge-type command, so the test holds even when parsing threw: `gh` with merge, review, ready or api; `git` with merge, pull or push. */
-const mergeRelated = (c) =>
-  (c.includes("gh") && ["merge", "review", "ready", "api"].some((w) => c.includes(w))) || (c.includes("git") && ["merge", "pull", "push"].some((w) => c.includes(w)));
+/**
+ * Whether the raw text is a merge form, without a full parse, so the test holds even when parsing
+ * threw: a gh merge, approval or ready, or a gh api call that could merge. Reads and git never are.
+ */
+function mergeForm(c) {
+  if (!/\bgh\b/.test(c)) return false;
+  const repoFlags = String.raw`(?:(?:-R\s*\S+|--repo(?:=|\s+)\S+)\s+)*`;
+  const prVerb = (verb) => new RegExp(String.raw`\bpr\s+${repoFlags}${verb}\b`).test(c);
+  if (prVerb("merge") || prVerb("ready")) return true;
+  if (prVerb("review") && /(--approve\b|\s-[A-Za-z]*a[A-Za-z]*(\s|$))/.test(c)) return true;
+  return (
+    /\bapi\b/.test(c) &&
+    /pulls\/[^\s/]+\/(merge|reviews)\b|\/merges\b|git\/refs|query=@|--input\b/.test(c)
+  ) || (/\bapi\b/.test(c) && API_MERGE_WORDS.some((w) => c.includes(w)));
+}
 
-/** The merge rules threw on a merge-related command: deny while a run is live or liveness is unknown, never ask or allow; stay silent when no run is live. */
+/** The merge rules threw on a merge form: deny while a run is live or liveness is unknown, never ask or allow; stay silent when no run is live. */
 async function mergeError(cwd, err) {
-  let live = mergeRunLive;
+  let live = runState;
   if (!live) {
     try {
-      live = await runLive(cwd);
+      live = livenessOf([cwd], await import("./lib-decisions.mjs"));
     } catch {
-      live = true;
+      live = "unknown";
     }
   }
-  if (live) deny({ rule: "PG-MERGE-ERROR", short: "PR merge or push the guard couldn't check", detail: `the merge rules failed: ${err && err.message ? err.message : String(err)}` }, null);
+  if (live !== "not") deny({ rule: "PG-MERGE-ERROR", short: "PR merge the guard couldn't check", detail: `the merge rules failed: ${err && err.message ? err.message : String(err)}` }, null);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -833,6 +812,41 @@ async function mergeCheck(argv) {
   }
 }
 
+/**
+ * Read-only: one line saying whether GitHub stops a push or a merge to the default branch (branch
+ * protection, or a ruleset with a pull_request rule). Never blocks, writes nothing, always exits 0.
+ */
+function protection(argv) {
+  const k = argv.indexOf("--cwd");
+  const cwd = k >= 0 && argv[k + 1] ? argv[k + 1] : process.cwd();
+  const say = (text) => {
+    process.stdout.write(`${text}\n`);
+    process.exit(0);
+  };
+  const brief = (err) => String((err && (err.stderr || err.message)) || err).trim().split("\n")[0] || "unknown error";
+  let name = "the default branch";
+  try {
+    const repo = (tryGit(cwd, ["rev-parse", "--show-toplevel"]) || "").trim();
+    if (!repo) say(`Branch protection on ${name}: unknown (not a git repository).`);
+    const def = loadConventions(repo).default;
+    if (!def) say(`Branch protection on ${name}: unknown (no origin default branch).`);
+    name = `\`${def.branch}\``;
+    let branch;
+    let rules;
+    try {
+      branch = gh(repo, ["api", `repos/{owner}/{repo}/branches/${def.branch}`]);
+      if (branch && branch.protected === true) say(`Branch protection on ${name}: on.`);
+      rules = gh(repo, ["api", `repos/{owner}/{repo}/rules/branches/${def.branch}`]);
+    } catch (err) {
+      say(`Branch protection on ${name}: unknown (${brief(err)}).`);
+    }
+    if (Array.isArray(rules) && rules.some((r) => r && r.type === "pull_request")) say(`Branch protection on ${name}: on.`);
+    say(`Branch protection on ${name}: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section.`);
+  } catch (err) {
+    say(`Branch protection on ${name}: unknown (${brief(err)}).`);
+  }
+}
+
 async function main() {
   const input = await readHookInput();
   const command = input.tool_input && typeof input.tool_input.command === "string" ? input.tool_input.command : "";
@@ -844,7 +858,7 @@ async function main() {
     invs = gitInvocations(parseShell(command).events, { cwd, stack: [] }, cwd, [], ghs);
     await mergeGuard(input, command, cwd, invs, ghs);
   } catch (err) {
-    if (mergeRelated(command)) await mergeError(cwd, err);
+    if (mergeForm(command)) await mergeError(cwd, err);
     throw err;
   }
   for (const inv of invs) {
@@ -860,6 +874,7 @@ async function main() {
 
 if (process.argv[2] === "check") check(process.argv.slice(3));
 else if (process.argv[2] === "merge-check") await mergeCheck(process.argv.slice(3));
+else if (process.argv[2] === "protection") protection(process.argv.slice(3));
 else {
   try {
     await main();

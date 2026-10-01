@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // agent-hierarchy — gate/matcher agreement check (spec 0042 §4 item 4, re-keyed by 0048 §2.4.5).
 // The ah CLIs are invoked through the Bash tool, so "agreement" now means: every PreToolUse gate
-// that keys on a parsed ah command is wired on the `Bash` matcher, no matcher mentions an MCP tool
-// name any more, and each gate's VERB SET is exactly the set its spec section names. The verb sets
+// that keys on a parsed ah command is wired on the `Bash` matcher, no matcher but the GitHub MCP merge
+// rule's mentions an MCP tool name any more, and each gate's VERB SET is exactly the set its spec
+// section names. The verb sets
 // are the thing that drifts — a verb added to a gate's body but not to the spec list, or a gate
 // quietly narrowed — and that drift is what shipped the disband-close gate inert once already
 // (0042 §1.6). Assert it structurally, don't trust it.
@@ -56,7 +57,9 @@ function rulesFor(hookFile) {
 let fail = false;
 
 for (const rule of HOOKS_JSON.hooks.PreToolUse || []) {
-  if (typeof rule.matcher === "string" && rule.matcher.includes("mcp__")) {
+  // The one exemption: the GitHub MCP merge rule, which reads third-party tool names, never ah's own.
+  const githubMergeRule = (rule.hooks || []).length > 0 && rule.hooks.every((h) => typeof h.command === "string" && h.command.includes("hooks/pretooluse-mcp-guard.mjs"));
+  if (typeof rule.matcher === "string" && rule.matcher.includes("mcp__") && !githubMergeRule) {
     console.log(`FAIL: PreToolUse matcher still names MCP tools: ${rule.matcher}`);
     fail = true;
   }

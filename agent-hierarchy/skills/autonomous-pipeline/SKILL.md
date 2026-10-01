@@ -116,7 +116,10 @@ Seven steps, in order:
 5. **Run the push pre-flight checks** — both guards, before any work starts
    (§ Push regime). Their result (clean vs. degraded) is also one of the
    five run-start-notification facts. Finding out at the first push is
-   finding out too late.
+   finding out too late. Also run the branch-protection check, in every run:
+   `node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs protection --cwd <root>`.
+   It is read-only, prints one line (on, OFF, or unknown), and never blocks;
+   keep the line for the run-start notification.
 6. **Write the run anchor** (§ Push regime's "run anchor" subsection) — the
    durable branch record. This step is what makes the per-push
    re-derivation possible; without it, the re-derive rule has nothing to
@@ -802,6 +805,13 @@ completes, in every run, plan and issues alike, naming all five:
    `.claude/ah-conventions.json`, also "guards: prose only (no conventions
    baseline)".
 
+Every run-start notification also carries the branch-protection check's
+line (§ Bootstrap step 5), copied exactly, never paraphrased:
+"Branch protection on `<default>`: on.", or
+"Branch protection on `<default>`: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section.", or
+"Branch protection on `<default>`: unknown (<reason>).". The run goes on
+whatever it says.
+
 **The channel, for every notification in this skill:** the
 `PushNotification` tool. When it is deferred, load it through ToolSearch
 first. If the session has no such tool, the same text goes in the session
@@ -997,14 +1007,22 @@ cover:
   secrets;
 - an adversarial model evading the guard, which matches command text only
   (known gaps: `docs/pipeline-conventions.md`, "What it cannot stop");
-- merging, approving or readying a PR around the guard's merge rules
-  (§ Merge on your approval), which match command text only: `curl` and
-  other API clients, `hub`, `gh` aliases and extensions; commands launched
-  by `xargs` or `find -exec`, which the guard's parser doesn't unwrap; a
-  local `git merge` after a `git checkout` or `git switch` to the default
-  branch in the same command, since `PG-GIT-MERGE` keys on HEAD when the
-  command starts (pushing that merge is still `PG-RUN-PUSH`); and any other
-  evasion of command-text matching;
+- getting around the merge rules (§ Merge on your approval). They are a
+  speed bump, not a sandbox: they read each command's text and each GitHub
+  MCP tool call before it runs, so they stop a model that follows this
+  skill from merging, approving or readying a PR by mistake, and nothing
+  more. Not covered: `curl` and other API clients, `hub`, and `gh` aliases
+  and extensions; scripts and interpreters; commands launched by `xargs` or
+  `find -exec`, which the guard's parser doesn't unwrap; MCP servers
+  without `github` in their name; and other ways to land on the default
+  branch: pushes, Contents API commits, `merge-upstream`. The real boundary
+  is on GitHub. Pushes: branch protection or a ruleset on the default
+  branch that requires a pull request, with no bypass for the run's token
+  (an admin bypass is for humans only), stops direct pushes, ref writes and
+  Contents API commits by any route; the run-start notification says
+  whether it is on. Merges: a hard wall only when the run uses its own bot
+  or GitHub App identity that can't merge without the user's approving
+  review; setting that up is the user's call;
 - tracker writes, which only prose governs.
 
 The user chose unattended as the default over making degraded mode the
@@ -1365,12 +1383,14 @@ Only in a run with `merge-opt-in: yes` (step 3b). Merging stays the user's:
 it is never classified, decided, or logged as `decided` (§ Decisions on the
 user's behalf). The push guard denies every other way the run could merge,
 approve, ready or auto-merge a PR, from the anchor's writing to its close,
-and a push to the default or a protected branch in any repo
-(`PG-RUN-PUSH`). If its own check fails on such a command while the run is
-live, it denies that too (`PG-MERGE-ERROR`). Any such `ah-push-guard:*`
-deny halts the run (§ Per-item execution). The pinned command gets its
-prompt only in the `default`, `auto` or `acceptEdits` permission mode,
-since another mode might never show it to you.
+in any repo: through `gh`, `gh api`, or a GitHub MCP tool that merges,
+approves or readies (`PG-MCP-MERGE`). No `git` command is a merge form for
+it; pushes are GitHub's to stop. If its own check fails on a merge form, or
+it can't tell whether the run is live, it denies that too
+(`PG-MERGE-ERROR`). Any such `ah-push-guard:*` deny halts the run
+(§ Per-item execution). The pinned command gets its prompt only in the
+`default`, `auto` or `acceptEdits` permission mode, since another mode
+might never show it to you.
 
 **The merge point is once only, at the end of the run:** after § Degraded
 approval when there is one, and before the final message. Never mid-run: a
@@ -1458,8 +1478,9 @@ interruption.
 - No hook of its own. The only hooks added since spec 0028 are the push
   guard, active for every session in an opted-in repo, enforcing push
   rules this skill already states, and, while a run is open in any repo,
-  its merge rules (§ Merge on your approval); and the PostToolUse record
-  that logs each approved merge. Issue runs require the push guard for
+  its merge rules (§ Merge on your approval); the GitHub MCP merge rule
+  (`hooks/pretooluse-mcp-guard.mjs`), the same rules for GitHub MCP tool
+  calls; and the PostToolUse record that logs each approved merge. Issue runs require the push guard for
   unattended mode; plan/spec runs need nothing beyond 0028.
 - No change to `msg.mjs list`'s row shape, no new frontmatter key, and no
   change to the injected state block's cap or fields.

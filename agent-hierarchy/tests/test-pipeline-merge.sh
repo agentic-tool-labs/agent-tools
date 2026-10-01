@@ -1,7 +1,8 @@
 #!/bin/bash
 # agent-hierarchy — the /pipeline merge guard and auto-merge: the push guard's merge rules while a run
-# is open, the pinned merge command's permission prompt and its caller check, merge-check against a
-# fake gh, the PostToolUse merge record, pr.merge_method, and the skill text that drives it.
+# is open, the GitHub MCP merge rule, the pinned merge command's permission prompt and its caller
+# check, merge-check and the branch-protection check against a fake gh, the PostToolUse merge record,
+# pr.merge_method, and the skill text that drives it.
 # HOME-redirected; every repo lives in a throwaway sandbox.
 # Usage: bash tests/test-pipeline-merge.sh   (exits 0 iff all cases pass)
 
@@ -99,8 +100,6 @@ G1=(
   "PG-API-MERGE|gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'"
   "PG-API-MERGE|gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"x\"}) { clientMutationId } }'"
   "PG-API-MERGE|gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: \"x\"}) { clientMutationId } }'"
-  "PG-GIT-MERGE|git merge x"
-  "PG-GIT-MERGE|git pull"
   "PG-MERGE|env X=1 gh pr merge 7"
   "PG-MERGE|bash -c \"gh pr merge 7\""
   "PG-MERGE|(cd sub && gh pr merge 7)"
@@ -118,6 +117,9 @@ G1=(
   "PG-API-MERGE|gh api graphql -Fquery=@q.graphql"
   "PG-API-MERGE|gh api graphql --field=query=@q.graphql"
   "PG-API-MERGE|gh api graphql --raw-field=query=@q.graphql"
+  "PG-API-MERGE|gh api graphql --input q.json"
+  "PG-API-MERGE|gh api graphql --input=q.json"
+  "PG-READY|gh -R o/r pr ready 7"
 )
 for row in "${G1[@]}"; do
   RULE=${row%%|*} CMD=${row#*|}
@@ -130,22 +132,6 @@ guard "gh api repos/o/r/git/refs/heads/main"
 check "G1 a GET of git/refs passes during a run" 'allowed'
 guard "cd $REPO && gh pr merge 7" '{}' "$SANDBOX"
 check "G1 from a session outside the repo, cd into the run's repo then merge → PG-MERGE" 'denied PG-MERGE'
-
-# ---------------------------------------------------------------- G1b push during a run, repo not opted in
-guard "git push origin ah/issue-5:main"
-check "G1b a push to the default branch during a run → PG-RUN-PUSH" 'denied PG-RUN-PUSH'
-git -C "$REPO" remote set-head origin -d
-guard "git push origin HEAD:master"
-check "G1b with no origin/HEAD, a push to master → PG-RUN-PUSH" 'denied PG-RUN-PUSH'
-guard "git push origin HEAD:main"
-check "G1b with no origin/HEAD, a push to main → PG-RUN-PUSH" 'denied PG-RUN-PUSH'
-git -C "$REPO" remote set-head origin main
-guard "git push origin ah/issue-5"
-check "G1b a push of the item's own branch passes" 'allowed'
-git -C "$REPO" checkout -q -b feat
-guard "git merge x"
-check "G1 git merge on the run's own branch passes" 'allowed'
-git -C "$REPO" checkout -q main
 
 # ---------------------------------------------------------------- G2 no run, no effect
 rm -rf "$REPO/.claude/hierarchy"
@@ -223,35 +209,137 @@ rm -f "$HOME/.claude/agent-hierarchy.session-roles.json"
 guard "$PIN" '{ agent_type: "general-purpose" }'
 check "G5 a non-ah agent_type → PG-MERGE-ROLE" 'denied PG-MERGE-ROLE'
 
-# ---------------------------------------------------------------- G6 fail closed on error
+# ---------------------------------------------------------------- G6 fail closed on merge forms only
 anchor yes
 mkdir -p "$LOG"
 guard "$PIN"
 check "G6 the pinned form with the decision log unreadable → PG-MERGE-ERROR, never ask" 'denied PG-MERGE-ERROR'
 rm -rf "$LOG"
-# A copy of the hooks whose pipelineRunLive throws.
+# A copy of the hooks whose runLiveness throws.
 mkdir -p "$SANDBOX/stub"
 cp -R "$PLUGIN/hooks" "$SANDBOX/stub/hooks"
-perl -0pi -e 's/(export function pipelineRunLive\(cwd\) \{\n)/$1  throw new Error("stubbed liveness failure");\n/' "$SANDBOX/stub/hooks/lib-hier.mjs"
+perl -0pi -e 's/(export function runLiveness\(cwd\) \{\n)/$1  throw new Error("stubbed liveness failure");\n/' "$SANDBOX/stub/hooks/lib-decisions.mjs"
+grep -q 'stubbed liveness failure' "$SANDBOX/stub/hooks/lib-decisions.mjs" || { echo "G6 stub didn't apply"; exit 1; }
 GUARD="$SANDBOX/stub/hooks/pretooluse-push-guard.mjs"
 guard "gh pr merge 7"
-check "G6 a merge-related command when liveness throws → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR && [[ "$(reason)" == *"stubbed liveness failure"* ]]'
-guard "git push origin ah/issue-5:main"
-check "G6 a push when liveness throws → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR'
-guard "gh pr view 7"
-check "G6 a gh command that isn't merge-related, same throw → no output" 'allowed'
-guard "ls"
-check "G6 ls, same throw → no output" 'allowed'
+check "G6 a merge form when liveness throws → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR && [[ "$(reason)" == *"stubbed liveness failure"* ]]'
+for CMD in "ls" "git push origin ah/issue-5" "git push origin HEAD:main" "git merge x" "gh pr view 7" "gh pr view 7 --json mergeable" "gh pr list --search merge" "gh pr checks 7" "gh api repos/o/r/pulls/7"; do
+  guard "$CMD"
+  check "G6 not a merge form, same throw → no output — $CMD" 'allowed'
+done
+# A second copy whose command parser throws, so every command reaches the error path with a run live.
+mkdir -p "$SANDBOX/stub2"
+cp -R "$PLUGIN/hooks" "$SANDBOX/stub2/hooks"
+perl -0pi -e 's/(\nfunction gitInvocations\(events, state, root, out = \[\], ghOut = \[\]\) \{\n)/$1  throw new Error("stubbed parse failure");\n/' "$SANDBOX/stub2/hooks/pretooluse-push-guard.mjs"
+grep -q 'stubbed parse failure' "$SANDBOX/stub2/hooks/pretooluse-push-guard.mjs" || { echo "G6 parser stub didn't apply"; exit 1; }
+GUARD="$SANDBOX/stub2/hooks/pretooluse-push-guard.mjs"
+for CMD in "gh pr merge 7" "gh pr review 7 --approve" "gh pr ready 7" "gh api -X PUT repos/o/r/pulls/7/merge" "gh api graphql -F query=@q.graphql" "$PIN"; do
+  guard "$CMD"
+  check "G6 a merge form when the parser throws → PG-MERGE-ERROR — $CMD" 'denied PG-MERGE-ERROR && [[ "$(reason)" == *"stubbed parse failure"* ]]'
+done
+for CMD in "git merge x" "git pull" "git push origin HEAD:main" "git checkout main && git merge ah/issue-5 && git push" "gh pr view 7" "gh pr view 7 --json mergeable" "gh pr list --search merge" "gh pr checks 7" "gh api repos/o/r/pulls/7"; do
+  guard "$CMD"
+  check "G6 not a merge form, parser throws → no output — $CMD" 'allowed'
+done
 unset GUARD
-chmod 000 "$REPO/.claude/hierarchy"
-guard "gh pr merge 7"
-check "G6 an unreadable hierarchy dir is unknown liveness: a merge → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR'
-guard "gh pr view 7"
-check "G6 ... while a gh command that isn't merge-related passes" 'allowed'
-chmod 755 "$REPO/.claude/hierarchy"
+for dir in "$REPO/.claude/hierarchy" "$REPO/.claude"; do
+  chmod 000 "$dir"
+  guard "gh pr merge 7"
+  check "G6 ${dir#$SANDBOX/} unreadable is unknown liveness: a merge → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR'
+  guard "gh pr view 7"
+  check "G6 ... while a read passes" 'allowed'
+  chmod 755 "$dir"
+done
 rm -rf "$REPO/.claude/hierarchy"
 guard "$PIN"
 check "G6 no run live → no output" 'allowed'
+
+# ---------------------------------------------------------------- G7 GitHub MCP tools
+MCP="$PLUGIN/hooks/pretooluse-mcp-guard.mjs"
+mcp() { # <tool name> [js object of tool input]: the MCP guard's answer in OUT; MGUARD overrides the hook.
+  OUT=$(node -e '
+    const [d, n, x] = process.argv.slice(1);
+    process.stdout.write(JSON.stringify({ session_id: "s", hook_event_name: "PreToolUse", cwd: d, permission_mode: "auto", tool_name: n, tool_input: (new Function("return (" + (x || "{}") + ")"))() }));
+  ' "$REPO" "$1" "$2" | node "${MGUARD:-$MCP}" 2>&1); RC=$?
+}
+G7_DENY=(
+  'mcp__plugin_github-pr-toolkit_github__merge_pull_request|{ owner: "o", repo: "r", pullNumber: 7 }'
+  'mcp__github__merge_pull_request|{ owner: "o", repo: "r", pullNumber: 7, merge_method: "squash" }'
+  'mcp__GitHub__merge_pull_request|{ pullNumber: 7 }'
+  'mcp__github__pull_request_review_write|{ method: "create", pullNumber: 7, event: "APPROVE" }'
+  'mcp__github__submit_pending_pull_request_review|{ review: { event: "approve" } }'
+  'mcp__github__update_pull_request|{ pullNumber: 7, draft: false }'
+)
+G7_PASS=(
+  'mcp__github__pull_request_review_write|{ method: "create", pullNumber: 7, event: "COMMENT", body: "approve this?" }'
+  'mcp__github__update_pull_request|{ pullNumber: 7, title: "x" }'
+  'mcp__github__update_pull_request|{ pullNumber: 7, draft: true }'
+  'mcp__github__create_pull_request|{ title: "x", head: "ah/issue-5", base: "main" }'
+  'mcp__github__pull_request_read|{ method: "get", pullNumber: 7 }'
+  'mcp__blender__get_scene_info|{}'
+  'mcp__blender__merge_objects|{ event: "APPROVE" }'
+)
+anchor yes
+for row in "${G7_DENY[@]}"; do
+  mcp "${row%%|*}" "${row#*|}"
+  check "G7 during a run: deny PG-MCP-MERGE — $row" 'denied PG-MCP-MERGE'
+done
+for row in "${G7_PASS[@]}"; do
+  mcp "${row%%|*}" "${row#*|}"
+  check "G7 during a run: no output — $row" 'allowed'
+done
+MGUARD="$SANDBOX/stub/hooks/pretooluse-mcp-guard.mjs"
+mcp mcp__github__merge_pull_request '{ pullNumber: 7 }'
+check "G7 a merge tool when liveness throws → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR && [[ "$(reason)" == *"stubbed liveness failure"* ]]'
+mcp mcp__github__pull_request_read '{ pullNumber: 7 }'
+check "G7 a read, same throw → no output" 'allowed'
+unset MGUARD
+chmod 000 "$REPO/.claude/hierarchy"
+mcp mcp__github__merge_pull_request '{ pullNumber: 7 }'
+check "G7 an unreadable hierarchy dir: a merge tool → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR'
+chmod 755 "$REPO/.claude/hierarchy"
+rm -rf "$REPO/.claude/hierarchy"
+for row in "${G7_DENY[@]}"; do
+  mcp "${row%%|*}" "${row#*|}"
+  check "G7 no open run: no output — $row" 'allowed'
+done
+
+# ---------------------------------------------------------------- G8 no git command is denied by a run rule
+G8=(
+  "git push origin HEAD:main"
+  "git push origin ah/issue-5:main"
+  "git push --all origin"
+  "git checkout main && git merge ah/issue-5 && git push"
+  "git merge x"
+  "git pull"
+)
+anchor yes
+for CMD in "${G8[@]}"; do
+  guard "$CMD"
+  check "G8 during a run, repo not opted in: no output — $CMD" 'allowed'
+done
+git -C "$REPO" remote set-head origin -d
+for CMD in "git push origin HEAD:main" "git push origin HEAD:master"; do
+  guard "$CMD"
+  check "G8 ... and with no origin/HEAD — $CMD" 'allowed'
+done
+git -C "$REPO" remote set-head origin main
+mkrepo g8 '{"version":1}'
+G8R="$SANDBOX/g8"
+NORUN=()
+for CMD in "${G8[@]}" "git push --force origin ah/issue-5" "git push origin ah/issue-5"; do
+  guard "$CMD" '{}' "$G8R"; NORUN+=("$RC|$OUT")
+done
+REPO="$G8R" anchor yes
+i=0
+for CMD in "${G8[@]}" "git push --force origin ah/issue-5" "git push origin ah/issue-5"; do
+  guard "$CMD" '{}' "$G8R"
+  check "G8 opted-in repo: the push rules answer the same with a run open — $CMD" '[ "$RC|$OUT" = "${NORUN[$i]}" ]'
+  i=$((i+1))
+done
+check "G8 ... and they do deny a push to the default branch" '[[ "${NORUN[0]}" == *"permissionDecision\":\"deny"* ]]'
+rm -rf "$G8R/.claude/hierarchy"
+anchor yes
 
 # ---------------------------------------------------------------- C1 merge-check
 mkdir -p "$SANDBOX/bin" "$SANDBOX/fix"
@@ -265,6 +353,8 @@ const send = (f) => {
 if (a[0] === "pr" && a[1] === "view") send(`view-${a[2]}.json`);
 else if (a[0] === "pr" && a[1] === "list") send(`list-${a[a.indexOf("--head") + 1].replace(/\//g, "_")}.json`);
 else if (a[0] === "api" && a[1] === "graphql") send(`threads-${a.find((x) => x.startsWith("number=")).slice(7)}.json`);
+else if (a[0] === "api" && a[1].includes("/rules/branches/")) send("rules.json");
+else if (a[0] === "api" && a[1].includes("/branches/")) send("branch.json");
 else process.exit(1);
 EOF
 chmod +x "$SANDBOX/bin/gh"
@@ -361,6 +451,37 @@ item_run
 mc '' 't.totalCount = 101'
 check "C1 more than 100 threads → unresolved-threads" 'has_reason unresolved-threads'
 
+# ---------------------------------------------------------------- P1 branch-protection check
+prot() { # [cwd]
+  OUT=$(PATH="$SANDBOX/bin:$PATH" FAKE_GH_DIR="$FIX" node "$HOOK" protection --cwd "${1:-$REPO}" 2>&1); RC=$?
+}
+OFF_LINE="Branch protection on \`main\`: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section."
+BEFORE=$(snap)
+printf '{"name":"main","protected":true}' > "$FIX/branch.json"
+rm -f "$FIX/rules.json"
+prot
+check "P1 a protected default branch → on" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on \`main\`: on." ]'
+printf '{"name":"main","protected":false}' > "$FIX/branch.json"
+printf '[{"type":"deletion"},{"type":"pull_request","parameters":{}}]' > "$FIX/rules.json"
+prot
+check "P1 not protected, but a ruleset requires a pull request → on" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on \`main\`: on." ]'
+printf '[{"type":"deletion"}]' > "$FIX/rules.json"
+prot
+check "P1 no pull-request rule → the OFF line, exit 0" '[ "$RC" = 0 ] && [ "$OUT" = "$OFF_LINE" ]'
+printf '[]' > "$FIX/rules.json"
+prot
+check "P1 no rules at all → the OFF line" '[ "$RC" = 0 ] && [ "$OUT" = "$OFF_LINE" ]'
+rm -f "$FIX/rules.json"
+prot
+check "P1 gh failing on the rules → unknown, exit 0" '[ "$RC" = 0 ] && [[ "$OUT" == "Branch protection on \`main\`: unknown ("*")." ]]'
+rm -f "$FIX/branch.json"
+prot
+check "P1 gh failing on the branch → unknown, exit 0" '[ "$RC" = 0 ] && [[ "$OUT" == "Branch protection on \`main\`: unknown ("*")." ]]'
+prot "$SANDBOX/home"
+check "P1 outside a git repo → unknown, exit 0" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on the default branch: unknown (not a git repository)." ]'
+AFTER=$(snap)
+check "P1 the check writes no file" '[ "$AFTER" = "$BEFORE" ]'
+
 # ---------------------------------------------------------------- R1 the merge record
 anchor yes
 post() { # <command>
@@ -412,10 +533,21 @@ kanchor 'listed as "merged outside the run", and never counted as merged under y
 kanchor 'never from this line or from memory'
 kanchor 'A PR with a `merge` line that GitHub shows MERGED at the line'"'"'s sha is listed here'
 kanchor 'for a `merge` line GitHub doesn'"'"'t show merged at that sha, "head moved or merge refused"'
-kanchor '(`PG-RUN-PUSH`)'
+kanchor '(`PG-MCP-MERGE`)'
+kanchor 'No `git` command is a merge form for it; pushes are GitHub'"'"'s to stop.'
 kanchor '(`PG-MERGE-ERROR`)'
 kanchor 'commands launched by `xargs` or `find -exec`, which the guard'"'"'s parser doesn'"'"'t unwrap'
-kanchor 'a local `git merge` after a `git checkout` or `git switch` to the default branch in the same command'
+kanchor 'They are a speed bump, not a sandbox'
+kanchor 'MCP servers without `github` in their name'
+kanchor 'Pushes: branch protection or a ruleset on the default branch that requires a pull request, with no bypass for the run'"'"'s token (an admin bypass is for humans only)'
+kanchor 'Merges: a hard wall only when the run uses its own bot or GitHub App identity that can'"'"'t merge without the user'"'"'s approving review'
+kanchor '`node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs protection --cwd <root>`'
+kanchor '"Branch protection on `<default>`: on.", or'
+kanchor '"Branch protection on `<default>`: OFF — GitHub won'"'"'t stop a push or a merge to it. See the README'"'"'s /pipeline section.", or'
+kanchor '"Branch protection on `<default>`: unknown (<reason>).". The run goes on whatever it says.'
+for f in "$SKILL" "$PLUGIN/docs/cli-tools.md"; do
+  check "K no removed rule named in ${f#$PLUGIN/}" '! grep -qE "PG-RUN-PUSH|PG-GIT-MERGE" "$f"'
+done
 
 echo
 echo "SUMMARY: $PASS passed, $FAIL failed"

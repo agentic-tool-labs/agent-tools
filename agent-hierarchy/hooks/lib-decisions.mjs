@@ -6,7 +6,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 
 import { mainHierarchyDir } from "./lib-config.mjs";
@@ -264,4 +264,33 @@ export function readDecisionInput(dir, runId, inputPath) {
   } catch (err) {
     return { error: `--input ${real} must hold one JSON object (${err.message})` };
   }
+}
+
+/** Lists `dir`: true when listed, false when it provably doesn't exist; any other error throws. */
+function listable(dir) {
+  try {
+    readdirSync(dir);
+    return true;
+  } catch (err) {
+    if (err && err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/**
+ * Whether a run is live for `cwd`, as the merge rules need it: "live" (an open run anchor in its
+ * hierarchy dir, from a worktree the main checkout's too), "not" (each dir provably absent, or listed
+ * with its msgs/ and holding no open anchor), or "unknown" (anything else, a throw included).
+ * existsSync can't decide "not": it answers false for a path it can't read.
+ */
+export function runLiveness(cwd) {
+  try {
+    for (const dir of [...new Set([hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean))]) {
+      if (!listable(dir) || !listable(join(dir, "msgs"))) continue;
+      if (openExchanges(dir).some((e) => e.slug === PIPELINE_ANCHOR_SLUG)) return "live";
+    }
+  } catch {
+    return "unknown";
+  }
+  return "not";
 }

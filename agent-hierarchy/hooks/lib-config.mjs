@@ -1769,7 +1769,7 @@ export const UNATTENDED_LINE = "takes work in unattended /ah:pipeline runs (push
 const FLAGGED_TOOLS = ["Bash", "Agent", "Write", "Edit"];
 /** The name prefix Claude Code gives a tool an MCP server provides. The no-MCP check exempts this
     one line, by its exact text, so every MCP-tool check must go through it. */
-const MCP_TOOL_PREFIX = "mcp__";
+export const MCP_TOOL_PREFIX = "mcp__";
 export const PIN_RE = /^sha256:[0-9a-f]{64}$/;
 const FROM_RE = /^([A-Za-z0-9][A-Za-z0-9_.-]*)(?:@([^:@\s]+))?:([^:@\s]+)$/;
 /** A word YAML (1.1 or 1.2) reads as null or a boolean rather than a string, in any case. */
