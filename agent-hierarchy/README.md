@@ -438,6 +438,58 @@ More:
 [docs/getting-started.md](./docs/getting-started.md#5-spawning-a-team),
 [docs/troubleshooting.md](./docs/troubleshooting.md#several-owned-teams).
 
+## `/pipeline`: run a plan or issues to completion
+
+`/pipeline` (`/ah:pipeline` where the plugin name is needed) works through a
+list of items unattended. Each item goes through Architect, Implementor and
+Reviewer; the Reviewer takes item N while the Implementor starts N+1. An item
+gets at most 3 rounds. If it is still failing after the third, the run stops
+that item and tells you, rather than starting a fourth.
+
+After the first notice (branch, route, permission mode, secret scanner) it
+only interrupts you when something needs a person: a round cap, a real
+blocker, an Ultra-Advisor escalation, a red build, a secret-scan finding or a
+halted push. **It never merges.** Issue runs push an `ah/issue-<N>` branch per
+issue (dependent issues stack on the branch they depend on) and open a draft
+PR that says `Refs #N` or `Closes #N`; you review and merge. Before every push
+it scans the patch for secrets, with gitleaks if installed, otherwise with the
+`ah:secret-scanner` agent, and it stops on a finding.
+
+    /pipeline docs/plans/search.md                   # a plan or spec file, run item by item
+    /pipeline docs/plans/search.md --branch feat/search   # …on a branch you name
+    /pipeline 12 14                                  # GitHub issues 12 and 14
+    /pipeline #12 https://github.com/acme/app/issues/14   # refs may be #N or an issue URL
+    /pipeline --labelled                             # every open issue carrying the trigger label
+
+A file and issue refs can't be mixed, and `--branch` doesn't apply to issue
+runs. A bare number is an issue; write `./12` for a file named `12`. For a
+list of acceptance criteria, put it in a file and pass the path.
+
+**Who does the work.** The run builds its team itself with `roster.mjs
+create`, so no team has to exist first, and the roster is chosen as in
+[Named rosters](#named-rosters): `--roster`, then `AH_ROSTER`, then
+`activeRoster`, then the default block. Select a roster before you start
+(`/agent-roster use docs`, or launch the session with `AH_ROSTER=docs`). The
+route is peer sessions unless you asked for subagents.
+
+**Pack roles.** A role adopted from a [role pack](#role-packs-roles-from-someone-elses-plugin)
+may take implementation work in a run, and is never launched with permission
+checks off. The Reviewer and designer slots stay first-party: a pack Reviewer or
+designer is refused while a run is open, and a run halts before starting if a
+pack overrides the built-in Reviewer or Architect. Adopting or trusting a pack
+role is refused while a run is live.
+
+**Before you start.** The session must be in `--permission-mode auto`. Issue
+runs also need `gh` installed and logged in to github.com, a GitHub `origin`,
+and a `.claude/ah-conventions.json` that sets `issues.trigger_label` (plus
+`trusted_actors` for an organisation's repo). The same file can switch on the
+push guard, which refuses force pushes, protected branches, other remotes and
+`--no-verify`. Run state lives in the gitignored `.claude/hierarchy/`; a stale
+open run anchor there makes the next run halt. Everything the conventions file
+accepts is in [docs/pipeline-conventions.md](./docs/pipeline-conventions.md);
+the full run procedure is
+[skills/autonomous-pipeline/SKILL.md](./skills/autonomous-pipeline/SKILL.md).
+
 ## Commands
 
 ```
@@ -466,7 +518,8 @@ afterwards is `/agent-roster`, and starting it in a live team is `/agent-team`.
 `/pipeline` takes a plan, a spec, or a list of acceptance criteria and runs it
 to completion by itself: round after round of Architect, Implementor, and
 Reviewer, with a hard cap on escalations and as few check-ins with you as it
-can manage.
+can manage. How to use it:
+[`/pipeline`](#pipeline-run-a-plan-or-issues-to-completion).
 
 Which roles exist, and their model, effort, and route, is `/agent-roster`'s
 job, not `/hierarchy`'s. `/hierarchy set <role> <model>` was replaced by
