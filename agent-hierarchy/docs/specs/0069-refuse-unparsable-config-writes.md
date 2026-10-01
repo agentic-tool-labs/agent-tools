@@ -173,9 +173,11 @@ and report.
 ## 5. Docs
 
 `agent-hierarchy/docs/cli-tools.md`: one sentence where it describes the
-level files. Write verbs refuse (exit 2) a level file that exists but isn't a
-JSON object, and leave it untouched; fix or delete it. Read verbs ignore such
-a file, as before. Do not edit :128 until the review reports.
+level files. Write verbs refuse (exit 2) a level file that exists but isn't
+a JSON object, and leave it untouched; fix or delete it. The exception is
+`untrack` and `dismiss --also-config`: they warn, leave the file, and finish
+(§2.2). Read verbs ignore such a file, as before. Do not edit :128 until the
+review reports.
 
 Bump the patch version in both manifests, as for other fixes on this branch.
 

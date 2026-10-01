@@ -145,7 +145,7 @@ rm_ untrack myrepo-implementor-2 --commit --keep-sessions --also-config --cwd "$
 check "U3 untrack with no level resolving completes" '[ $RC = 0 ]'
 check "U3 ... the team row is gone" '! grep -q "myrepo-implementor-2" "$PROJ/.claude/hierarchy/team.json"'
 check "U3 ... the config file's bytes are unchanged" 'cmp -s "$REPO_USER_CFG" "$SANDBOX/before"'
-check "U3 ... the warning gives the reason" '[[ "$ERR" == *"no roster resolves at any level"* ]]'
+check "U3 ... the warning gives the reason and names the skipped file" '[[ "$ERR" == *"no roster resolves at any level ($REPO_USER_CFG is not valid JSON ("* ]]'
 check "U3 ... its output shows the member not removed, with the reason" '[ "$(jget o.config.removed)" = false ] && [[ "$(jget o.config.reason)" == "no roster resolves at any level"* ]]'
 
 # untrack when the config file can't be written: reported, not fatal.
@@ -191,7 +191,7 @@ dismiss_close
 check "U3 dismiss with no level resolving completes" '[ -n "$TOK" ] && [ $RC = 0 ] && [ "$(jget o.closed)" = true ]'
 check "U3 ... the team row is gone" '! grep -q "hotfix-implementor" "$PROJ/.claude/hierarchy/teams/hotfix.json"'
 check "U3 ... the config file's bytes are unchanged" 'cmp -s "$REPO_USER_CFG" "$SANDBOX/before"'
-check "U3 ... the warning gives the reason" '[[ "$ERR" == *"no roster resolves at any level"* ]]'
+check "U3 ... the warning gives the reason and names the skipped file" '[[ "$ERR" == *"no roster resolves at any level ($REPO_USER_CFG is not valid JSON ("* ]]'
 check "U3 ... its output shows the member not removed, with the reason" '[ "$(jget o.config.removed)" = false ] && [[ "$(jget o.config.reason)" == "no roster resolves at any level"* ]]'
 
 # ---------------------------------------------------------------- U4 reads unchanged

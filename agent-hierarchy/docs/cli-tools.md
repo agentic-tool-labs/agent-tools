@@ -96,8 +96,9 @@ To inspect the roster run `node <AH_ROOT>/hooks/roster.mjs show --cwd <abs cwd>`
 resolution that `show` implements.
 
 Write verbs refuse (exit 2) a level file that exists but isn't a JSON object, an empty file
-included, and leave it untouched — fix or delete it, then re-run; read verbs ignore such a file,
-as before.
+included, and leave it untouched — fix or delete it, then re-run. `untrack` and
+`dismiss --also-config` instead warn, leave the file, and finish. Read verbs ignore such a file, as
+before.
 
 ## After an update, mid-session
 
@@ -219,8 +220,8 @@ narrower level or one session can undo a wider selection; `init --roster default
 acts on its team's recorded roster. Hooks resolve a session's roster the same way, except that a team
 file in scope wins over `AH_ROSTER` and `activeRoster` — even one recording the default block. A
 global file holding only `activeRoster` (with or without `teamLayout` and `modelTiers`), and a repo or
-repo-user file holding only `activeRoster` and `version`, configure nothing; their selection still
-applies. An `activeRoster` that is empty or not a string is refused as not a roster name. `show`, `roster list` and `roster use` carry the selection, and so does `create`'s plan
+repo-user file whose only key is `activeRoster`, configure nothing; their selection still applies.
+Otherwise `activeRoster` never changes whether a file counts as configured. An `activeRoster` that is empty or not a string is refused as not a roster name. `show`, `roster list` and `roster use` carry the selection, and so does `create`'s plan
 when something is selected (with nothing selected, the plan is unchanged):
 
     selection: { roster: <name or "default">, source: "flag"|"env"|"activeRoster"|"team"|"default", level: <level or null>, path: <path or null> }

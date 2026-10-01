@@ -2362,7 +2362,14 @@ function removeConfigMember(name, key = rosterArg, { sideEffect = false } = {}) 
     return { ...where, removed: false, unusable: true, reason };
   };
   const target = sideEffect ? resolveTargetLevel({ key }) : targetLevel({ key });
-  if (target.error) return notRemoved({ level: null, path: null, wasDefaulted: false }, target.error);
+  if (target.error) {
+    // Resolution skips a level file that can't be used, and `init` would refuse it, so name it.
+    const unusable = levelArg() ? [] : [...new Set(Object.values(rosterLevelCandidates(cwd)).flat())].flatMap((p) => {
+      const { problem } = loadLevelFile(p);
+      return problem ? [`${p} ${problem}`] : [];
+    });
+    return notRemoved({ level: null, path: null, wasDefaulted: false }, unusable.length ? `no roster resolves at any level (${unusable.join("; ")})` : target.error);
+  }
   const { level, wasDefaulted, teamKey } = target;
   const path = rosterLevelPaths(cwd)[level];
   const loaded = sideEffect ? loadLevelFile(path) : { data: readLevelFile(path), problem: null };
