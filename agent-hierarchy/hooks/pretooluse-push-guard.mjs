@@ -650,14 +650,18 @@ function livenessOf(dirs, D) {
 /**
  * Denies or asks for any merge form while a run is live for the session's cwd or any gh
  * invocation's own directory; no git command is a merge form. Returns when the command has no gh
- * invocation, or no run is live.
+ * invocation, or no run is live. When liveness can't be determined it denies a merge form and
+ * returns otherwise, so the push rules still run.
  */
 async function mergeGuard(input, command, cwd, invs, ghs) {
   if (!ghs.length) return;
   const D = await import("./lib-decisions.mjs");
   runState = livenessOf([...new Set([cwd, ...ghs.map((g) => g.cwd)])], D);
   if (runState === "not") return;
-  if (runState === "unknown") throw new Error("whether a /pipeline run is live can't be determined");
+  if (runState === "unknown") {
+    if (D.parseMergeForm(command) || ghs.some((g) => ghRule(g.args))) await mergeError(cwd, new Error("whether a /pipeline run is live can't be determined"));
+    return;
+  }
   const form = D.parseMergeForm(command);
   if (form) pinnedMerge(input, cwd, form, D);
   for (const g of ghs) {
@@ -859,7 +863,9 @@ async function main() {
     await mergeGuard(input, command, cwd, invs, ghs);
   } catch (err) {
     if (mergeForm(command)) await mergeError(cwd, err);
-    throw err;
+    if (!invs) throw err;
+    // Only the merge rules failed: the push rules below still apply.
+    logHookError("pretooluse-push-guard.mjs", err);
   }
   for (const inv of invs) {
     if (!needsOptIn(inv)) continue;

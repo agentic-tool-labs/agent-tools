@@ -338,6 +338,16 @@ for CMD in "${G8[@]}" "git push --force origin ah/issue-5" "git push origin ah/i
   i=$((i+1))
 done
 check "G8 ... and they do deny a push to the default branch" '[[ "${NORUN[0]}" == *"permissionDecision\":\"deny"* ]]'
+chmod 000 "$G8R/.claude/hierarchy"
+guard "gh pr view 7 && git push --force origin ah/issue-5" '{}' "$G8R"
+check "G8 opted-in repo, liveness unknown: a read plus a force push → PG-FORCE" 'denied PG-FORCE'
+guard "gh pr 'merge' 7" '{}' "$G8R"
+check "G8 opted-in repo, liveness unknown: a quoted merge verb → PG-MERGE-ERROR" 'denied PG-MERGE-ERROR'
+chmod 755 "$G8R/.claude/hierarchy"
+GUARD="$SANDBOX/stub/hooks/pretooluse-push-guard.mjs"
+guard "gh pr view 7 && git push --force origin ah/issue-5" '{}' "$G8R"
+check "G8 opted-in repo, liveness throws: a read plus a force push → PG-FORCE" 'denied PG-FORCE'
+unset GUARD
 rm -rf "$G8R/.claude/hierarchy"
 anchor yes
 
