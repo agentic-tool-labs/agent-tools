@@ -376,6 +376,7 @@ under [docs/specs/](./docs/specs/). Good places to start:
 - **0.107.0** role packs: roles shipped in a plugin, adopted one at a time behind a pin.
 - **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
 - **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
+- **0.109.0** `/pipeline` decides safe questions for you and parks dangerous ones: [Decisions made for you](#decisions-made-for-you). Plan runs get a default branch.
 
 The installed version is in `.claude-plugin/plugin.json`. Each feature below
 is complete enough to use; the linked page has the detail.
@@ -449,10 +450,11 @@ stops that item and tells you, rather than starting a fourth. Issue runs add
 caps of their own: at most 2 plan rounds per issue, and 3 per step and per
 gate.
 
-After the first notice (branch, route, permission mode, secret scanner) it
-only interrupts you when something needs a person: a round cap, a real
-blocker, an Ultra-Advisor escalation, a red build, a secret-scan finding or a
-halted push. **It never merges.** Issue runs push an `ah/issue-<N>` branch per
+After the first notice (branch, route, permission mode, secret scanner, and who
+decides questions for you) it only interrupts you when something needs a
+person: a round cap, a real blocker, an Ultra-Advisor escalation, a red build,
+a secret-scan finding, a halted push or a question parked for you (see
+[Decisions made for you](#decisions-made-for-you)). **It never merges.** Issue runs push an `ah/issue-<N>` branch per
 issue (dependent issues stack on the branch they depend on) and open a draft
 PR that says `Refs #N` or `Closes #N`; you review and merge. Before every push
 it scans the patch for secrets, with gitleaks if installed, otherwise with the
@@ -464,10 +466,55 @@ it scans the patch for secrets, with gitleaks if installed, otherwise with the
     /pipeline #12 https://github.com/acme/app/issues/14   # refs may be #N or an issue URL
     /pipeline --labelled                             # every open issue carrying the trigger label
 
-Give a plan run `--branch`: the skill defines no default branch for one. It
-never pushes to `main` or a protected branch. A file and issue refs can't be
-mixed, and `--branch` doesn't apply to issue runs. A bare number is an issue; write `./12` for a file named `12`. For a
-list of acceptance criteria, put it in a file and pass the path.
+A plan run with no `--branch` works on `ah/pipeline-<plan-stem>`, made from
+where you are: the plan's file name without its extension, lowercased, other
+characters turned into `-`, cut at 40 characters. `docs/plans/search.md` runs
+on `ah/pipeline-search`. If that branch already exists, locally or on `origin`,
+the run stops before doing any work and tells you to pass `--branch` or delete
+the old one; it never reuses a branch. It never pushes to `main` or a
+protected branch. A file and issue refs can't be mixed, and `--branch` doesn't
+apply to issue runs. A bare number is an issue; write `./12` for a file named
+`12`. If you type acceptance criteria into the request with no file, the run
+saves them, one per line, to a gitignored scratch file under
+`.claude/hierarchy/specs/` and runs on that, so the branch is named after it
+(for example `ah/pipeline-acs-20260930-2045`).
+
+### Decisions made for you
+
+During a run, questions the plan doesn't answer used to wait for you. Now,
+once the run has started, a **safe** question is decided for you by the
+strongest reasoner available, and a **dangerous** one waits for you.
+
+- **Who decides.** The Ultra-Advisor, if the session allows it (the run asks
+  you once at the start unless you have already said); otherwise the top
+  member of your team; otherwise a fresh subagent on the Orchestrator's own
+  model. The Orchestrator never decides in its own context. The start notice
+  says which, and where the log is.
+- **What counts as dangerous.** Anything destructive or hard to undo; anything
+  remote or merge-related (pushes outside the run's own, merging, approving,
+  tracker writes); security and trust, including role packs, permissions,
+  hooks, CI and build or dependency configuration; cost, such as spawning
+  top-tier members you don't have; scope, such as a new item or a dropped
+  criterion; and the run's own rules (caps, guards, the push regime). A
+  question it can't classify counts as dangerous.
+- **Caps.** At most 4 decisions per item and 20 per run; a question over a cap
+  waits for you.
+- **A dangerous or unsure question** stops only its own item (in an issue run
+  the item ends `needs-user` and its dependents wait). The rest of the run
+  carries on, and you answer at the end rather than mid-run.
+- **Everything is on the record.** Each decision goes into a per-run log,
+  `.claude/hierarchy/pipeline/<run id>/decisions.jsonl`, with the decider, the
+  reason and how to undo it. The final report has **Decisions made on your
+  behalf**, with product, UX or interface calls flagged "review" first, then
+  **Waiting for you**; issue runs also put each item's decisions in its PR
+  body. Read the log with `msg.mjs decision list`; the verbs are in
+  [docs/cli-tools.md](./docs/cli-tools.md).
+
+Decisions never change the 3-round cap, and the run's usual checks (review,
+secret scan, push guard) still apply to whatever a decision produces. Where
+the repo has no committed `.claude/ah-conventions.json`, the start notice says
+"guards: prose only": protected paths are then the run's instructions, not a
+hook.
 
 **Who does the work.** The run builds its team itself with `roster.mjs
 create`, so no team has to exist first, and the roster is chosen as in

@@ -5,6 +5,55 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.109.0]
+
+`/pipeline` decides safe questions for you instead of waiting.
+
+### Added
+
+- **Decisions on your behalf.** Once a `/pipeline` run has started, a question
+  the plan doesn't answer is classified. A **safe** one (it stays on the run's
+  branch, is reversible there, stays in the plan's scope and touches nothing
+  reserved) is decided by the strongest reasoner available: the Ultra-Advisor
+  if the session allows it, else the top member of the team, else a fresh
+  subagent on the Orchestrator's model. A **dangerous** one (destructive,
+  remote or merge, security and trust including role packs, cost, scope, or
+  the run's own rules; anything unclear counts) is parked for you, and
+  stops only its own item. At most 4 decisions per item and 20 per run.
+  Every decision goes in a per-run log with its reason and how to undo it. The
+  final report lists "Decisions made on your behalf" and "Waiting for you";
+  issue runs put each item's decisions in its PR body too. See the README's
+  [Decisions made for you](./README.md#decisions-made-for-you).
+- **`msg.mjs decision add|list`.** Writes and reads the run's decision log
+  (`.claude/hierarchy/pipeline/<run id>/decisions.jsonl`). Verbs and refusals:
+  [cli-tools](./docs/cli-tools.md).
+- **Run-start notice** now also says who decides for you and where the log is,
+  and "guards: prose only (no conventions baseline)" when the repo has no
+  committed `.claude/ah-conventions.json`.
+
+### Changed
+
+- **A plan run with no `--branch` has a default branch**,
+  `ah/pipeline-<plan-stem>`, created from where you are. If it already exists,
+  locally or on `origin`, the run halts before any work and says to pass
+  `--branch` or delete it. Before this, no default was defined.
+- **Acceptance criteria typed into the request** are saved to a gitignored
+  scratch file under `.claude/hierarchy/specs/` and the run goes ahead on it.
+- A question parked for you is now one of the things that notifies you
+  mid-run.
+
+### Upgrade notes
+
+- The run asks one extra question at the start (Ultra-Advisor decides, or not)
+  unless the session's Ultra-Advisor setting is already `session` or `off`.
+- Decisions made for you are real: read the final report, and the PR bodies of
+  issue runs, before merging.
+
+### Not in this release
+
+`/pipeline` auto-merge (spec 0070) and sub-orchestrators (spec 0067) are not
+built. `/pipeline` still never merges.
+
 ## [0.108.5]
 
 Everything since 0.105.0: named rosters, role packs, several owned teams, a
