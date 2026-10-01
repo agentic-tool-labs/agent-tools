@@ -54,7 +54,7 @@ export const ROSTER_BOOL_FLAGS = new Set([
   "no-worktree",
 ]);
 
-export const MSG_BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all"]);
+export const MSG_BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all", "summary"]);
 
 const SCRIPTS = { "roster.mjs": "roster", "msg.mjs": "msg" };
 // An unquoted `#` can start a shell comment, which drops the rest of the command from what runs.

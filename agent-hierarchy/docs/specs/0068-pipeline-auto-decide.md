@@ -286,9 +286,19 @@ notify, as "genuinely blocked" does today.
 2. Only on exit 0 route the answer to the role that raised the question,
    quoting the printed id: "decided on the user's behalf by `<decider>`
    (d<k>)".
-3. Exit 2 → the question is parked with the refusal as its reason, and
-   nothing is routed. A refused line (a cap, an off-list choice,
-   `parked-before`) must never have acted.
+3. Exit 2 → nothing is routed; a refused line must never have acted. What
+   happens next depends on the refusal:
+   - **`cap`:** add a `parked` line with `why_user: "cap"`.
+   - **`parked-before`:** add nothing. The question is already parked, and
+     its earlier `parked` line stands.
+   - **Any field refusal** (a missing or mistyped field, an unknown key, a
+     writer-owned field): add a `parked` line with `why_user: "unsure"`,
+     with the refusal text as its `rationale`. Build it from the fields
+     that were valid.
+   - **If that `parked` add is refused as well:** stop the item exactly as
+     for a parked question (§4.4), put both refusal texts in the stop
+     notice (issue runs: the `needs-user` exception record), and don't try
+     again.
 
 The raising role then carries on: it amends the spec, or builds.
 Implementor commits for the decision name `d<k>` in the body, so the report
@@ -332,7 +342,6 @@ Input fields:
 - `item`: an item slug, or `run`
 - `source`: the role or member that raised it
 - `question`
-- `qkey`: the first 12 hex characters of sha256(`<item>\n<question>`)
 - `options`: an array, 2–4 strings, lettered a–d in order
 - `default`: a letter, or null
 - `choice`: a letter within `options`, or `other: …`; null when parked.
@@ -341,6 +350,11 @@ Input fields:
   ultra-advisor|architect|reviewer|implementor|<custom>|orchestrator.
   `orchestrator` always means a fresh subagent (§4.1), with its id as
   `name`.
+  - Required on `decided` lines.
+  - On `parked` lines it is the decider that answered `unsure` or
+    `dangerous`, or `null` when the question was parked before any
+    dispatch: classified dangerous by the Orchestrator, or over a cap.
+  - `null` is refused on `decided` lines.
 - `rationale`, `revert`
 - `review`: boolean
 - `why_user`: `dangerous` | `unsure` | `cap`; null when decided
@@ -348,11 +362,27 @@ Input fields:
 - `exchange`: the decision request's id, or null when parked before
   dispatch or decided by a step-4 subagent
 
-The writer adds `id` (`d<k>`, k = valid lines so far + 1), `time` (ISO) and
-`run` (the anchor id).
+The writer adds the **writer-owned** fields:
+- `id`: `d<k>`, where k = the number of valid `decided` and `parked` lines
+  so far, plus 1. Lines of other kinds, such as auto-merge's `merge` lines,
+  carry no id and don't count toward k;
+- `time` (ISO), and `run` (the anchor id);
+- `decision`: the option text resolved from `choice`;
+- `qkey`, computed by the writer: the first 12 hex characters of
+  sha256(`<item>\n<normalized question>`). Normalized means trimmed,
+  lowercased, and with every run of whitespace collapsed to one space. The
+  model never computes it. Exact or near-exact repeats are caught here;
+  paraphrases are caught by the Orchestrator's `list --item` check before
+  dispatch.
+
+**The caps** (4 decided per item, 20 per run) are exported constants in the
+writer lib, `agent-hierarchy/hooks/lib-decisions.mjs`. msg.mjs, and later
+auto-merge's hook, import them from there.
 
 **Refusals** (exit 2, nothing written), each with a reason:
 - a missing or mistyped field;
+- an unknown input key, or any writer-owned field supplied by the caller
+  (`id`, `time`, `run`, `decision`, `qkey`). Fail-closed;
 - `decided` with `dangerous: true`, `decider.role` "user", or a `why_user`;
 - `decided` whose `choice` is neither a letter within `options` nor
   `other: …`;
@@ -362,8 +392,7 @@ The writer adds `id` (`d<k>`, k = valid lines so far + 1), `time` (ISO) and
   `list --item <slug>`;
 - `parked` with a `choice`, or with no `why_user`;
 - `dangerous: true` with a `why_user` other than `dangerous`;
-- `decided` over either cap: 4 for its item, 20 for the run. The two caps
-  are constants in msg.mjs.
+- `decided` over either cap: 4 for its item, 20 for the run.
 
 **`msg.mjs decision list --team <T> [--run <anchor id>] [--item <slug>] [--summary] --cwd <abs>`:**
 - with no `--run`, the open anchor by the exactly-one rule; with `--run`,
@@ -371,6 +400,9 @@ The writer adds `id` (`d<k>`, k = valid lines so far + 1), `time` (ISO) and
 - prints `{ run, path, decisions: [...], skipped }`, in id order;
 - a line that won't parse, such as a torn last line after a crash, is
   skipped and counted in `skipped`, never fatal;
+- `decisions` holds every valid line, each with its `kind`. Lines of other
+  kinds (auto-merge's `merge` lines) are listed because the report needs
+  them, but no count includes them;
 - `--summary` prints instead
   `{ decided, flagged, parked, by_item: { <slug>: { decided, parked } }, skipped }`,
   plus `line`, a one-line text, e.g. `decisions: 7 decided (2 flagged), 1 waiting for you`.
@@ -549,11 +581,29 @@ tests/test-msg-cli.sh.
   Orchestrator can park with: the `cap`, `parked-before` or field reason,
   on stdout as JSON with exit 2. [exit 0 on refusal]
 - **W2c Never re-ask.**
-  - A `parked` line, then a `decided` line with the same `qkey`, in the
-    same run → refused with `parked-before`.
-  - A different `qkey` is accepted.
+  - A `parked` line, then a `decided` line with the same item and
+    question, in the same run → refused with `parked-before`. The same
+    holds when the question differs only in case and whitespace.
+  - A different question is accepted.
 
-  [skip the qkey check]
+  [skip the qkey check] [hash without normalizing]
+- **W2e Fields.**
+  - An unknown key → refused.
+  - Each writer-owned field supplied by the caller (`id`, `time`, `run`,
+    `decision`, `qkey`) → refused.
+  - `decider: null` on a `decided` line → refused; on a `parked` line →
+    accepted.
+
+  [accept unknown keys] [accept a caller qkey] [allow a null decider when
+  decided]
+- **W1b Ids skip other kinds.** A raw `{"kind":"merge",…}` line injected
+  into the file:
+  - the next `add` still gets the next `d<k>`, counting only decided and
+    parked lines;
+  - `list` shows the merge line;
+  - `--summary` counts it nowhere.
+
+  [count every line toward k]
 - **W2d Letters.**
   - `choice: "b"` stores `options[1]` as `decision`.
   - `choice: "e"` with 4 options is refused.
@@ -583,7 +633,8 @@ tests/test-msg-cli.sh.
   - the S1–S4 and D1–D6 labels;
   - the reply-format line with letters;
   - "Never re-ask";
-  - "Log first, then apply", and "only on exit 0";
+  - "Log first, then apply", "only on exit 0", and the per-refusal park
+    rules;
   - "never decides in its own context";
   - the issue-run `other:` → `unsure` line;
   - S1's execution clause and "No other ref";

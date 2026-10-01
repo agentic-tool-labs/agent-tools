@@ -11,6 +11,8 @@
  *   msg.mjs index <path>
  *   msg.mjs sweep [--days 7]
  *   msg.mjs roster
+ *   msg.mjs decision add [--team <name>]      (one JSON object on stdin: a /pipeline run's decision log)
+ *   msg.mjs decision list [--team <name>] [--run <anchor id>] [--item <slug>] [--summary]
  *
  * Every subcommand also accepts `--orchestrator-pid <pid>`, which overrides `CLAUDE_PID` when
  * resolving which team this session owns (spec 0048 §2.3).
@@ -54,9 +56,10 @@ import {
   sweep,
   SWEEP_DAYS,
 } from "./lib-hier.mjs";
+import { appendDecision, decisionLogPath, decisionSummary, knownRun, openRunAnchor, readDecisions } from "./lib-decisions.mjs";
 import { DEFAULT_TEAM_ARG, memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamArgName, teamListText, teamsWithMember } from "./lib-roster.mjs";
 
-const BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all"]);
+const BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all", "summary"]);
 
 function parseArgs(argv) {
   const opts = { _: [] };
@@ -338,8 +341,51 @@ try {
       }
       break;
     }
+    case "decision": {
+      const sub = opts._[0];
+      const dir = hierarchyDir(cwd);
+      if (sub === "add") {
+        // Every refusal is printed as JSON on stdout too, so the caller can park the question with its reason.
+        const refuse = (reason, detail) => {
+          out({ refused: true, reason, detail }, false);
+          process.stderr.write(`msg.mjs: decision add refused (${reason}): ${detail}\n`);
+          process.exit(2);
+        };
+        const anchor = openRunAnchor(dir, teamArg);
+        if (anchor.error) refuse("no-run", anchor.error);
+        let input;
+        try {
+          input = JSON.parse(readFileSync(0, "utf8"));
+        } catch (err) {
+          refuse("invalid", `stdin must hold one JSON object (${err.message})`);
+        }
+        const res = appendDecision(decisionLogPath(dir, anchor.id), anchor.id, input);
+        if (res.refused) refuse(res.refused.reason, res.refused.detail);
+        out(res, false);
+        break;
+      }
+      if (sub === "list") {
+        let run;
+        if (opts.run === true) fail("decision list: --run needs an anchor id");
+        if (typeof opts.run === "string") {
+          if (!knownRun(dir, opts.run)) fail(`decision list: no run ${JSON.stringify(opts.run)} in ${dir}`);
+          run = opts.run;
+        } else {
+          const anchor = openRunAnchor(dir, teamArg);
+          if (anchor.error) fail(`decision list: ${anchor.error} — pass --run <anchor id> for a finished run`);
+          run = anchor.id;
+        }
+        const path = decisionLogPath(dir, run);
+        let { decisions, skipped } = readDecisions(path);
+        if (typeof opts.item === "string") decisions = decisions.filter((d) => d.item === opts.item);
+        out(opts.summary === true ? decisionSummary(decisions, skipped) : { run, path, decisions, skipped }, false);
+        break;
+      }
+      fail("usage: msg.mjs decision add [--team <name>] (one JSON object on stdin) | decision list [--team <name>] [--run <anchor id>] [--item <slug>] [--summary]");
+      break;
+    }
     default:
-      fail(`usage: msg.mjs new|list|downstream|index|sweep|roster|route [--cwd <path>] [--plain]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
+      fail(`usage: msg.mjs new|list|downstream|index|sweep|roster|route|decision[--cwd <path>] [--plain]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
   }
 } catch (err) {
   fail(err && err.message ? err.message : String(err));
