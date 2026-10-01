@@ -190,8 +190,10 @@ Each time, the Orchestrator runs the agent-team ladder (§1) as follows:
 - No candidate left → step 4, but **the Orchestrator never decides in its
   own context.** In an issue run that context has read the snapshot, so
   the two keys would be one.
-  - Dispatch a fresh Agent-tool subagent on the Orchestrator's own model,
-    `general-purpose` or `ah:orchestrator`, with the same brief (§4.2).
+  - Dispatch a fresh Agent-tool subagent of type `general-purpose` on the
+    Orchestrator's own model, with the same brief (§4.2). Not
+    `ah:orchestrator`: the route gate (pretooluse-route-gate.mjs) denies
+    that type as a subagent for every caller.
   - Log it as `decider: { role: "orchestrator", name: <the subagent's
     id>, model }`.
   - The brief is the Agent prompt itself, with no msg.mjs exchange. The
@@ -291,6 +293,9 @@ notify, as "genuinely blocked" does today.
    - **`cap`:** add a `parked` line with `why_user: "cap"`.
    - **`parked-before`:** add nothing. The question is already parked, and
      its earlier `parked` line stands.
+   - **`decided-before`:** add nothing. Find the earlier decision with
+     `list --item <slug>` and route that one, quoting its `d<k>`. Never
+     route a second, different answer.
    - **Any field refusal** (a missing or mistyped field, an unknown key, a
      writer-owned field): add a `parked` line with `why_user: "unsure"`,
      with the refusal text as its `rationale`. Build it from the fields
@@ -315,8 +320,8 @@ can point at the change.
 - `none` or `each` → one `AskUserQuestion` (header "Decisions"):
   - "Ultra-Advisor decides (rest of session)" →
     `gate.mjs set --choice session`;
-  - "No Ultra-Advisor — top team member, else me" →
-    `gate.mjs set --choice off`.
+  - "No Ultra-Advisor — top team member, else a fresh subagent on my
+    model" → `gate.mjs set --choice off`.
 
   `each` isn't offered: re-asking at each escalation would stall a hands-off
   run. The question says that dangerous calls always come to the user.
@@ -330,8 +335,24 @@ can point at the change.
 lib-hier's resolved hierarchy dir, so `AGENT_HIERARCHY_DIR` is honoured and
 the dir stays gitignored. `sweep` never touches it, and nothing deletes it.
 
-**`msg.mjs decision add --team <T> --cwd <abs>`:**
-- reads one JSON object on stdin;
+**`msg.mjs decision add --team <T> [--input <path>] --cwd <abs>`:**
+- reads one JSON object from `--input <path>`, or from stdin when
+  `--input` is absent. **The skill always uses `--input`.**
+  - Why: pretooluse-ah-cli auto-allows an ah command only when its text
+    has no shell metacharacters (lib-ah-cli.mjs:61, :106, :111). A heredoc
+    or pipe feeding stdin therefore always falls through to the normal
+    permission flow, and could prompt mid-run. A plain `--input <path>`
+    token passes the existing grammar with no hook change.
+  - The path: the Orchestrator writes it with the Write tool, as
+    `<hier>/pipeline/<anchor id>/decision-input.json`, overwriting it each
+    time.
+  - `add` refuses (exit 2, nothing appended) when:
+    - the realpath is outside that run's `<hier>/pipeline/<anchor id>/`
+      directory;
+    - it isn't a regular file;
+    - it is over 64 KiB;
+    - it isn't one JSON object.
+  - `add` neither deletes nor moves the input file.
 - finds the run by the skill's exactly-one rule: open exchanges of team T
   with slug `pipeline-run-anchor`. Zero or several → exit 2, write nothing;
 - validates, then appends one line with a single append call;
@@ -386,6 +407,14 @@ auto-merge's hook, import them from there.
 - `decided` with `dangerous: true`, `decider.role` "user", or a `why_user`;
 - `decided` whose `choice` is neither a letter within `options` nor
   `other: …`;
+- `decided` with `choice` `other: …` and `review: false`, because `other:`
+  always means review (§4.3);
+- a `decider` object with keys other than `role`, `name` and `model`, or a
+  `role` that doesn't match `^[a-z0-9-]+$`. The "user" check then runs on
+  that validated value, so `User` and ` user` can't slip past it;
+- `decided` when a `decided` line with the same `qkey` already exists in
+  the run (reason `decided-before`). This makes a re-run `add`, after
+  compaction or a replayed input file, write nothing twice;
 - `decided` when a `parked` line with the same `qkey` already exists in the
   run (reason `parked-before`). The writer is the code backstop for "never
   re-ask" after compaction; before dispatching, the Orchestrator checks
@@ -587,6 +616,23 @@ tests/test-msg-cli.sh.
   - A different question is accepted.
 
   [skip the qkey check] [hash without normalizing]
+- **W2f Decided before.** The same `decided` input twice → the second is
+  refused with `decided-before`, and the file holds one line.
+  [skip the decided-before check]
+- **W6 Input file.**
+  - `--input` with a valid file under the run dir → appended, and the
+    input file is left as it was.
+  - Each refused, with nothing appended:
+    - a path outside the run dir;
+    - a symlink inside the run dir that points outside it;
+    - a directory;
+    - over 64 KiB;
+    - two JSON objects.
+  - The ah-cli hook auto-allows
+    `node <ah>/hooks/msg.mjs decision add --team T --input <abs path> --cwd <abs>`
+    (allow output asserted). It doesn't auto-allow the heredoc form.
+
+  [skip the realpath check] [read stdin when --input is given]
 - **W2e Fields.**
   - An unknown key → refused.
   - Each writer-owned field supplied by the caller (`id`, `time`, `run`,
@@ -623,6 +669,10 @@ tests/test-msg-cli.sh.
   [take the newest anchor]
 - **W5 Reader.**
   - A torn last line is skipped and counted in `skipped`.
+  - A torn last line, then an `add`: the new line still parses, with the
+    right id, and `skipped` is 1. The writer starts its line with `\n` when
+    the file is non-empty and doesn't end in one, in the same single
+    append. [glue the new line onto the fragment]
   - `--item` filters.
   - `--summary` counts, and its `line` text is right.
 
@@ -634,7 +684,10 @@ tests/test-msg-cli.sh.
   - the reply-format line with letters;
   - "Never re-ask";
   - "Log first, then apply", "only on exit 0", and the per-refusal park
-    rules;
+    rules, `decided-before` included;
+  - `decision add … --input <hier>/pipeline/<anchor id>/decision-input.json`,
+    written with the Write tool;
+  - `general-purpose` as step 4's subagent type, with no `ah:orchestrator`;
   - "never decides in its own context";
   - the issue-run `other:` → `unsure` line;
   - S1's execution clause and "No other ref";

@@ -11,7 +11,7 @@
  *   msg.mjs index <path>
  *   msg.mjs sweep [--days 7]
  *   msg.mjs roster
- *   msg.mjs decision add [--team <name>]      (one JSON object on stdin: a /pipeline run's decision log)
+ *   msg.mjs decision add [--team <name>] [--input <path>]   (one JSON object from the file, else stdin: a /pipeline run's decision log)
  *   msg.mjs decision list [--team <name>] [--run <anchor id>] [--item <slug>] [--summary]
  *
  * Every subcommand also accepts `--orchestrator-pid <pid>`, which overrides `CLAUDE_PID` when
@@ -56,7 +56,7 @@ import {
   sweep,
   SWEEP_DAYS,
 } from "./lib-hier.mjs";
-import { appendDecision, decisionLogPath, decisionSummary, knownRun, openRunAnchor, readDecisions } from "./lib-decisions.mjs";
+import { appendDecision, decisionLogPath, decisionSummary, knownRun, openRunAnchor, readDecisionInput, readDecisions } from "./lib-decisions.mjs";
 import { DEFAULT_TEAM_ARG, memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamArgName, teamListText, teamsWithMember } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all", "summary"]);
@@ -354,10 +354,17 @@ try {
         const anchor = openRunAnchor(dir, teamArg);
         if (anchor.error) refuse("no-run", anchor.error);
         let input;
-        try {
-          input = JSON.parse(readFileSync(0, "utf8"));
-        } catch (err) {
-          refuse("invalid", `stdin must hold one JSON object (${err.message})`);
+        if (opts.input === true) refuse("invalid", "--input needs the path of the decision input file");
+        if (typeof opts.input === "string") {
+          const read = readDecisionInput(dir, anchor.id, opts.input);
+          if (read.error) refuse("invalid", read.error);
+          input = read.input;
+        } else {
+          try {
+            input = JSON.parse(readFileSync(0, "utf8"));
+          } catch (err) {
+            refuse("invalid", `stdin must hold one JSON object (${err.message})`);
+          }
         }
         const res = appendDecision(decisionLogPath(dir, anchor.id), anchor.id, input);
         if (res.refused) refuse(res.refused.reason, res.refused.detail);
@@ -381,11 +388,11 @@ try {
         out(opts.summary === true ? decisionSummary(decisions, skipped) : { run, path, decisions, skipped }, false);
         break;
       }
-      fail("usage: msg.mjs decision add [--team <name>] (one JSON object on stdin) | decision list [--team <name>] [--run <anchor id>] [--item <slug>] [--summary]");
+      fail("usage: msg.mjs decision add [--team <name>] [--input <path>] (one JSON object from the file, else stdin) | decision list [--team <name>] [--run <anchor id>] [--item <slug>] [--summary]");
       break;
     }
     default:
-      fail(`usage: msg.mjs new|list|downstream|index|sweep|roster|route|decision[--cwd <path>] [--plain]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
+      fail(`usage: msg.mjs new|list|downstream|index|sweep|roster|route|decision [--cwd <path>] [--plain]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
   }
 } catch (err) {
   fail(err && err.message ? err.message : String(err));

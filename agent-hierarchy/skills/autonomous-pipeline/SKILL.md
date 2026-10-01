@@ -93,8 +93,8 @@ Seven steps, in order:
      that dangerous calls always come to the user:
      - "Ultra-Advisor decides (rest of session)" →
        `gate.mjs set --session <id> --choice session`;
-     - "No Ultra-Advisor — top team member, else me" →
-       `gate.mjs set --session <id> --choice off`.
+     - "No Ultra-Advisor — top team member, else a fresh subagent on my
+       model" → `gate.mjs set --session <id> --choice off`.
 
      `each` isn't offered: re-asking at each escalation would stall a
      hands-off run.
@@ -328,9 +328,9 @@ Each time, run the agent-team escalation ladder
   so it decides from a clean context, apart from the session driving the
   run.
 - No candidate left → step 4, but **the Orchestrator never decides in its
-  own context.** Dispatch a fresh Agent-tool subagent on your own model,
-  `general-purpose` or `ah:orchestrator`, with the brief below as its
-  prompt; log it as `decider: { role: "orchestrator", name: <its id>,
+  own context.** Dispatch a fresh Agent-tool subagent of type
+  `general-purpose` on your own model (the route gate denies an
+  Orchestrator-type subagent), with the brief below as its prompt; log it as `decider: { role: "orchestrator", name: <its id>,
   model }` with `exchange: null`, and parse `## decisions` from its final
   report by the rules below. If no fresh subagent can be dispatched, park
   the question as `unsure`. Nobody self-decides.
@@ -387,7 +387,11 @@ q<n> review: yes | no
 The log is `<hier>/pipeline/<anchor id>/decisions.jsonl`, written and read
 only through `msg.mjs decision add|list` (fields and refusals:
 `docs/cli-tools.md`).
-1. Run `decision add` first.
+1. Log it first: write the line's JSON with the Write tool to
+   `<hier>/pipeline/<anchor id>/decision-input.json`, overwriting it, then
+   run `msg.mjs decision add --team <team> --input <hier>/pipeline/<anchor id>/decision-input.json --cwd <root>`.
+   Never pipe or heredoc it: only the `--input` form runs without a
+   permission prompt.
 2. **Only on exit 0** route the answer to the role that raised the question,
    quoting the printed id: "decided on the user's behalf by `<decider>`
    (d<k>)". That role carries on: it amends the spec, or builds.
@@ -396,6 +400,9 @@ only through `msg.mjs decision add|list` (fields and refusals:
    refusal's `reason`:
    - `cap` → add a `parked` line with `why_user: "cap"`;
    - `parked-before` → add nothing: the earlier `parked` line stands;
+   - `decided-before` → add nothing: find the earlier decision with
+     `decision list --item <slug>` and route that one, quoting its `d<k>`.
+     Never route a second, different answer;
    - a field refusal (`invalid`) → add a `parked` line with
      `why_user: "unsure"` and the refusal text as its `rationale`, built
      from the fields that were valid;

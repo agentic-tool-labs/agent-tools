@@ -150,7 +150,7 @@ msg decision list --team at
 check "W2d choice b stores options[1] as decision" '[ "$(jget "o.decisions[0].decision")" = "opt B" ] && [ "$(jget "o.decisions[0].choice")" = b ]'
 add "$(decided '{ question: "Four ways?", options: ["w", "x", "y", "z"], choice: "e" }')"
 check "W2d choice e with 4 options is refused" '[ $RC = 2 ]'
-add "$(decided '{ question: "Something else?", choice: "other: keep both" }')"
+add "$(decided '{ question: "Something else?", choice: "other: keep both", review: true }')"
 msg decision list --team at
 check "W2d other: is stored as its own text" '[ "$(jget "o.decisions[1].decision")" = "other: keep both" ]'
 
@@ -168,6 +168,21 @@ check "W2e a null decider on a decided line is refused" '[ $RC = 2 ]'
 add "$(parked)"
 check "W2e a null decider on a parked line is accepted" '[ $RC = 0 ]'
 check "W2e nothing refused was written" '[ "$(wc -l < "$LOG" | tr -d " ")" = 1 ]'
+
+add "$(decided '{ question: "Extra decider key?", decider: { role: "architect", name: null, model: null, via: "x" } }')"
+check "W2e a decider with a key beyond role, name and model is refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"decider must be"* ]]'
+add "$(decided '{ question: "Capital user?", decider: { role: "User", name: null, model: null } }')"
+check "W2e a decider role User is refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"decider must be"* ]]'
+add "$(decided '{ question: "Spaced user?", decider: { role: " user", name: null, model: null } }')"
+check "W2e a decider role \" user\" is refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"decider must be"* ]]'
+add "$(decided '{ question: "Other without review?", choice: "other: keep both", review: false }')"
+check "W2e an other: answer with review false is refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"always means review: true"* ]] && [ "$(wc -l < "$LOG" | tr -d " ")" = 1 ]'
+
+# ---------------------------------------------------------------- W2f decided before
+fresh; open_anchor
+add "$(decided '{ question: "Same answer twice?" }')"
+add "$(decided '{ question: "Same answer twice?" }')"
+check "W2f the same decided input twice: the second is refused decided-before" '[ $RC = 2 ] && [ "$(jget o.reason)" = decided-before ] && [[ "$(jget o.detail)" == *"as d1"* ]] && [ "$(wc -l < "$LOG" | tr -d " ")" = 1 ]'
 
 # ---------------------------------------------------------------- W3 caps
 fresh; open_anchor
@@ -220,6 +235,57 @@ check "W5 --item filters" '[ "$(jget "o.decisions.map((d) => d.id).join()")" = d
 msg decision list --team at --summary
 check "W5 --summary counts decided, flagged and parked" '[ "$(jget "[o.decided, o.flagged, o.parked, o.skipped].join()")" = 2,1,1,1 ] && [ "$(jget "JSON.stringify(o.by_item)")" = "{\"i1\":{\"decided\":1,\"parked\":0},\"i2\":{\"decided\":1,\"parked\":1}}" ]'
 check "W5 --summary line text" '[ "$(jget o.line)" = "decisions: 2 decided (1 flagged), 1 waiting for you" ]'
+add "$(decided '{ item: "i3", question: "After the crash?" }')"
+check "W5 an add after a torn last line gets the next id" '[ $RC = 0 ] && [ "$(jget o.id)" = d4 ]'
+msg decision list --team at
+check "W5 ... and its line parses on its own, the fragment still skipped" '[ "$(jget "o.decisions.map((d) => d.id).join()")" = d1,d2,d3,d4 ] && [ "$(jget o.skipped)" = 1 ]'
+
+# ---------------------------------------------------------------- W6 the input file
+fresh; open_anchor
+RUN_DIR="$HD/pipeline/$A"
+mkdir -p "$RUN_DIR" "$SANDBOX/outside"
+INPUT="$RUN_DIR/decision-input.json"
+addf() { # <input path>
+  OUT=$(HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$MSG" decision add --team at --input "$1" --cwd "$SANDBOX" < /dev/null 2>"$SANDBOX/err"); RC=$?
+  ERR=$(cat "$SANDBOX/err")
+}
+decided '{ question: "From a file?" }' > "$INPUT"
+cp "$INPUT" "$SANDBOX/input.before"
+addf "$INPUT"
+check "W6 --input inside the run dir is appended" '[ $RC = 0 ] && [ "$(jget o.id)" = d1 ]'
+check "W6 ... and the input file is left as it was" 'cmp -s "$INPUT" "$SANDBOX/input.before"'
+before=$(sum)
+decided '{ question: "From outside?" }' > "$SANDBOX/outside/in.json"
+addf "$SANDBOX/outside/in.json"
+AFTER=$(sum) BEFORE=$before
+check "W6 a path outside the run dir is refused, nothing appended" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"must be inside"* ]] && [ "$AFTER" = "$BEFORE" ]'
+ln -s "$SANDBOX/outside/in.json" "$RUN_DIR/link.json"
+addf "$RUN_DIR/link.json"
+AFTER=$(sum)
+check "W6 a symlink in the run dir pointing outside it is refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"must be inside"* ]] && [ "$AFTER" = "$BEFORE" ]'
+mkdir -p "$RUN_DIR/adir"
+addf "$RUN_DIR/adir"
+AFTER=$(sum)
+check "W6 a directory is refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"not a regular file"* ]] && [ "$AFTER" = "$BEFORE" ]'
+node -e 'const b=JSON.parse(process.argv[1]);b.rationale="x".repeat(70000);process.stdout.write(JSON.stringify(b))' "$(decided '{ question: "Too big?" }')" > "$RUN_DIR/big.json"
+addf "$RUN_DIR/big.json"
+AFTER=$(sum)
+check "W6 a file over 64 KiB is refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"over 65536 bytes"* ]] && [ "$AFTER" = "$BEFORE" ]'
+{ decided '{ question: "Two a?" }'; echo; decided '{ question: "Two b?" }'; } > "$RUN_DIR/two.json"
+addf "$RUN_DIR/two.json"
+AFTER=$(sum)
+check "W6 two JSON objects are refused" '[ $RC = 2 ] && [[ "$(jget o.detail)" == *"must hold one JSON object"* ]] && [ "$AFTER" = "$BEFORE" ]'
+AHOOK="$H/pretooluse-ah-cli.mjs"
+allow_hook() {
+  OUT=$(node -e 'process.stdout.write(JSON.stringify({ session_id: "s1", cwd: process.argv[2], tool_name: "Bash", tool_input: { command: process.argv[1] } }))' "$1" "$SANDBOX" \
+    | HOME="$FAKEHOME" node "$AHOOK" 2>&1); RC=$?
+}
+allow_hook "node $H/msg.mjs decision add --team at --input $INPUT --cwd $SANDBOX"
+check "W6 the ah-cli hook auto-allows the --input form" '[[ "$OUT" == *"\"permissionDecision\":\"allow\""* ]]'
+allow_hook "node $H/msg.mjs decision add --team at --cwd $SANDBOX <<'EOF'
+$(decided)
+EOF"
+check "W6 ... and not the heredoc form" '[[ "$OUT" != *"\"permissionDecision\":\"allow\""* ]]'
 
 # ---------------------------------------------------------------- K skill anchors
 # The skill's text with every whitespace run collapsed, so a phrase matches across a line wrap.
@@ -257,7 +323,7 @@ kanchor '`## Decisions made on your behalf`: this item'"'"'s lines'
 kanchor '"guards: prose only (no conventions baseline)"'
 kanchor "**Step 3a, decision authority**"
 kanchor '"Ultra-Advisor decides (rest of session)"'
-kanchor '"No Ultra-Advisor — top team member, else me"'
+kanchor '"No Ultra-Advisor — top team member, else a fresh subagent on my model"'
 kanchor "naming all five:"
 kanchor "5. Who decides questions on the user's behalf"
 kanchor '**"Decisions made on your behalf"**'
@@ -270,6 +336,12 @@ kanchor '**A plan run with no `--branch`** runs on `ah/pipeline-<stem>`'
 kanchor 'every run of characters outside `[a-z0-9]` becomes one `-`; no `-` at either end; at most 40 characters, with no trailing `-` after the cut'
 kanchor '`refs/remotes/origin/ah/pipeline-<stem>` already exists, halt and notify before any work**'
 kanchor '`<root>/.claude/hierarchy/specs/acs-<YYYYMMDD-HHMM>.md`'
+kanchor '`msg.mjs decision add --team <team> --input <hier>/pipeline/<anchor id>/decision-input.json --cwd <root>`'
+kanchor 'write the line'"'"'s JSON with the Write tool'
+kanchor 'subagent of type `general-purpose` on your own model'
+kanchor '`decided-before` → add nothing'
+DECIDER=$(sed -n '/^### The decider$/,/^### The brief$/p' "$SKILL")
+check "K skill: the decider section offers no ah:orchestrator subagent" '[ -n "$DECIDER" ] && [[ "$DECIDER" != *"ah:orchestrator"* ]]'
 
 echo
 echo "SUMMARY: $PASS passed, $FAIL failed"

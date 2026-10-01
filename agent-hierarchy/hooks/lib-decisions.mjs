@@ -6,8 +6,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 
 import { mainHierarchyDir } from "./lib-config.mjs";
 import { hierarchyDir, ID_RE, listExchanges, openExchanges, PIPELINE_ANCHOR_SLUG, readMsgFile } from "./lib-hier.mjs";
@@ -19,6 +19,7 @@ export const DECISION_RUN_CAP = 20;
 const LETTERS = ["a", "b", "c", "d"];
 const WHY_USER = ["dangerous", "unsure", "cap"];
 const INPUT_FIELDS = ["kind", "item", "source", "question", "options", "default", "choice", "decider", "rationale", "revert", "review", "why_user", "dangerous", "exchange"];
+const DECIDER_KEYS = ["role", "name", "model"];
 /** Set by the writer only; a caller supplying one is refused. */
 const WRITER_FIELDS = ["id", "time", "run", "decision", "qkey"];
 
@@ -113,9 +114,10 @@ function refusal(input, existing) {
   if (input.default !== null && !letterWithin(input.default, options)) return invalid("default must be a letter within options, or null");
   if (input.choice !== null && typeof input.choice !== "string") return invalid("choice must be a string or null");
   const deciderOk =
-    decider && typeof decider === "object" && !Array.isArray(decider) && nonEmpty(decider.role) &&
+    decider && typeof decider === "object" && !Array.isArray(decider) && Object.keys(decider).every((k) => DECIDER_KEYS.includes(k)) &&
+    typeof decider.role === "string" && /^[a-z0-9-]+$/.test(decider.role) &&
     (decider.name === null || typeof decider.name === "string") && (decider.model === null || typeof decider.model === "string");
-  if (!(deciderOk || (decider === null && kind === "parked"))) return invalid("decider must be { role, name, model } (null only on a parked line)");
+  if (!(deciderOk || (decider === null && kind === "parked"))) return invalid("decider must be { role, name, model }, role matching ^[a-z0-9-]+$ (null only on a parked line)");
   for (const k of ["rationale", "revert"]) if (typeof input[k] !== "string") return invalid(`${k} must be a string`);
   for (const k of ["review", "dangerous"]) if (typeof input[k] !== "boolean") return invalid(`${k} must be a boolean`);
   if (input.why_user !== null && !WHY_USER.includes(input.why_user)) return invalid(`why_user must be ${WHY_USER.join(", ")} or null`);
@@ -126,6 +128,7 @@ function refusal(input, existing) {
     if (decider.role === "user") return invalid("a decided line's decider can't be the user — the user's answers are not logged as decided");
     if (input.why_user !== null) return invalid("a decided line has no why_user");
     if (!letterWithin(input.choice, options) && !isOther(input.choice)) return invalid("choice must be a letter within options, or other: <text>");
+    if (isOther(input.choice) && input.review !== true) return invalid("an other: answer always means review: true");
   } else {
     if (input.choice !== null) return invalid("a parked line has no choice");
     if (input.why_user === null) return invalid("a parked line needs why_user");
@@ -135,6 +138,8 @@ function refusal(input, existing) {
   if (kind === "decided") {
     const qkey = questionKey(input.item, input.question);
     if (existing.some((d) => isParked(d) && d.qkey === qkey)) return { reason: "parked-before", detail: `question ${qkey} was parked earlier in this run — never re-ask` };
+    const earlier = existing.find((d) => isDecided(d) && d.qkey === qkey);
+    if (earlier) return { reason: "decided-before", detail: `question ${qkey} was already decided in this run as ${earlier.id} — route that decision` };
     const decided = existing.filter(isDecided);
     const forItem = decided.filter((d) => d.item === input.item).length;
     if (forItem >= DECISION_ITEM_CAP) return { reason: "cap", detail: `item ${input.item} already has ${forItem} decided (cap ${DECISION_ITEM_CAP})` };
@@ -161,8 +166,7 @@ export function appendDecision(path, runId, input) {
     if (field === "question") line.qkey = questionKey(input.item, input.question);
     if (field === "choice") line.decision = decision;
   }
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, JSON.stringify(line) + "\n");
+  appendLine(path, line);
   const after = decisionSummary([...decisions, line], 0);
   const item = after.by_item[input.item];
   return { id: line.id, path, counts: { run: { decided: after.decided, parked: after.parked }, item: { decided: item.decided, parked: item.parked } } };
@@ -220,6 +224,44 @@ export function parseMergeForm(command) {
 
 /** Appends a `merge` line for a pinned merge command that ran: no id, and counted toward nothing. */
 export function appendMergeRecord(path, { pr, sha, method }) {
+  appendLine(path, { kind: "merge", pr, sha, method, time: new Date().toISOString(), approval: "permission prompt" });
+}
+
+/** One append of `obj` as a line, led by a newline when the file doesn't end in one (a torn line after a crash), so it never joins the fragment. */
+function appendLine(path, obj) {
   mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, JSON.stringify({ kind: "merge", pr, sha, method, time: new Date().toISOString(), approval: "permission prompt" }) + "\n");
+  const torn = existsSync(path) && !/(^|\n)$/.test(readFileSync(path, "utf8"));
+  appendFileSync(path, (torn ? "\n" : "") + JSON.stringify(obj) + "\n");
+}
+
+export const DECISION_INPUT_MAX = 64 * 1024;
+
+/**
+ * The JSON in `decision add --input`'s file, as `{ input }`, or `{ error }`. The file must be a
+ * regular file of at most 64 KiB whose real path is inside the run's `<hier>/pipeline/<anchor id>/`;
+ * it is read and left as it is.
+ */
+export function readDecisionInput(dir, runId, inputPath) {
+  const wanted = dirname(decisionLogPath(dir, runId));
+  let runDir;
+  let real;
+  try {
+    runDir = realpathSync(wanted);
+  } catch {
+    return { error: `--input must be inside ${wanted}, which doesn't exist` };
+  }
+  try {
+    real = realpathSync(inputPath);
+  } catch (err) {
+    return { error: `--input ${inputPath} can't be read (${err.code || err.message})` };
+  }
+  if (!real.startsWith(runDir + sep)) return { error: `--input must be inside ${runDir}, not ${real}` };
+  const st = statSync(real);
+  if (!st.isFile()) return { error: `--input ${real} is not a regular file` };
+  if (st.size > DECISION_INPUT_MAX) return { error: `--input ${real} is over ${DECISION_INPUT_MAX} bytes` };
+  try {
+    return { input: JSON.parse(readFileSync(real, "utf8")) };
+  } catch (err) {
+    return { error: `--input ${real} must hold one JSON object (${err.message})` };
+  }
 }
