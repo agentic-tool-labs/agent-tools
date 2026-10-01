@@ -376,6 +376,7 @@ under [docs/specs/](./docs/specs/). Good places to start:
 - **0.107.0** role packs: roles shipped in a plugin, adopted one at a time behind a pin.
 - **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
 - **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
+- **0.109.0** `/pipeline` decides safe questions for you and parks dangerous ones: [Decisions made for you](#decisions-made-for-you). Plan runs get a default branch. Issue runs can merge a PR for you, one approving click each, if you opt in: [Merging](#merging-only-if-you-opt-in).
 
 The installed version is in `.claude-plugin/plugin.json`. Each feature below
 is complete enough to use; the linked page has the detail.
@@ -449,10 +450,12 @@ stops that item and tells you, rather than starting a fourth. Issue runs add
 caps of their own: at most 2 plan rounds per issue, and 3 per step and per
 gate.
 
-After the first notice (branch, route, permission mode, secret scanner) it
-only interrupts you when something needs a person: a round cap, a real
-blocker, an Ultra-Advisor escalation, a red build, a secret-scan finding or a
-halted push. **It never merges.** Issue runs push an `ah/issue-<N>` branch per
+After the first notice (branch, route, permission mode, secret scanner, and who
+decides questions for you) it only interrupts you when something needs a
+person: a round cap, a real blocker, an Ultra-Advisor escalation, a red build,
+a secret-scan finding, a halted push or a question parked for you (see
+[Decisions made for you](#decisions-made-for-you)). **It never merges unless you opt in** (see
+[Merging](#merging-only-if-you-opt-in)). Issue runs push an `ah/issue-<N>` branch per
 issue (dependent issues stack on the branch they depend on) and open a draft
 PR that says `Refs #N` or `Closes #N`; you review and merge. Before every push
 it scans the patch for secrets, with gitleaks if installed, otherwise with the
@@ -464,10 +467,58 @@ it scans the patch for secrets, with gitleaks if installed, otherwise with the
     /pipeline #12 https://github.com/acme/app/issues/14   # refs may be #N or an issue URL
     /pipeline --labelled                             # every open issue carrying the trigger label
 
-Give a plan run `--branch`: the skill defines no default branch for one. It
-never pushes to `main` or a protected branch. A file and issue refs can't be
-mixed, and `--branch` doesn't apply to issue runs. A bare number is an issue; write `./12` for a file named `12`. For a
-list of acceptance criteria, put it in a file and pass the path.
+A plan run with no `--branch` works on `ah/pipeline-<plan-stem>`, made from
+where you are: the plan's file name without its extension, lowercased, other
+characters turned into `-`, cut at 40 characters. `docs/plans/search.md` runs
+on `ah/pipeline-search`. If that branch already exists, locally or on `origin`,
+the run stops before doing any work and tells you to pass `--branch` or delete
+the old one; it never reuses a branch. It never pushes to `main` or a
+protected branch. A file and issue refs can't be mixed, and `--branch` doesn't
+apply to issue runs. A bare number is an issue; write `./12` for a file named
+`12`. Acceptance criteria work either way: pass a file path, or type the
+criteria into the request and the run saves them verbatim, one per line, to a
+gitignored scratch file under `.claude/hierarchy/specs/`, runs on that, and
+names the file in its start notice. The branch is named after the file (for
+example `ah/pipeline-acs-20260930-2045`).
+
+### Decisions made for you
+
+During a run, questions the plan doesn't answer used to wait for you. Now,
+once the run has started, a **safe** question is decided for you by the
+strongest reasoner available, and a **dangerous** one waits for you.
+
+- **Who decides.** A safe question goes to the Ultra-Advisor if you allowed it
+  at the start of the run (the run asks once, unless you have already said),
+  else to the highest-tier member of the team, else to a fresh subagent on the
+  Orchestrator's own model. It is never a model below the Orchestrator's tier,
+  and never the Orchestrator's own context. If none of those can take it, the
+  question waits for you. The start notice says which decider applies, and
+  where the log is.
+- **What counts as dangerous.** Anything destructive or hard to undo; anything
+  remote or merge-related (pushes outside the run's own, merging, approving,
+  tracker writes); security and trust, including role packs, permissions,
+  hooks, CI and build or dependency configuration; cost, such as spawning
+  top-tier members you don't have; scope, such as a new item or a dropped
+  criterion; and the run's own rules (caps, guards, the push regime). A
+  question it can't classify counts as dangerous.
+- **Caps.** At most 4 decisions per item and 20 per run; a question over a cap
+  waits for you.
+- **A dangerous or unsure question** stops only its own item (in an issue run
+  the item ends `needs-user` and its dependents wait). The rest of the run
+  carries on, and you answer at the end rather than mid-run.
+- **Everything is on the record.** Each decision goes into a per-run log,
+  `.claude/hierarchy/pipeline/<run id>/decisions.jsonl`, with the decider, the
+  reason and how to undo it. The final report has **Decisions made on your
+  behalf**, with product, UX or interface calls flagged "review" first, then
+  **Waiting for you**; issue runs also put each item's decisions in its PR
+  body. Read the log with `msg.mjs decision list`; the verbs are in
+  [docs/cli-tools.md](./docs/cli-tools.md).
+
+Decisions never change the 3-round cap, and the run's usual checks (review,
+secret scan, push guard) still apply to whatever a decision produces. Where
+the repo has no committed `.claude/ah-conventions.json`, the start notice says
+"guards: prose only": protected paths are then the run's instructions, not a
+hook.
 
 **Who does the work.** The run builds its team itself with `roster.mjs
 create`, so no team has to exist first, and the roster is chosen as in
@@ -488,14 +539,65 @@ runs also need `gh` installed and logged in to github.com, a GitHub `origin`,
 and a `.claude/ah-conventions.json` that sets `issues.trigger_label` (plus
 `trusted_actors` for an organisation's repo). The same file can switch on the
 push guard, which refuses force pushes, protected branches, other remotes and
-`--no-verify`. Most of the rules above, including never merging, draft PRs, the round caps
-and the secret scan, are the run's own instructions, not hook guarantees;
-only the push guard is enforced by a hook, and it matches command text, so
-`gh` misuse isn't covered. Run state lives in the gitignored `.claude/hierarchy/`; a stale
+`--no-verify`. Most of the rules above, including draft PRs, the round caps
+and the secret scan, are the run's own instructions, not hook guarantees.
+What a hook does enforce is the push guard and the merge rules in
+[Merging](#merging-only-if-you-opt-in); both match command text, so they are
+a speed bump, not a sandbox. Run state lives in the gitignored `.claude/hierarchy/`; a stale
 open run anchor there makes the next run halt. Everything the conventions file
 accepts is in [docs/pipeline-conventions.md](./docs/pipeline-conventions.md);
 the full run procedure is
 [skills/autonomous-pipeline/SKILL.md](./skills/autonomous-pipeline/SKILL.md).
+
+### Merging, only if you opt in
+
+By default a run never merges: a person does. You can let an issue run do the
+merging for you, with your approval on every merge.
+
+- **Opting in.** Pass `--auto-merge`, or say so in plain words ("with
+  auto-merge", "and merge them once I approve"). Otherwise the run asks once at
+  the start, with "No" as the default. The answer is for that run only; nothing
+  remembers it, and no config key turns it on. A plan run refuses it, because a
+  plan run opens no PR. The start notice says whether auto-merge is on.
+- **One click per merge.** At the end of the run, for each PR that is ready
+  (signed off, checks passed, nothing requesting changes, no unresolved review
+  threads, head unchanged), the run offers `gh pr merge <N>
+  --match-head-commit <sha>` in a permission prompt, and your click is the
+  approval. The merge is pinned to that exact commit, so a PR that changed
+  since the run looked is refused. Decline and nothing runs; a merge GitHub
+  refuses is reported with gh's own message and not retried. The prompt only
+  appears in permission mode `default`, `auto` or `acceptEdits`; under bypass
+  or don't-ask modes the merge is refused, because the prompt might never reach
+  you.
+- **Merging is never decided for you.** It isn't one of the questions in
+  [Decisions made for you](#decisions-made-for-you), and it isn't logged as a
+  decision. The final report lists **Merges performed under your
+  authorisation** and **Not merged**, each PR with the reason. Check that
+  report against GitHub: the log says a merge command ran, not that it merged.
+- **What the merge guard blocks.** While a run is open, a hook refuses `gh pr
+  merge` in any other form, `gh pr review --approve`, `gh pr ready` outside the
+  pinned form, `--auto`, `--disable-auto` and `--admin`, `gh api` calls that
+  merge, approve or write refs, and the GitHub tools that merge, approve or
+  mark a PR ready. A refusal halts the run. It never blocks `git` commands, and
+  it does nothing outside a run. Rule details:
+  [docs/cli-tools.md](./docs/cli-tools.md).
+
+**Honest limits.** The merge guard reads command text, so it stops a run that
+follows its instructions from merging by mistake, and nothing more. `curl`,
+scripts, `gh` aliases and extensions, and `xargs` or `find -exec` get past it,
+and pushes aren't covered by it at all. The real boundary is on GitHub:
+
+- **Pushes.** Branch protection or a ruleset on `main` that requires a pull
+  request, with no bypass for the run's token, stops direct pushes by any
+  route. The run uses your own token, so a bypass you have, it has: for classic
+  branch protection turn on "Do not allow bypassing the above settings", and for
+  a ruleset keep your own role off the bypass list. Every run's start notice
+  carries a read-only line, "Branch protection on `main`: on", "on, but …" with
+  the reason, "OFF", or "unknown", and the run goes ahead whatever it says.
+- **Merges.** GitHub can't tell your click from the run's call, because both
+  use your token. Merge approval is a hard wall only if the run uses a separate
+  bot account or GitHub App identity that can't merge without your approving
+  review. Setting that up is your call; without it, the prompt is a speed bump.
 
 ## Commands
 

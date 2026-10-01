@@ -60,6 +60,7 @@ const SCHEMA = {
     draft: (v) => typeof v === "boolean" || "`pr.draft` must be a boolean",
     issue_link: (v) => v === "refs" || v === "closes" || '`pr.issue_link` must be "refs" or "closes"',
     reviewers: (v) => stringArray(v) || "`pr.reviewers` must be an array of logins or org/team names",
+    merge_method: (v) => v === "merge" || v === "squash" || v === "rebase" || '`pr.merge_method` must be "merge", "squash" or "rebase"',
   },
   ci_secrets: (v) => v === "none-on-branches" || v === "skip-ci" || '`ci_secrets` must be "none-on-branches" or "skip-ci"',
   protected_paths: (v) => stringArray(v) || "`protected_paths` must be an array of globs",
@@ -118,7 +119,7 @@ export function conventionSettings(loaded) {
   const c = loaded.conventions;
   const pr = c.pr ?? {};
   return {
-    pr: { draft: pr.draft ?? true, issue_link: pr.issue_link ?? "refs", reviewers: pr.reviewers ?? [] },
+    pr: { draft: pr.draft ?? true, issue_link: pr.issue_link ?? "refs", reviewers: pr.reviewers ?? [], merge_method: pr.merge_method ?? "merge" },
     ci_secrets: c.ci_secrets ?? "none-on-branches",
     protected_paths: c.protected_paths ?? [],
     protected_branches: c.protected_branches ?? [],

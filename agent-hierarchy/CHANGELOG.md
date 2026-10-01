@@ -5,6 +5,79 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.109.0]
+
+`/pipeline` decides safe questions for you instead of waiting.
+
+### Added
+
+- **Decisions on your behalf.** Once a `/pipeline` run has started, a question
+  the plan doesn't answer is classified. A **safe** one (it stays on the run's
+  branch, is reversible there, stays in the plan's scope and touches nothing
+  reserved) goes to the Ultra-Advisor if you allowed it at the start of the
+  run, else to the highest-tier member of the team, else to a fresh subagent
+  on the Orchestrator's model; never a model below the Orchestrator's tier,
+  never the Orchestrator's own context, and if none can take it the question
+  waits for you. A **dangerous** one (destructive,
+  remote or merge, security and trust including role packs, cost, scope, or
+  the run's own rules; anything unclear counts) is parked for you, and
+  stops only its own item. At most 4 decisions per item and 20 per run.
+  Every decision goes in a per-run log with its reason and how to undo it. The
+  final report lists "Decisions made on your behalf" and "Waiting for you";
+  issue runs put each item's decisions in its PR body too. See the README's
+  [Decisions made for you](./README.md#decisions-made-for-you).
+- **`msg.mjs decision add|list`.** Writes and reads the run's decision log
+  (`.claude/hierarchy/pipeline/<run id>/decisions.jsonl`). Verbs and refusals:
+  [cli-tools](./docs/cli-tools.md).
+- **Auto-merge, only if you opt in.** An issue run can merge its PRs at the end
+  of the run. Opt in per run with `--auto-merge` or in plain words, or answer
+  the start question (default No); plan runs refuse it. Every merge needs your
+  click on a permission prompt, pinned to the PR's head commit, and only in
+  permission mode `default`, `auto` or `acceptEdits`. Merging is never counted
+  as a decision made for you. The final report adds "Merges performed under
+  your authorisation" and "Not merged". See the README's
+  [Merging](./README.md#merging-only-if-you-opt-in).
+- **Merge guard.** While a run is open, a hook refuses `gh pr merge`
+  (any unpinned form, `--auto`, `--admin`), `gh pr review --approve`, `gh pr
+  ready` outside the pinned form, `gh api` merge, approve and ref-write calls,
+  and the GitHub tools that merge or approve. It never blocks `git` commands.
+  A speed bump, not a sandbox: GitHub branch protection is what stops pushes,
+  and a merge is a hard wall only with a separate bot or App identity.
+- **Branch-protection check.** Every run-start notice says whether `main` is
+  protected ("on", "on, but …", "OFF" or "unknown"). Read-only; it never
+  blocks the run.
+- **Run-start notice** now also says who decides for you and where the log is,
+  and "guards: prose only (no conventions baseline)" when the repo has no
+  committed `.claude/ah-conventions.json`.
+
+### Changed
+
+- **A plan run with no `--branch` has a default branch**,
+  `ah/pipeline-<plan-stem>`, created from where you are. If it already exists,
+  locally or on `origin`, the run halts before any work and says to pass
+  `--branch` or delete it. Before this, no default was defined.
+- **Acceptance criteria** can be passed as a file path or typed into the
+  request; typed ones are saved to a gitignored scratch file under
+  `.claude/hierarchy/specs/` and the run goes ahead on it.
+- A question parked for you is now one of the things that notifies you
+  mid-run.
+
+### Upgrade notes
+
+- The run asks one extra question at the start (Ultra-Advisor decides, or not)
+  unless the session's Ultra-Advisor setting is already `session` or `off`.
+- Decisions made for you are real: read the final report, and the PR bodies of
+  issue runs, before merging.
+- `/pipeline` still never merges unless you opt in. The merge guard is new
+  and blocks `gh` merge forms during a run; if a run halts on an
+  `ah-push-guard` message, that is the guard.
+- Turn on branch protection that requires a PR, with no bypass for your token,
+  if you want pushes to `main` stopped by GitHub rather than by the run's rules.
+
+### Not in this release
+
+Sub-orchestrators (spec 0067) are not built.
+
 ## [0.108.5]
 
 Everything since 0.105.0: named rosters, role packs, several owned teams, a

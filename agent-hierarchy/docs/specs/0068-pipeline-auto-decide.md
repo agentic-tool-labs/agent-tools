@@ -190,8 +190,10 @@ Each time, the Orchestrator runs the agent-team ladder (§1) as follows:
 - No candidate left → step 4, but **the Orchestrator never decides in its
   own context.** In an issue run that context has read the snapshot, so
   the two keys would be one.
-  - Dispatch a fresh Agent-tool subagent on the Orchestrator's own model,
-    `general-purpose` or `ah:orchestrator`, with the same brief (§4.2).
+  - Dispatch a fresh Agent-tool subagent of type `general-purpose` on the
+    Orchestrator's own model, with the same brief (§4.2). Not
+    `ah:orchestrator`: the route gate (pretooluse-route-gate.mjs) denies
+    that type as a subagent for every caller.
   - Log it as `decider: { role: "orchestrator", name: <the subagent's
     id>, model }`.
   - The brief is the Agent prompt itself, with no msg.mjs exchange. The
@@ -286,9 +288,22 @@ notify, as "genuinely blocked" does today.
 2. Only on exit 0 route the answer to the role that raised the question,
    quoting the printed id: "decided on the user's behalf by `<decider>`
    (d<k>)".
-3. Exit 2 → the question is parked with the refusal as its reason, and
-   nothing is routed. A refused line (a cap, an off-list choice,
-   `parked-before`) must never have acted.
+3. Exit 2 → nothing is routed; a refused line must never have acted. What
+   happens next depends on the refusal:
+   - **`cap`:** add a `parked` line with `why_user: "cap"`.
+   - **`parked-before`:** add nothing. The question is already parked, and
+     its earlier `parked` line stands.
+   - **`decided-before`:** add nothing. Find the earlier decision with
+     `list --item <slug>` and route that one, quoting its `d<k>`. Never
+     route a second, different answer.
+   - **Any field refusal** (a missing or mistyped field, an unknown key, a
+     writer-owned field): add a `parked` line with `why_user: "unsure"`,
+     with the refusal text as its `rationale`. Build it from the fields
+     that were valid.
+   - **If that `parked` add is refused as well:** stop the item exactly as
+     for a parked question (§4.4), put both refusal texts in the stop
+     notice (issue runs: the `needs-user` exception record), and don't try
+     again.
 
 The raising role then carries on: it amends the spec, or builds.
 Implementor commits for the decision name `d<k>` in the body, so the report
@@ -305,8 +320,8 @@ can point at the change.
 - `none` or `each` → one `AskUserQuestion` (header "Decisions"):
   - "Ultra-Advisor decides (rest of session)" →
     `gate.mjs set --choice session`;
-  - "No Ultra-Advisor — top team member, else me" →
-    `gate.mjs set --choice off`.
+  - "No Ultra-Advisor — top team member, else a fresh subagent on my
+    model" → `gate.mjs set --choice off`.
 
   `each` isn't offered: re-asking at each escalation would stall a hands-off
   run. The question says that dangerous calls always come to the user.
@@ -320,8 +335,24 @@ can point at the change.
 lib-hier's resolved hierarchy dir, so `AGENT_HIERARCHY_DIR` is honoured and
 the dir stays gitignored. `sweep` never touches it, and nothing deletes it.
 
-**`msg.mjs decision add --team <T> --cwd <abs>`:**
-- reads one JSON object on stdin;
+**`msg.mjs decision add --team <T> [--input <path>] --cwd <abs>`:**
+- reads one JSON object from `--input <path>`, or from stdin when
+  `--input` is absent. **The skill always uses `--input`.**
+  - Why: pretooluse-ah-cli auto-allows an ah command only when its text
+    has no shell metacharacters (lib-ah-cli.mjs:61, :106, :111). A heredoc
+    or pipe feeding stdin therefore always falls through to the normal
+    permission flow, and could prompt mid-run. A plain `--input <path>`
+    token passes the existing grammar with no hook change.
+  - The path: the Orchestrator writes it with the Write tool, as
+    `<hier>/pipeline/<anchor id>/decision-input.json`, overwriting it each
+    time.
+  - `add` refuses (exit 2, nothing appended) when:
+    - the realpath is outside that run's `<hier>/pipeline/<anchor id>/`
+      directory;
+    - it isn't a regular file;
+    - it is over 64 KiB;
+    - it isn't one JSON object.
+  - `add` neither deletes nor moves the input file.
 - finds the run by the skill's exactly-one rule: open exchanges of team T
   with slug `pipeline-run-anchor`. Zero or several → exit 2, write nothing;
 - validates, then appends one line with a single append call;
@@ -332,7 +363,6 @@ Input fields:
 - `item`: an item slug, or `run`
 - `source`: the role or member that raised it
 - `question`
-- `qkey`: the first 12 hex characters of sha256(`<item>\n<question>`)
 - `options`: an array, 2–4 strings, lettered a–d in order
 - `default`: a letter, or null
 - `choice`: a letter within `options`, or `other: …`; null when parked.
@@ -341,6 +371,11 @@ Input fields:
   ultra-advisor|architect|reviewer|implementor|<custom>|orchestrator.
   `orchestrator` always means a fresh subagent (§4.1), with its id as
   `name`.
+  - Required on `decided` lines.
+  - On `parked` lines it is the decider that answered `unsure` or
+    `dangerous`, or `null` when the question was parked before any
+    dispatch: classified dangerous by the Orchestrator, or over a cap.
+  - `null` is refused on `decided` lines.
 - `rationale`, `revert`
 - `review`: boolean
 - `why_user`: `dangerous` | `unsure` | `cap`; null when decided
@@ -348,22 +383,45 @@ Input fields:
 - `exchange`: the decision request's id, or null when parked before
   dispatch or decided by a step-4 subagent
 
-The writer adds `id` (`d<k>`, k = valid lines so far + 1), `time` (ISO) and
-`run` (the anchor id).
+The writer adds the **writer-owned** fields:
+- `id`: `d<k>`, where k = the number of valid `decided` and `parked` lines
+  so far, plus 1. Lines of other kinds, such as auto-merge's `merge` lines,
+  carry no id and don't count toward k;
+- `time` (ISO), and `run` (the anchor id);
+- `decision`: the option text resolved from `choice`;
+- `qkey`, computed by the writer: the first 12 hex characters of
+  sha256(`<item>\n<normalized question>`). Normalized means trimmed,
+  lowercased, and with every run of whitespace collapsed to one space. The
+  model never computes it. Exact or near-exact repeats are caught here;
+  paraphrases are caught by the Orchestrator's `list --item` check before
+  dispatch.
+
+**The caps** (4 decided per item, 20 per run) are exported constants in the
+writer lib, `agent-hierarchy/hooks/lib-decisions.mjs`. msg.mjs, and later
+auto-merge's hook, import them from there.
 
 **Refusals** (exit 2, nothing written), each with a reason:
 - a missing or mistyped field;
+- an unknown input key, or any writer-owned field supplied by the caller
+  (`id`, `time`, `run`, `decision`, `qkey`). Fail-closed;
 - `decided` with `dangerous: true`, `decider.role` "user", or a `why_user`;
 - `decided` whose `choice` is neither a letter within `options` nor
   `other: …`;
+- `decided` with `choice` `other: …` and `review: false`, because `other:`
+  always means review (§4.3);
+- a `decider` object with keys other than `role`, `name` and `model`, or a
+  `role` that doesn't match `^[a-z0-9-]+$`. The "user" check then runs on
+  that validated value, so `User` and ` user` can't slip past it;
+- `decided` when a `decided` line with the same `qkey` already exists in
+  the run (reason `decided-before`). This makes a re-run `add`, after
+  compaction or a replayed input file, write nothing twice;
 - `decided` when a `parked` line with the same `qkey` already exists in the
   run (reason `parked-before`). The writer is the code backstop for "never
   re-ask" after compaction; before dispatching, the Orchestrator checks
   `list --item <slug>`;
 - `parked` with a `choice`, or with no `why_user`;
 - `dangerous: true` with a `why_user` other than `dangerous`;
-- `decided` over either cap: 4 for its item, 20 for the run. The two caps
-  are constants in msg.mjs.
+- `decided` over either cap: 4 for its item, 20 for the run.
 
 **`msg.mjs decision list --team <T> [--run <anchor id>] [--item <slug>] [--summary] --cwd <abs>`:**
 - with no `--run`, the open anchor by the exactly-one rule; with `--run`,
@@ -371,6 +429,9 @@ The writer adds `id` (`d<k>`, k = valid lines so far + 1), `time` (ISO) and
 - prints `{ run, path, decisions: [...], skipped }`, in id order;
 - a line that won't parse, such as a torn last line after a crash, is
   skipped and counted in `skipped`, never fatal;
+- `decisions` holds every valid line, each with its `kind`. Lines of other
+  kinds (auto-merge's `merge` lines) are listed because the report needs
+  them, but no count includes them;
 - `--summary` prints instead
   `{ decided, flagged, parked, by_item: { <slug>: { decided, parked } }, skipped }`,
   plus `line`, a one-line text, e.g. `decisions: 7 decided (2 flagged), 1 waiting for you`.
@@ -549,11 +610,46 @@ tests/test-msg-cli.sh.
   Orchestrator can park with: the `cap`, `parked-before` or field reason,
   on stdout as JSON with exit 2. [exit 0 on refusal]
 - **W2c Never re-ask.**
-  - A `parked` line, then a `decided` line with the same `qkey`, in the
-    same run → refused with `parked-before`.
-  - A different `qkey` is accepted.
+  - A `parked` line, then a `decided` line with the same item and
+    question, in the same run → refused with `parked-before`. The same
+    holds when the question differs only in case and whitespace.
+  - A different question is accepted.
 
-  [skip the qkey check]
+  [skip the qkey check] [hash without normalizing]
+- **W2f Decided before.** The same `decided` input twice → the second is
+  refused with `decided-before`, and the file holds one line.
+  [skip the decided-before check]
+- **W6 Input file.**
+  - `--input` with a valid file under the run dir → appended, and the
+    input file is left as it was.
+  - Each refused, with nothing appended:
+    - a path outside the run dir;
+    - a symlink inside the run dir that points outside it;
+    - a directory;
+    - over 64 KiB;
+    - two JSON objects.
+  - The ah-cli hook auto-allows
+    `node <ah>/hooks/msg.mjs decision add --team T --input <abs path> --cwd <abs>`
+    (allow output asserted). It doesn't auto-allow the heredoc form.
+
+  [skip the realpath check] [read stdin when --input is given]
+- **W2e Fields.**
+  - An unknown key → refused.
+  - Each writer-owned field supplied by the caller (`id`, `time`, `run`,
+    `decision`, `qkey`) → refused.
+  - `decider: null` on a `decided` line → refused; on a `parked` line →
+    accepted.
+
+  [accept unknown keys] [accept a caller qkey] [allow a null decider when
+  decided]
+- **W1b Ids skip other kinds.** A raw `{"kind":"merge",…}` line injected
+  into the file:
+  - the next `add` still gets the next `d<k>`, counting only decided and
+    parked lines;
+  - `list` shows the merge line;
+  - `--summary` counts it nowhere.
+
+  [count every line toward k]
 - **W2d Letters.**
   - `choice: "b"` stores `options[1]` as `decision`.
   - `choice: "e"` with 4 options is refused.
@@ -573,6 +669,10 @@ tests/test-msg-cli.sh.
   [take the newest anchor]
 - **W5 Reader.**
   - A torn last line is skipped and counted in `skipped`.
+  - A torn last line, then an `add`: the new line still parses, with the
+    right id, and `skipped` is 1. The writer starts its line with `\n` when
+    the file is non-empty and doesn't end in one, in the same single
+    append. [glue the new line onto the fragment]
   - `--item` filters.
   - `--summary` counts, and its `line` text is right.
 
@@ -583,7 +683,11 @@ tests/test-msg-cli.sh.
   - the S1–S4 and D1–D6 labels;
   - the reply-format line with letters;
   - "Never re-ask";
-  - "Log first, then apply", and "only on exit 0";
+  - "Log first, then apply", "only on exit 0", and the per-refusal park
+    rules, `decided-before` included;
+  - `decision add … --input <hier>/pipeline/<anchor id>/decision-input.json`,
+    written with the Write tool;
+  - `general-purpose` as step 4's subagent type, with no `ah:orchestrator`;
   - "never decides in its own context";
   - the issue-run `other:` → `unsure` line;
   - S1's execution clause and "No other ref";

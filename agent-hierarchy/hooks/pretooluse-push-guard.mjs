@@ -1,22 +1,35 @@
 #!/usr/bin/env node
-// agent-hierarchy — PreToolUse push guard (Bash). Stateless and always on, but only in repos that
-// commit `.claude/ah-conventions.json` on origin's default branch; inert everywhere else.
+// agent-hierarchy — PreToolUse push guard (Bash). Push rules apply only in repos that commit
+// `.claude/ah-conventions.json` on origin's default branch; merge rules only while a /pipeline run
+// is open. It reads the run anchor and the run's decision log; it writes nothing.
 //
 // In an opted-in repo it denies force pushes, --no-verify, deletions, bulk and tag pushes, pushes to a
 // remote other than origin, pushes to the default or a protected branch, pushes whose range touches
 // a protected path, and edits to remote configuration. Errors before opt-in is established allow;
 // errors after it fail closed (PG-ERROR).
 //
+// While a run is open, in any repo, it denies every way the run could merge, approve, ready or
+// auto-merge a PR; no git command is a merge form, and pushes are left to GitHub's branch
+// protection. If those rules throw on a merge form, or it can't tell whether a run is live, it
+// denies (PG-MERGE-ERROR); any other command is never blocked by a guard failure. The one exception
+// is the pinned merge command (lib-decisions.mjs mergeCommand) from the run's top-level Orchestrator
+// in a run that opted into auto-merge: that gets the native permission prompt, so the user's click
+// is the approval.
+//
 // It matches command text, so it stops a compliant model following an injected instruction, not an
 // adversarial one: shell expansion, command text fed to a shell as data, other programs that run
-// git, git aliases, non-literal paths and the GitHub API all get past it. See
-// docs/pipeline-conventions.md.
+// git, git aliases, non-literal paths, other API clients (curl, hub), gh aliases and extensions all
+// get past it. See docs/pipeline-conventions.md.
 //
-// CLI mode, the same evaluation without a push:
+// CLI mode, the same evaluation without a push, the read-only merge readiness check, and the
+// branch-protection line a run prints at bootstrap:
 //   node pretooluse-push-guard.mjs check --branch <name> --cwd <abs>
+//   node pretooluse-push-guard.mjs merge-check --pr <N> --cwd <abs>
+//   node pretooluse-push-guard.mjs protection --cwd <abs>
 
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { logHookError, readHookInput } from "./lib-config.mjs";
+import { logHookError, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
 import { conventionSettings, git, globMatch, globRegExp, loadConventions, refExists, tryGit } from "./lib-conventions.mjs";
 
 // ---------------------------------------------------------------------------------------------
@@ -237,11 +250,11 @@ function gitInvocation(args, cwd, env) {
  * nested command string gets a copy. `root` is the hook's own cwd, where an unknowable directory
  * change (`pushd` with no argument or `+N`/`-N`, an unmatched `popd`) falls back to.
  */
-function gitInvocations(events, state, root, out = []) {
+function gitInvocations(events, state, root, out = [], ghOut = []) {
   const copy = (cwd) => ({ cwd, stack: [...state.stack] });
   for (const ev of events) {
     if (ev.sub) {
-      gitInvocations(ev.sub, copy(state.cwd), root, out);
+      gitInvocations(ev.sub, copy(state.cwd), root, out, ghOut);
       continue;
     }
     const { k, env, dir } = commandWord(ev.cmd);
@@ -265,11 +278,13 @@ function gitInvocations(events, state, root, out = []) {
         if (/^-[A-Za-z]*c[A-Za-z]*$/.test(args[j])) dashC = true;
         if (/^[-+][A-Za-z]*[oO]$/.test(args[j]) || args[j] === "--rcfile" || args[j] === "--init-file") j++;
       }
-      if (dashC && j < args.length) gitInvocations(parseShell(args[j]).events, copy(here), root, out);
+      if (dashC && j < args.length) gitInvocations(parseShell(args[j]).events, copy(here), root, out, ghOut);
     } else if (name === "eval") {
-      gitInvocations(parseShell(args.join(" ")).events, copy(here), root, out);
+      gitInvocations(parseShell(args.join(" ")).events, copy(here), root, out, ghOut);
     } else if (basename(name) === "git") {
       out.push(gitInvocation(args, here, env));
+    } else if (basename(name) === "gh") {
+      ghOut.push({ args, cwd: here });
     }
   }
   return out;
@@ -370,9 +385,11 @@ function defaultDestination(repo, mode, cur) {
   throw new Error(`unknown push.default ${mode}`);
 }
 
-function pushRule(inv, repo, conv) {
+const srcOf = (spec) => spec.replace(/^\+/, "").split(":")[0];
+
+/** What a `git push` invocation sends: its flags, remote, refspecs, push.default mode, current branch, and `{spec, src, dst}` pairs. */
+function pushPlan(inv, repo) {
   const { flags, remote: named, refspecs: given } = parsePush(inv.args);
-  const flag = (test) => flags.find(test);
   const cur = currentBranch(repo);
   const remote =
     named ??
@@ -380,7 +397,21 @@ function pushRule(inv, repo, conv) {
   // With no refspec, git pushes remote.<remote>.push if set, else by push.default.
   const refspecs = given.length ? given : configValues(repo, `remote.${remote}.push`);
   const mode = refspecs.length ? null : configValue(repo, "push.default") || "simple";
-  const srcOf = (spec) => spec.replace(/^\+/, "").split(":")[0];
+  const pairs = () =>
+    refspecs.length
+      ? refspecs.map((spec) => {
+          const c = spec.replace(/^\+/, "").indexOf(":");
+          const src = srcOf(spec);
+          const dst = c >= 0 ? spec.replace(/^\+/, "").slice(c + 1) : src === "HEAD" || src === "@" ? cur : src;
+          return { spec, src, dst: dst && shortName(dst) };
+        })
+      : [defaultDestination(repo, mode, cur)].filter(Boolean);
+  return { flags, remote, refspecs, mode, cur, pairs };
+}
+
+function pushRule(inv, repo, conv) {
+  const { flags, remote, refspecs, mode, pairs: destinations } = pushPlan(inv, repo);
+  const flag = (test) => flags.find(test);
 
   const force =
     flag((f) => ["--force", "--force-with-lease", "--force-if-includes"].includes(f) || f.startsWith("--force-with-lease=") || (SHORT_GROUP.test(f) && f.includes("f"))) ||
@@ -408,14 +439,7 @@ function pushRule(inv, repo, conv) {
 
   if (remote !== "origin") return { rule: "PG-REMOTE", short: "remote other than origin", detail: `remote ${remote}` };
 
-  const pairs = refspecs.length
-    ? refspecs.map((spec) => {
-        const c = spec.replace(/^\+/, "").indexOf(":");
-        const src = srcOf(spec);
-        const dst = c >= 0 ? spec.replace(/^\+/, "").slice(c + 1) : src === "HEAD" || src === "@" ? cur : src;
-        return { spec, src, dst: dst && shortName(dst) };
-      })
-    : [defaultDestination(repo, mode, cur)].filter(Boolean);
+  const pairs = destinations();
   for (const p of pairs) {
     if (!p.dst) return { rule: "PG-BRANCH", short: "unresolved destination", detail: `destination of ${p.spec} unresolved (detached HEAD)` };
     if (branchProtected(conv, p.dst)) return { rule: "PG-BRANCH", short: `protected branch ${p.dst}`, detail: `branch ${p.dst}` };
@@ -497,21 +521,182 @@ function evaluate(inv, repo, conv) {
   }
 }
 
+/** `conv` is null for a merge rule, which doesn't depend on the repo's conventions. */
 function deny(v, conv) {
-  const source = conv.conventions ? conv.default.ref : "baseline only";
-  const detail = [v.detail, v.range && `range ${v.range}`, `conventions ${source}`].filter(Boolean).join("; ");
+  const source = conv && (conv.conventions ? conv.default.ref : "baseline only");
+  const detail = [v.detail, v.range && `range ${v.range}`, source && `conventions ${source}`].filter(Boolean).join("; ");
   const reason =
-    `ah-push-guard:${v.rule} ${detail}. Do not retry, rephrase, split, or route this push through another command, script, or agent. ` +
+    `ah-push-guard:${v.rule} ${detail}. Do not retry, rephrase, split, or route this ${conv ? "push" : "command"} through another command, script, or agent. ` +
     `In a /pipeline run, follow the autonomous-pipeline skill's handling for ${v.rule}. ` +
     "Otherwise, tell the user that a person can run it from their own terminal if it is intended.";
-  const calm =
-    v.rule === "PG-REMOTECFG"
+  const calm = !conv
+    ? `ah push-guard stopped a ${v.short} while a /pipeline run is open. Nothing was sent.`
+    : v.rule === "PG-REMOTECFG"
       ? `ah push-guard stopped a git remote change (${v.short}).`
       : `ah push-guard stopped a git push (${v.short}). Nothing was sent.`;
   process.stdout.write(
     JSON.stringify({ systemMessage: calm, hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }),
   );
   process.exit(0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Merge rules (while a /pipeline run is open, in any repo).
+
+// `updateRef` matches `updateRefs` too.
+const API_MERGE_WORDS = ["mergePullRequest", "mergeBranch", "updateRef", "enablePullRequestAutoMerge", "markPullRequestReadyForReview", "addPullRequestReview", "submitPullRequestReview", "event=APPROVE"];
+
+/** gh's command group and verb: its first two positional words, skipping the repo flag (-R v, -Rv, --repo v, --repo=v) wherever it sits. */
+function ghWords(args) {
+  const words = [];
+  for (let k = 0; k < args.length && words.length < 2; k++) {
+    if (args[k] === "-R" || args[k] === "--repo") k++;
+    else if (!args[k].startsWith("-")) words.push(args[k]);
+  }
+  return words;
+}
+
+/** `gh api`'s method when one is given (-X v, -Xv, --method v, --method=v), upper-cased; null when gh picks it. */
+function apiMethod(args) {
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "-X" || a === "--method") return String(args[k + 1] ?? "").toUpperCase();
+    if (a.startsWith("--method=")) return a.slice("--method=".length).toUpperCase();
+    if (/^-X./.test(a)) return a.slice(2).toUpperCase();
+  }
+  return null;
+}
+
+function apiRule(args) {
+  const text = args.join(" ");
+  const method = apiMethod(args);
+  const withFields = args.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF]./.test(a));
+  const hit =
+    /pulls\/[^/\s]+\/(merge|reviews)\b/.exec(text)?.[0] ||
+    /repos\/[^/\s]+\/[^/\s]+\/merges\b/.exec(text)?.[0] ||
+    (/git\/refs(\/|\b)/.test(text) && ((method && method !== "GET") || withFields) && "a write to git/refs") ||
+    API_MERGE_WORDS.find((w) => text.includes(w)) ||
+    (ghWords(args)[1] === "graphql" && args.some((a) => a.includes("query=@") || a === "--input" || a.startsWith("--input=")) && "a graphql query the guard can't read");
+  return hit ? { rule: "PG-API-MERGE", short: "PR merge or review through the API", detail: `gh api: ${hit}` } : null;
+}
+
+function ghRule(args) {
+  const [group, verb] = ghWords(args);
+  if (group === "api") return apiRule(args);
+  if (group !== "pr") return null;
+  if (verb === "merge") {
+    const flag = args.find((a) => /^--(auto|disable-auto|admin)(=|$)/.test(a));
+    return flag
+      ? { rule: "PG-AUTOMERGE", short: "PR auto-merge or admin merge", detail: `gh pr merge ${flag}` }
+      : { rule: "PG-MERGE", short: "PR merge", detail: "gh pr merge outside the run's pinned, approved merge command" };
+  }
+  if (verb === "review" && args.some((a) => a === "--approve" || a.startsWith("--approve=") || /^-[A-Za-z]*a[A-Za-z]*$/.test(a))) {
+    return { rule: "PG-APPROVE", short: "PR approval", detail: "gh pr review --approve" };
+  }
+  if (verb === "ready") return { rule: "PG-READY", short: "PR ready", detail: "gh pr ready outside the run's pinned, approved merge command" };
+  return null;
+}
+
+/**
+ * No `agent_id`, and either no `agent_type` with a persisted role that is null or orchestrator, or
+ * the `ah:orchestrator` agent itself — matched by name, because resolveHierarchyRole maps only the
+ * chain roles.
+ */
+function topLevelOrchestrator(input) {
+  if ("agent_id" in input) return false;
+  if (input.agent_type) return input.agent_type === "ah:orchestrator";
+  const { role } = resolveHierarchyRole(input);
+  return role === null || role === "orchestrator";
+}
+
+function ask(reason) {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }));
+  process.exit(0);
+}
+
+/** The pinned merge command: the user's permission prompt when every condition holds, else a deny. Never allows. */
+function pinnedMerge(input, cwd, form, D) {
+  const refuse = (rule, detail) => deny({ rule, short: "PR merge", detail }, null);
+  if (!topLevelOrchestrator(input)) refuse("PG-MERGE-ROLE", "the pinned merge command runs only from the run's top-level Orchestrator session");
+  // Under bypassPermissions or dontAsk, or with no mode reported, an `ask` may never reach a person.
+  if (!PROMPTING_MODES.has(input.permission_mode)) refuse("PG-MERGE", `permission mode ${input.permission_mode || "unreported"} may not show you the merge prompt`);
+  const run = D.liveRun(cwd);
+  if (!run) refuse("PG-MERGE", "there is no single open /pipeline run to merge under");
+  if (run.constraints["merge-opt-in"] !== "yes") refuse("PG-MERGE", "this run has no auto-merge approval (merge-opt-in is not yes)");
+  if (form.method !== run.constraints["merge-method"]) refuse("PG-MERGE", `--${form.method} is not this run's merge method (${run.constraints["merge-method"] || "none recorded"})`);
+  const log = D.readDecisions(D.decisionLogPath(run.dir, run.id));
+  const { line } = D.decisionSummary(log.decisions, log.skipped);
+  const top = (tryGit(cwd, ["rev-parse", "--show-toplevel"]) || "").trim();
+  // Userinfo in the URL may be a token; it must not reach the prompt or the transcript.
+  const origin = top ? (tryGit(top, ["config", "--get", "remote.origin.url"]) || "").trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1") : "";
+  ask(
+    `Merge PR #${form.pr} of ${origin || top || cwd} at ${form.sha}${form.draft ? ", marking the draft ready first" : ""} (--${form.method}). ` +
+      `/pipeline run ${run.id}, ${line}. Flagged decisions for this PR are in its body under 'Decisions made on your behalf'. ` +
+      "Approve only if you want this merged now.",
+  );
+}
+
+const PROMPTING_MODES = new Set(["default", "auto", "acceptEdits"]);
+
+/** The liveness mergeGuard found ("live", "unknown" or "not"), so a later failure is judged without asking again. */
+let runState = null;
+
+/** Liveness over several directories: live if any is, else unknown if any is, else not. */
+function livenessOf(dirs, D) {
+  const states = dirs.map((dir) => D.runLiveness(dir));
+  return states.includes("live") ? "live" : states.includes("unknown") ? "unknown" : "not";
+}
+
+/**
+ * Denies or asks for any merge form while a run is live for the session's cwd or any gh
+ * invocation's own directory; no git command is a merge form. Returns when the command has no gh
+ * invocation, or no run is live. When liveness can't be determined it denies a merge form and
+ * returns otherwise, so the push rules still run.
+ */
+async function mergeGuard(input, command, cwd, invs, ghs) {
+  if (!ghs.length) return;
+  const D = await import("./lib-decisions.mjs");
+  runState = livenessOf([...new Set([cwd, ...ghs.map((g) => g.cwd)])], D);
+  if (runState === "not") return;
+  if (runState === "unknown") {
+    if (D.parseMergeForm(command) || ghs.some((g) => ghRule(g.args))) await mergeError(cwd, new Error("whether a /pipeline run is live can't be determined"));
+    return;
+  }
+  const form = D.parseMergeForm(command);
+  if (form) pinnedMerge(input, cwd, form, D);
+  for (const g of ghs) {
+    const v = ghRule(g.args);
+    if (v) deny(v, null);
+  }
+}
+
+/**
+ * Whether the raw text is a merge form, without a full parse, so the test holds even when parsing
+ * threw: a gh merge, approval or ready, or a gh api call that could merge. Reads and git never are.
+ */
+function mergeForm(c) {
+  if (!/\bgh\b/.test(c)) return false;
+  const repoFlags = String.raw`(?:(?:-R\s*\S+|--repo(?:=|\s+)\S+)\s+)*`;
+  const prVerb = (verb) => new RegExp(String.raw`\bpr\s+${repoFlags}${verb}\b`).test(c);
+  if (prVerb("merge") || prVerb("ready")) return true;
+  if (prVerb("review") && /(--approve\b|\s-[A-Za-z]*a[A-Za-z]*(\s|$))/.test(c)) return true;
+  return (
+    /\bapi\b/.test(c) &&
+    /pulls\/[^\s/]+\/(merge|reviews)\b|\/merges\b|git\/refs|query=@|--input\b/.test(c)
+  ) || (/\bapi\b/.test(c) && API_MERGE_WORDS.some((w) => c.includes(w)));
+}
+
+/** The merge rules threw on a merge form: deny while a run is live or liveness is unknown, never ask or allow; stay silent when no run is live. */
+async function mergeError(cwd, err) {
+  let live = runState;
+  if (!live) {
+    try {
+      live = livenessOf([cwd], await import("./lib-decisions.mjs"));
+    } catch {
+      live = "unknown";
+    }
+  }
+  if (live !== "not") deny({ rule: "PG-MERGE-ERROR", short: "PR merge the guard couldn't check", detail: `the merge rules failed: ${err && err.message ? err.message : String(err)}` }, null);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -552,12 +737,148 @@ function check(argv) {
   }
 }
 
+const gh = (cwd, args) => JSON.parse(execFileSync("gh", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+const CHECK_OK = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+const REVIEW_THREADS_QUERY =
+  "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { totalCount nodes { isResolved } } } } }";
+
+/**
+ * Read-only: whether the open run may offer PR <N> for a pinned merge, as
+ * `{ ok, pr, sha, method, reasons, command }`. Advisory only — the user's click on the permission
+ * prompt is the approval, and the hook never requires this ran.
+ */
+async function mergeCheck(argv) {
+  const opt = (name) => {
+    const k = argv.indexOf(name);
+    return k >= 0 ? argv[k + 1] : undefined;
+  };
+  try {
+    const pr = Number(opt("--pr"));
+    const cwd = opt("--cwd");
+    if (!Number.isInteger(pr) || pr < 1 || !cwd) throw new Error("usage: pretooluse-push-guard.mjs merge-check --pr <N> --cwd <abs>");
+    const repo = (tryGit(cwd, ["rev-parse", "--show-toplevel"]) || "").trim();
+    if (!repo) throw new Error(`not a git repository: ${cwd}`);
+    const D = await import("./lib-decisions.mjs");
+    const { listExchanges, readMsgFile } = await import("./lib-hier.mjs");
+    const result = (reasons, sha = null, method = null, draft = false) => {
+      process.stdout.write(`${JSON.stringify({ ok: reasons.length === 0, pr, sha, method, reasons, command: sha && method ? D.mergeCommand(pr, sha, method, draft) : null })}\n`);
+      process.exit(0);
+    };
+    const run = D.liveRun(repo);
+    if (!run) result(["no-run"]);
+    const method = D.MERGE_METHODS.includes(run.constraints["merge-method"]) ? run.constraints["merge-method"] : null;
+    const reasons = [];
+    if (run.constraints["merge-opt-in"] !== "yes") reasons.push("off");
+    if (!method) reasons.push("no-method");
+
+    const view = gh(repo, ["pr", "view", String(pr), "--json", "state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup"]);
+    const tag = run.constraints["run-tag"];
+    const issue = /^ah\/issue-([1-9][0-9]*)$/.exec(view.headRefName || "")?.[1];
+    const exchanges = listExchanges(run.dir);
+    const record = tag && issue ? exchanges.find((e) => e.open && e.slug === `${tag}-i${issue}`) : null;
+    if (!record) reasons.push("not-this-run");
+    else {
+      if (!exchanges.some((e) => !e.open && e.slug === `${tag}-i${issue}-ok`)) reasons.push("not-signed-off");
+      if (exchanges.some((e) => e.open && e.slug === `${tag}-i${issue}-x`)) reasons.push("exception");
+    }
+
+    if (view.state !== "OPEN") reasons.push("closed");
+    else if (!issue || (tryGit(repo, ["rev-parse", "--verify", "-q", `refs/heads/ah/issue-${issue}`]) || "").trim() !== view.headRefOid) reasons.push("head-moved");
+
+    const dependsOn = record ? D.constraintLines((readMsgFile(record.request.path) || {}).text || "")["depends-on"] : null;
+    if (dependsOn && /^[1-9][0-9]*$/.test(dependsOn)) {
+      const bases = gh(repo, ["pr", "list", "--head", `ah/issue-${dependsOn}`, "--state", "all", "--json", "number,state"]);
+      if (!bases.some((b) => b.state === "MERGED")) reasons.push("stacked-base-open");
+    }
+    const defaultBranch = run.constraints["default-branch"] || (loadConventions(repo).default || {}).branch;
+    if (view.baseRefName !== defaultBranch) reasons.push("base-not-default");
+
+    const mergeable = view.mergeable === "MERGEABLE" && (view.mergeStateStatus === "CLEAN" || (view.isDraft && view.mergeStateStatus === "DRAFT"));
+    if (!mergeable) reasons.push(`not-mergeable:${view.mergeable !== "MERGEABLE" ? view.mergeable : view.mergeStateStatus}`);
+
+    const checks = Array.isArray(view.statusCheckRollup) ? view.statusCheckRollup : [];
+    const verdict = (c) =>
+      c.__typename === "StatusContext" || ("state" in c && !("status" in c))
+        ? c.state === "SUCCESS" ? "ok" : c.state === "PENDING" || c.state === "EXPECTED" ? "pending" : "failed"
+        : c.status !== "COMPLETED" ? "pending" : CHECK_OK.has(c.conclusion) ? "ok" : "failed";
+    if (!checks.length) reasons.push("no-checks");
+    else if (checks.some((c) => verdict(c) === "failed")) reasons.push("checks-failed");
+    else if (checks.some((c) => verdict(c) === "pending")) reasons.push("checks-pending");
+
+    if (view.reviewDecision === "CHANGES_REQUESTED") reasons.push("changes-requested");
+    const threads = gh(repo, ["api", "graphql", "-f", `query=${REVIEW_THREADS_QUERY}`, "-F", "owner={owner}", "-F", "name={repo}", "-F", `number=${pr}`]).data.repository.pullRequest.reviewThreads;
+    if (threads.totalCount > 100 || threads.nodes.some((t) => !t.isResolved)) reasons.push("unresolved-threads");
+
+    result(reasons, view.headRefOid, method, view.isDraft === true);
+  } catch (err) {
+    process.stdout.write(`${JSON.stringify({ error: err.message })}\n`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Read-only: one line saying whether GitHub stops a push or a merge to the default branch (branch
+ * protection, or a ruleset with a pull_request rule). Never blocks, writes nothing, always exits 0.
+ */
+function protection(argv) {
+  const k = argv.indexOf("--cwd");
+  const cwd = k >= 0 && argv[k + 1] ? argv[k + 1] : process.cwd();
+  const say = (text) => {
+    process.stdout.write(`${text}\n`);
+    process.exit(0);
+  };
+  const brief = (err) => String((err && (err.stderr || err.message)) || err).trim().split("\n")[0] || "unknown error";
+  let name = "the default branch";
+  try {
+    const repo = (tryGit(cwd, ["rev-parse", "--show-toplevel"]) || "").trim();
+    if (!repo) say(`Branch protection on ${name}: unknown (not a git repository).`);
+    const def = loadConventions(repo).default;
+    if (!def) say(`Branch protection on ${name}: unknown (no origin default branch).`);
+    name = `\`${def.branch}\``;
+    let branch;
+    let rules;
+    try {
+      branch = gh(repo, ["api", `repos/{owner}/{repo}/branches/${def.branch}`]);
+      rules = gh(repo, ["api", `repos/{owner}/{repo}/rules/branches/${def.branch}`]);
+    } catch (err) {
+      say(`Branch protection on ${name}: unknown (${brief(err)}).`);
+    }
+    if (Array.isArray(rules) && rules.some((r) => r && r.type === "pull_request")) say(`Branch protection on ${name}: on.`);
+    if (!branch || branch.protected !== true) say(`Branch protection on ${name}: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section.`);
+    // `protected` alone can mean only status checks or a force-push block, with admins exempt, so
+    // the classic rule's own settings decide whether a direct push from the user's token is refused.
+    let classic;
+    try {
+      classic = gh(repo, ["api", `repos/{owner}/{repo}/branches/${def.branch}/protection`]);
+    } catch (err) {
+      say(`Branch protection on ${name}: unknown (classic protection's settings aren't readable: ${brief(err)}).`);
+    }
+    const weak = (reason) => say(`Branch protection on ${name}: on, but ${reason} — a direct push can still land. See the README's /pipeline section.`);
+    if (!classic || !classic.required_pull_request_reviews) weak("it doesn't require a pull request");
+    if (!classic.enforce_admins || classic.enforce_admins.enabled !== true) weak("admins can bypass it, and the run uses your token");
+    say(`Branch protection on ${name}: on.`);
+  } catch (err) {
+    say(`Branch protection on ${name}: unknown (${brief(err)}).`);
+  }
+}
+
 async function main() {
   const input = await readHookInput();
   const command = input.tool_input && typeof input.tool_input.command === "string" ? input.tool_input.command : "";
-  if (input.tool_name !== "Bash" || !command.includes("git")) return;
+  if (input.tool_name !== "Bash" || !(command.includes("git") || command.includes("gh"))) return;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  for (const inv of gitInvocations(parseShell(command).events, { cwd, stack: [] }, cwd)) {
+  const ghs = [];
+  let invs;
+  try {
+    invs = gitInvocations(parseShell(command).events, { cwd, stack: [] }, cwd, [], ghs);
+    await mergeGuard(input, command, cwd, invs, ghs);
+  } catch (err) {
+    if (mergeForm(command)) await mergeError(cwd, err);
+    if (!invs) throw err;
+    // Only the merge rules failed: the push rules below still apply.
+    logHookError("pretooluse-push-guard.mjs", err);
+  }
+  for (const inv of invs) {
     if (!needsOptIn(inv)) continue;
     const repo = repoAt(inv);
     if (!(tryGit(repo, ["rev-parse", "--show-toplevel"]) || "").trim()) continue;
@@ -569,6 +890,8 @@ async function main() {
 }
 
 if (process.argv[2] === "check") check(process.argv.slice(3));
+else if (process.argv[2] === "merge-check") await mergeCheck(process.argv.slice(3));
+else if (process.argv[2] === "protection") protection(process.argv.slice(3));
 else {
   try {
     await main();

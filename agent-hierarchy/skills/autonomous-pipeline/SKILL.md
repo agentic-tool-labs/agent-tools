@@ -15,8 +15,10 @@ how an ordinary Orchestrator session behaves. Everything below applies only
 while a `/pipeline` run is active.
 
 Full spec: `docs/specs/0030-autonomous-pipeline-skill.md`. Issue input:
-`docs/specs/0063-pipeline-issues-to-prs.md`. This document is
-the operational surface; if the two disagree, the spec is authoritative and
+`docs/specs/0063-pipeline-issues-to-prs.md`. Decisions on the user's
+behalf: `docs/specs/0068-pipeline-auto-decide.md`. Merge guard and
+auto-merge: `docs/specs/0070-pipeline-auto-merge.md`. This document is
+the operational surface; if they disagree, the spec is authoritative and
 this file has drifted — say so rather than silently picking one.
 
 **What this skill is not:** a new mechanism. Liveness, report-back, the
@@ -80,20 +82,63 @@ Seven steps, in order:
    say which override to remove — `roster.mjs role remove <reviewer|architect>`
    restores the shipped agent — or suggest running the items interactively.
 3. **Resolve the active dispatch route** (`msg.mjs route`): `peers` unless
-   the user opted into `subagents` or `prefer-peers`. It determines liveness coverage (§ Liveness) and is one of the four
+   the user opted into `subagents` or `prefer-peers`. It determines liveness coverage (§ Liveness) and is one of the five
    facts the run-start notification carries.
+
+   **Step 3a, decision authority** (§ Decisions on the user's behalf).
+   Read `gate.mjs status --session <id>`:
+   - `session` → the Ultra-Advisor may decide. Don't ask.
+   - `off` → it may not. Don't ask.
+   - `none` or `each` → one `AskUserQuestion`, header "Decisions", saying
+     that dangerous calls always come to the user:
+     - "Ultra-Advisor decides (rest of session)" →
+       `gate.mjs set --session <id> --choice session`;
+     - "No Ultra-Advisor — top team member, else a fresh subagent on my
+       model" → `gate.mjs set --session <id> --choice off`.
+
+     `each` isn't offered: re-asking at each escalation would stall a
+     hands-off run.
+   - Allowed, but no Ultra-Advisor member is live or in the roster → in the
+     same `AskUserQuestion` call, ask the agent-team ladder's step-2
+     question (spawn one, on fable or opus, or don't).
+
+   **Step 3b, auto-merge** (issue runs only; § Merge on your approval).
+   With `--auto-merge` or its plain-language form (§ Invocation) the answer
+   is yes: don't ask. Otherwise one `AskUserQuestion`, header "Auto-merge",
+   which can share step 3a's call: "May this run merge a ready PR once you
+   approve that merge in a permission prompt?", with "No" first, as the
+   default, then "Yes, for this run". Plan runs never ask it. The answer is
+   for this run only: it goes in the anchor (step 5a) and nowhere else, and
+   the next run asks again.
 4. **Create the team** — `roster.mjs create` plan → confirm → commit exactly as
    [`skills/agent-team/SKILL.md` § Create](../agent-team/SKILL.md#create)
    describes — do not re-derive that contract here.
 5. **Run the push pre-flight checks** — both guards, before any work starts
    (§ Push regime). Their result (clean vs. degraded) is also one of the
-   four run-start-notification facts. Finding out at the first push is
-   finding out too late.
+   five run-start-notification facts. Finding out at the first push is
+   finding out too late. Also run the branch-protection check, in every run:
+   `node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs protection --cwd <root>`.
+   It is read-only, prints one line (on, "on, but …", OFF, or unknown),
+   and never blocks; keep the line for the run-start notification.
 6. **Write the run anchor** (§ Push regime's "run anchor" subsection) — the
    durable branch record. This step is what makes the per-push
    re-derivation possible; without it, the re-derive rule has nothing to
    re-derive from. Look for an open anchor first, and halt if there is one
    (§ The run anchor, "Before writing an anchor").
+
+   **A plan run with no `--branch`** runs on `ah/pipeline-<stem>`, created
+   off HEAD here, right before the anchor is written; the anchor records
+   it. `<stem>` is the plan file's basename without its extension, slugged:
+   lowercase; every run of characters outside `[a-z0-9]` becomes one `-`;
+   no `-` at either end; at most 40 characters, with no trailing `-` after
+   the cut. So `0068-pipeline-auto-decide.md` →
+   `ah/pipeline-0068-pipeline-auto-decide`. An empty stem → refuse before
+   any work, and say to pass `--branch`. **If
+   `refs/heads/ah/pipeline-<stem>` or
+   `refs/remotes/origin/ah/pipeline-<stem>` already exists, halt and notify
+   before any work**, naming the branch and saying to pass `--branch` or
+   delete the old one. Never reuse or reset an existing branch. With
+   `--branch <name>`, nothing changes.
 7. **Send the one run-start notification** (§ Notification), through
    `PushNotification`. Every run sends it, plan and issues alike.
 
@@ -126,7 +171,7 @@ inverts the goal.
 | Trigger | Goes to |
 |---|---|
 | design or a decision about *how* | Architect |
-| a call that is properly the user's | Ultra-Advisor (§ UA escalation) |
+| a call that is properly the user's | § Decisions on the user's behalf |
 | work that is specified and ready to build | the item's implementer |
 | the item's implementer reports done | the item's reviewer — **and** that implementer's next queued item |
 | reviewer finding, `impl-defect` | the item's implementer's rework queue, applied when it is free |
@@ -188,6 +233,225 @@ Under `peers`, there is. Pipeline within whatever the resolved route (see
 Bootstrap) actually allows; do not assume a peer is available under
 `subagents`.
 
+## Decisions on the user's behalf
+
+Once the run-start notification has gone out, a question that would
+otherwise wait for the user is classified first. A **dangerous** one still
+goes to the user. A **safe** one is decided for the user by the
+highest-reasoning decider available, and every decision is logged and
+reported. Everything before the run-start notification stays interactive,
+and outside a run nothing changes.
+
+**A decision point** is a question during the run that the plan or spec
+doesn't already answer and that would otherwise go to the user:
+- a call a role marks as the user's: an `open_questions` entry, a
+  `want_back`, or the Architect's "flagged for the user" with a default
+  (the default is one option);
+- an Ultra-Advisor's question for the user;
+- a "genuinely blocked" state that is really a choice. A missing tool,
+  permission or credential is not one: notify, as today.
+
+Design questions still go to the designer (§ Routing). A question the plan
+answers is no decision at all.
+
+### Safe or dangerous
+
+A question is **safe** only when every one of its options passes all four:
+- **S1 Contained.** Its effects stay inside the run's branch (working-tree
+  files and commits on it) and the run's own `.claude/hierarchy/` records.
+  - **Nothing the run itself will execute changes.** No option adds,
+    removes or edits dependency manifests or lockfiles; package, build or
+    test scripts or their config; container or tool-version files; env
+    files; git attributes; git config; or any file a hook, CI or the test
+    runner loads.
+  - **No other ref:** no new branch, tag, worktree or stash.
+  - Pushing the branch, and its draft PR, under § Push regime is inside the
+    branch, not an escape.
+- **S2 Reversible on the branch.** Editing or reverting commits on the
+  branch undoes it, and nothing has been merged.
+- **S3 In scope.** It implements, tests or documents an item already in the
+  plan. It adds no item, AC, feature or third-party dependency, drops no AC
+  and changes no AC's meaning.
+- **S4 Not reserved.** It touches none of the classes D1–D6.
+
+**Anything else is dangerous, including any case where a test can't be
+settled.** Default-deny. The reserved classes, every one dangerous (the
+lists are examples, not limits):
+- **D1 Destructive or irreversible:** deleting or overwriting data or files
+  beyond what the item's spec changes; history rewrites, force-push,
+  deleting branches or tags; real data stores or migrations; killing,
+  dismissing or abandoning in-flight work.
+- **D2 Remote and merge:** any push outside § Push regime, the
+  degraded-mode approval included; merging, approving, readying or
+  retargeting a PR; tracker writes; posting anywhere outside the repo. A
+  merge done under the user's own per-run merge authorisation (§ Merge on
+  your approval) is not a decision: the plan answers it, so it is never
+  classified, decided, or logged as a `decided` line.
+- **D3 Security and trust:** permissions and settings, CLAUDE.md, hooks,
+  agent definitions; role-pack adoption, trust and pins; credentials and
+  secrets, auth logic, network egress; CI config and protected paths
+  (`settings.protected_paths` and the pipeline-conventions baseline); the
+  repo's build, test, dependency and tool configuration; git config and the
+  hooks path; any permission prompt.
+- **D4 Cost:** spawning top-tier members the roster doesn't have; answering
+  the Ultra-Advisor gate; raising a cap; re-running a scan.
+- **D5 Scope:** anything S3 excludes.
+- **D6 The run's own rules:** a cap, a guard, the push regime, the
+  completion gate or a round count; a 4th round; anything this skill or a
+  gate keeps for the user.
+
+**Two keys.** You classify before dispatching, and a dangerous question is
+never sent to a decider. The decider classifies again; if either key says
+dangerous, the question goes to the user. Every option must pass, a decider
+chooses only among options you already passed, and an `other:` answer is
+re-classified, so text injected into a question can at worst park it, or
+steer the choice among options already judged safe.
+
+**Classification replaces none of them.** It judges each option as
+described. The diff that option produces still goes through the review
+loop, the secret scan, the push guard and the protected-path check. The push
+guard enforces protected paths only in repos that commit
+`.claude/ah-conventions.json`; elsewhere D3 is prose, and the run-start
+notification says so.
+
+**After a merge,** S2 can't hold for that item: any further question on it
+is parked as `dangerous`. **Review flag:** a safe question that a role
+marked as "the user's call" (product behaviour, UX, a public interface or
+format) is still decided, and always flagged for the user's review
+(`review: yes`).
+
+### The decider
+
+Each time, run the agent-team escalation ladder
+([`skills/agent-team/SKILL.md`](../agent-team/SKILL.md)) like this:
+- Step 2 was settled at bootstrap step 3a; never ask it mid-run.
+- Step 1, the Ultra-Advisor, only when the gate is `session`.
+- Before any dispatch, the tier rule: skip a candidate whose tier is below
+  yours or unknown; dispatch one at your own tier with `reason: context`,
+  so it decides from a clean context, apart from the session driving the
+  run.
+- No candidate left → step 4, but **the Orchestrator never decides in its
+  own context.** Dispatch a fresh Agent-tool subagent of type
+  `general-purpose` on your own model (the route gate denies an
+  Orchestrator-type subagent), with the brief below as its prompt; log it as `decider: { role: "orchestrator", name: <its id>,
+  model }` with `exchange: null`, and parse `## decisions` from its final
+  report by the rules below. If no fresh subagent can be dispatched, park
+  the question as `unsure`. Nobody self-decides.
+
+### The brief
+
+A request through `msg.mjs new`, slug `dec-<anchor suffix>-<k>`: the anchor
+id's last hyphen segment, and the first log id the batch will take. `--eta`
+set honestly. **The `dec-` prefix is reserved:** no work-item slug may start
+with it, so a decision exchange never adds to an item's round count.
+
+Body:
+- `## constraints`: the run anchor id; the item slug, or `run`; the
+  statement "The user has delegated this decision to you for this run;
+  answer it on their behalf within your own contract"; the reply format
+  below; this section, by path and heading.
+- 1–4 questions, `q1`–`q4`, each with: the question in plain words; 2–4
+  options, `a)` to `d)`, each with its consequence; the default, if the
+  raising role gave one; who raised it; your classification, and why it is
+  safe.
+- Context as paths: the plan, the item's spec, the item's commit range.
+  **Issue runs: no snapshot or trace path and no issue text** (as for
+  Implementors). A decider must not be argued into an option by third-party
+  text.
+
+### The reply, parsed fail-closed
+
+The decider's response has a `## decisions` section with exactly these four
+lines per question:
+
+```
+q<n> decision: a | b | c | d | other: <one line> | unsure | dangerous
+q<n> rationale: <one line>
+q<n> revert: <one line: how to undo it>
+q<n> review: yes | no
+```
+
+- A letter is a decision; the log stores that option's text, so near-miss
+  wording can't slip through.
+- `other:` in a plan run: re-classify it; if it fails, park the question as
+  dangerous. `other:` always means `review: yes`.
+- **`other:` in an issue run is always parked as `unsure`:** you would
+  re-classify it, and you have seen the issue text.
+- `unsure` or `dangerous` → parked, with that as the reason.
+- A missing, malformed or extra line for a question, or no reply at all →
+  that question is parked as `unsure`.
+- **Never re-ask.** A parked question is never sent to another decider, or
+  to the same one again, compaction included. Before dispatching, check
+  `decision list --item <slug>`. Asking until you get an answer is not
+  deciding.
+
+### Log first, then apply
+
+The log is `<hier>/pipeline/<anchor id>/decisions.jsonl`, written and read
+only through `msg.mjs decision add|list` (fields and refusals:
+`docs/cli-tools.md`).
+1. Log it first: write the line's JSON with the Write tool to
+   `<hier>/pipeline/<anchor id>/decision-input.json`, overwriting it, then
+   run `msg.mjs decision add --team <team> --input <hier>/pipeline/<anchor id>/decision-input.json --cwd <root>`.
+   Never pipe or heredoc it: only the `--input` form runs without a
+   permission prompt.
+2. **Only on exit 0** route the answer to the role that raised the question,
+   quoting the printed id: "decided on the user's behalf by `<decider>`
+   (d<k>)". That role carries on: it amends the spec, or builds.
+   Implementor commits for the decision name `d<k>` in the body.
+3. Exit 2 → nothing is routed; a refused line must never have acted. By the
+   refusal's `reason`:
+   - `cap` → add a `parked` line with `why_user: "cap"`;
+   - `parked-before` → add nothing: the earlier `parked` line stands;
+   - `decided-before` → add nothing: find the earlier decision with
+     `decision list --item <slug>` and route that one, quoting its `d<k>`.
+     Never route a second, different answer;
+   - a field refusal (`invalid`) → add a `parked` line with
+     `why_user: "unsure"` and the refusal text as its `rationale`, built
+     from the fields that were valid;
+   - if that `parked` add is refused as well → stop the item exactly as for
+     a parked question, put both refusal texts in the stop notice (issue
+     runs: the `needs-user` record), and don't try again.
+
+A `parked` line names the decider that answered `unsure` or `dangerous`, or
+has `decider: null` when the question was parked before any dispatch
+(classified dangerous by you, or over a cap).
+
+**Caps:** at most **4** decided per item and **20** per run. Check
+`decision list --summary` before dispatching; over a cap → park with `cap`.
+The writer enforces both, and parked lines don't count.
+
+### Parked questions
+
+A parked question **stops only its own item**:
+- **Plan runs:** the item stops, as at a round-cap stop, and the run carries
+  on with the remaining items. Items that need its work wait for it.
+- **Issue runs:** the item ends with the exception `needs-user` (terminal,
+  a `<tag>-i<N>-x` record), and its dependents become `blocked-by`.
+
+Parking is notified (§ Notification). The questions are asked at the end,
+from the report's "Waiting for you" list — never mid-run with
+`AskUserQuestion`, which would stall a hands-off run. A run-level question
+(item `run`) that blocks every item halts the run and notifies, as
+"genuinely blocked" does.
+
+### The report
+
+**"Decisions made on your behalf"**, built from `decision list`, never from
+memory:
+- grouped by item, in id order within each item; flagged lines first,
+  marked "review";
+- each line: id; the question in one line; the decision; the decider
+  (role, name, model); the rationale; the revert hint; the item's branch,
+  and the commits naming `d<k>`, if any;
+- then **"Waiting for you":** every parked line, with its item, reason,
+  question and options, so the user can answer and re-run;
+- the totals line and the log path.
+
+It goes in the run's final message (plan runs: § Completion gate; issue
+runs: § End of run), in each item's PR body in issue runs (§ PR creation),
+and in a halt notification's session message.
+
 ## Ultra-Advisor escalation — three hops, no direct channel
 
 There is no UA-to-user channel. The conduit gate
@@ -200,6 +464,9 @@ Orchestrator reads the response → Orchestrator pages the user.**
 
 Do not dispatch Ultra-Advisor expecting it to reach the user directly, and
 do not describe the escalation any other way in status or notifications.
+
+As a decider (§ Decisions on the user's behalf), it answers in `## decisions`,
+not `open_questions`.
 
 ## The 3-round cap — per item, counted by slug
 
@@ -234,6 +501,9 @@ work:
    Both push the count downward, which is the direction that matters: an
    undercount is what lets a 4th round through a hard ceiling.
 
+Decisions on the user's behalf never add, reset or extend rounds, and `dec-`
+exchanges don't count toward any item's rounds.
+
 **This is a different counter from `MAX_NUDGES`.** `MAX_NUDGES` is 2, per
 `request_id`, for liveness nudging (§ Liveness). This cap is 3, per work
 item, for rework rounds. Do not conflate them.
@@ -252,6 +522,11 @@ order:
    green" is established by the Implementor or task-runner and reported to
    it. Don't ask the Architect to assert something it structurally cannot
    observe.
+
+**A plan run then sends its final message**, once both steps pass and its
+last push is made: the run's outcome, with § Decisions on the user's
+behalf's report, "Decisions made on your behalf" and "Waiting for you".
+It opens no PR, so the report lives only in this message.
 
 **A plan run then closes its anchor.** Once both steps pass and its last
 push is made, write a response file for the anchor with
@@ -515,7 +790,7 @@ condition itself.
 ## Notification
 
 **Exactly one proactive notification, at run start**, once bootstrap
-completes, in every run, plan and issues alike, naming all four:
+completes, in every run, plan and issues alike, naming all five:
 
 1. The branch.
 2. The resolved dispatch route (§ Bootstrap / § Liveness coverage).
@@ -524,6 +799,19 @@ completes, in every run, plan and issues alike, naming all four:
    scanner as one of these lines, copied exactly, never paraphrased:
    "Secret scan: gitleaks" or
    "Secret scan: model-based (gitleaks is not installed)".
+5. Who decides questions on the user's behalf (§ Decisions on the user's
+   behalf): Ultra-Advisor, `<role>`, or a fresh subagent on the
+   Orchestrator's model; the decision log's path; and, with no committed
+   `.claude/ah-conventions.json`, also "guards: prose only (no conventions
+   baseline)".
+
+Every run-start notification also carries the branch-protection check's
+line (§ Bootstrap step 5), copied exactly, never paraphrased:
+"Branch protection on `<default>`: on.", or
+"Branch protection on `<default>`: on, but <reason> — a direct push can still land. See the README's /pipeline section.", or
+"Branch protection on `<default>`: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section.", or
+"Branch protection on `<default>`: unknown (<reason>).". The run goes on
+whatever it says.
 
 **The channel, for every notification in this skill:** the
 `PushNotification` tool. When it is deferred, load it through ToolSearch
@@ -534,9 +822,16 @@ as a message.
 run being genuinely blocked; a Ultra-Advisor escalation reaching the
 Orchestrator; a liveness nudge-budget exhaustion (§ Liveness); a red build
 that halts the run; entering degraded push mode; a secret-scan finding;
-**a push halt from the run-anchor check** (§ Push regime). Nothing else — no running commentary, no per-step progress. Suppressing
+**a push halt from the run-anchor check** (§ Push regime); **a decision
+parked for the user**, with its item, reason and question; **"Merge
+approvals are waiting for you in the session"**, once, before the first
+merge prompt (§ Merge on your approval). Nothing else — no running commentary, no per-step progress. Suppressing
 that is the point of running this way. Every notification goes through the
 Orchestrator; nothing here offers a second path to the user.
+
+Decided questions are not notified one by one. Every notification after run
+start, and every status answer you give the user mid-run, ends with
+`decision list --summary`'s `line` — the run's status line.
 
 ## Issue input
 
@@ -574,14 +869,26 @@ Read it only through the CLIs, never the file itself. Intake's output gives
 
 ### Invocation
 
-- `/pipeline <path> [--branch <name>]` → a plan/spec run, unchanged.
+- `/pipeline <path> [--branch <name>]` → a plan/spec run, unchanged; with no
+  `--branch`, on `ah/pipeline-<stem>` (§ Bootstrap step 6).
+- ACs typed into the request with no file → write them verbatim, one per
+  line, to `<root>/.claude/hierarchy/specs/acs-<YYYYMMDD-HHMM>.md`
+  (gitignored scratch), then run a plan run on that path, so its default
+  branch is e.g. `ah/pipeline-acs-20260930-2045`; the run-start notification
+  names the file.
 - `/pipeline <ref> [<ref> ...]` → an issue run over those issues, in that
   order. A `<ref>` is `N`, `#N` or `https://github.com/<o>/<r>/issues/N`;
   a bare integer is an issue unless written `./N`.
 - `/pipeline --labelled` → an issue run over every open issue carrying the
   trigger label.
+- `--auto-merge` on an issue run, or plain language with the same meaning
+  ("auto-merge approved for this run", "with auto-merge", "and merge them
+  once I approve") → auto-merge yes for this run, with no question (§ Merge
+  on your approval). A misread sentence costs little: every merge still
+  needs the user's click.
 - Refuse with one line: a path mixed with issue refs; `--branch` with issue
-  input.
+  input; `--auto-merge` on a plan run: "auto-merge needs an issue run — plan
+  runs open no PR".
 
 ### Bootstrap for issue runs
 
@@ -611,7 +918,11 @@ else as written there.
    secret-scan: gitleaks | model
    conventions-blob: <git rev-parse origin/<default>:.claude/ah-conventions.json, after step 4a's fetch>
    intake: --labelled | <the refs as the user gave them, space-separated>
+   merge-opt-in: yes | no
+   merge-method: merge | squash | rebase
    ```
+   `merge-opt-in` is step 3b's answer; `merge-method` is
+   `settings.pr.merge_method`.
    `<tag>` below is the `run-tag`.
 5. **Step 5b — intake**, in your own Bash (it prints only a compact
    verdict, so no GitHub worker is needed):
@@ -637,9 +948,15 @@ else as written there.
 7. **Step 5d — ordering and branches** (§ Ordering and stacking), then one
    item record per ordered item.
 8. **Step 6:** already done at 5a.
-9. **Step 7 — the run-start notification:** § Notification's four facts,
-   plus the source (`issues`), the eligible and ineligible counts, and
-   `push-mode` with any unmet conditions by name.
+9. **Step 7 — the run-start notification:** § Notification's five facts,
+   plus the source (`issues`), the eligible and ineligible counts,
+   `push-mode` with any unmet conditions by name, and one of these lines,
+   filled in and copied exactly:
+   - `merge-opt-in: yes`: "Auto-merge APPROVED for this run: at the end of
+     the run the orchestrator asks you to approve each ready PR's merge in a
+     permission prompt — one click per merge, pinned to the PR's head
+     commit."
+   - `merge-opt-in: no`: "Auto-merge: off — a person merges."
 
 ### Push mode for issue runs
 
@@ -691,7 +1008,25 @@ cover:
   secrets;
 - an adversarial model evading the guard, which matches command text only
   (known gaps: `docs/pipeline-conventions.md`, "What it cannot stop");
-- `gh` misuse, which the guard does not inspect;
+- getting around the merge rules (§ Merge on your approval). They are a
+  speed bump, not a sandbox: they read each command's text and each GitHub
+  MCP tool call before it runs, so they stop a model that follows this
+  skill from merging, approving or readying a PR by mistake, and nothing
+  more. Not covered: `curl` and other API clients, `hub`, and `gh` aliases
+  and extensions; scripts and interpreters; commands launched by `xargs` or
+  `find -exec`, which the guard's parser doesn't unwrap; MCP servers
+  without `github` in their name; and other ways to land on the default
+  branch: pushes, Contents API commits, `merge-upstream`. The real boundary
+  is on GitHub. Pushes: branch protection or a ruleset on the default
+  branch that requires a pull request, with no bypass for the run's token,
+  stops direct pushes, ref writes and Contents API commits by any route;
+  the run-start notification says whether it is on. The run uses the
+  user's own gh token, so a bypass the user has is one the run has too:
+  classic branch protection exempts admins unless "Do not allow bypassing
+  the above settings" is on, and a ruleset applies to the user unless
+  their role is on its bypass list. Merges: a hard wall only when the run uses its own bot
+  or GitHub App identity that can't merge without the user's approving
+  review; setting that up is the user's call;
 - tracker writes, which only prose governs.
 
 The user chose unattended as the default over making degraded mode the
@@ -809,14 +1144,15 @@ step 5b.
 
 For an issue with an item record, the first that applies:
 1. an open `<tag>-i<N>-x` → that exception;
-2. a PR exists with head `ah/issue-<N>` (lookup, § PR creation) →
+2. a PR with head `ah/issue-<N>` in state MERGED → `merged` (terminal);
+3. a PR exists with head `ah/issue-<N>` (lookup, § PR creation) →
    `pr-open`;
-3. `<tag>-i<N>-ok` has a sign-off response → `signed-off`;
-4. the branch exists → `in-progress`;
-5. otherwise → `pending`.
+4. `<tag>-i<N>-ok` has a sign-off response → `signed-off`;
+5. the branch exists → `in-progress`;
+6. otherwise → `pending`.
 
 The current item is the first in `order` that is not terminal. Terminal
-means an exception, `pr-open`, `local-only`, or (degraded mode)
+means an exception, `merged`, `pr-open`, `local-only`, or (degraded mode)
 `signed-off`.
 
 **`on_item_done` after compaction.** For every issue whose status is final
@@ -933,8 +1269,17 @@ unavailable, run `gh pr list --head`, `gh pr create` and
       in the item's checkout (HEAD on `ah/issue-<N>`). If the skill isn't
       listed or the invocation fails, write "(guide unavailable:
       review-guide not installed)", and the summary says so.
-   6. The footer: "Opened by an ah /pipeline run (anchor `<id>`). The run
-      never merges; a person merges."
+   6. `## Decisions made on your behalf`: this item's lines of § Decisions
+      on the user's behalf's report, flagged lines first, written into the
+      body file before the PR is created, so whoever merges from GitHub
+      sees them. Writing the run's own PR body is inside the push regime.
+      A decision on the item after the PR exists updates the body through
+      the same worker order.
+   7. The footer: "Opened by an ah /pipeline run (anchor `<id>`). The run
+      never merges; a person merges." With `merge-opt-in: yes`, instead:
+      "Opened by an ah /pipeline run (anchor `<id>`). This run may merge it
+      at the end of the run, but only after you approve that merge in a
+      permission prompt; otherwise a person merges."
 4. **Reviewers:** if `settings.pr.reviewers` is non-empty, request them
    **after** the PR exists, as a separate order, so a bad login never
    costs the PR. The order to the worker: "request reviewers `<comma
@@ -942,7 +1287,7 @@ unavailable, run `gh pr list --head`, `gh pr create` and
    `gh pr edit <n> --add-reviewer <comma list>`. On failure the summary
    notes it; the status stays `pr-open`, and it is never retried.
 5. **Never** merge, approve, enable auto-merge, or edit a PR the run didn't
-   open.
+   open — except § Merge on your approval.
 
 ### on_item_done
 
@@ -982,7 +1327,8 @@ the intake codes: `<tag>-verdicts` records those all at once, so an
 - **Dependencies:** `depends-outside-run`, `dependency-cycle`,
   `blocked-by`.
 - **Execution:** `round-cap`, `nudge-exhausted`, `red-build`,
-  `gate-failed`, `scan-finding`, `scan-unsure`.
+  `gate-failed`, `scan-finding`, `scan-unsure`, `needs-user` (a question
+  parked for the user, § Decisions on the user's behalf).
 - **PR and approval:** `pushed-no-pr`, `rejected-by-user`.
 
 `protected-path`, `skip-ci-missing` and `scan-too-large` are reasons for
@@ -991,8 +1337,9 @@ re-derive deterministically after compaction. `scan-unsure` can't, so it
 is an exception.
 
 **Notified:** only the classes § Notification already notifies (cap hit,
-red build, scan finding, nudge exhaustion). Everything else, `scan-unsure`
-included, goes in the summary only.
+red build, scan finding, nudge exhaustion, and `needs-user`, as a decision
+parked for the user). Everything else, `scan-unsure` included, goes in the
+summary only.
 
 ### Degraded approval
 
@@ -1034,6 +1381,52 @@ Once every item is terminal:
    only if its base was pushed; otherwise it becomes `blocked-by`. Items
    not approved → `rejected-by-user`.
 
+### Merge on your approval
+
+Only in a run with `merge-opt-in: yes` (step 3b). Merging stays the user's:
+it is never classified, decided, or logged as `decided` (§ Decisions on the
+user's behalf). The push guard denies every other way the run could merge,
+approve, ready or auto-merge a PR, from the anchor's writing to its close,
+in any repo: through `gh`, `gh api`, or a GitHub MCP tool that merges,
+approves or readies (`PG-MCP-MERGE`). No `git` command is a merge form for
+it; pushes are GitHub's to stop. If its own check fails on a merge form, or
+it can't tell whether the run is live, it denies that too
+(`PG-MERGE-ERROR`). Any such `ah-push-guard:*` deny halts the run
+(§ Per-item execution). The pinned command gets its prompt only in the
+`default`, `auto` or `acceptEdits` permission mode, since another mode
+might never show it to you.
+
+**The merge point is once only, at the end of the run:** after § Degraded
+approval when there is one, and before the final message. Never mid-run: a
+permission prompt would stall a hands-off run. A halted run never reaches
+it, so nothing merges.
+
+1. Notify once: "Merge approvals are waiting for you in the session".
+2. For each `pr-open` item, in `order`, run
+   `node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs merge-check --pr <N> --cwd <root>`.
+   It is read-only and advisory: it decides what the run offers, and prints
+   `{ ok, pr, sha, method, reasons, command }`. Reasons: `no-run`, `off`,
+   `no-method`, `not-this-run`, `not-signed-off`, `exception`, `closed`, `head-moved`,
+   `stacked-base-open`, `base-not-default`, `not-mergeable:<status>`,
+   `no-checks`, `checks-pending`, `checks-failed`, `changes-requested`,
+   `unresolved-threads` (`docs/cli-tools.md`). No branches are deleted, so a
+   stacked dependent usually stays unmerged and is reported.
+3. Show one Markdown table in the session listing every candidate: PR,
+   item, sha, merge-check result. Each row carries `decision list
+   --summary`'s line and points at the PR body's "Decisions made on your
+   behalf". Failing rows are listed with their reasons and not attempted.
+4. For each passing PR, run exactly `command`, nothing else and nothing
+   added: `gh pr merge <N> --match-head-commit <sha> --<method>`, or for a
+   draft `gh pr ready <N> && gh pr merge <N> --match-head-commit <sha> --<method>`.
+   The push guard answers it with a permission prompt naming the PR, the
+   sha and the decision summary; the user's click is the approval, one
+   click per merge, pinned to the PR's head commit.
+
+A declined prompt runs nothing: report "you declined". A merge that exits
+non-zero (the head moved, checks, protection) is reported as "head moved or
+merge refused", with gh's own message verbatim. Neither is retried; the
+report gives the manual command for the user's own terminal.
+
 ### End of run
 
 **One final message**, through you. Per item: the issue; its terminal
@@ -1053,6 +1446,22 @@ status; the PR URL or branch; the reason code; stack relationships.
   inconclusive. Scan `<range>` yourself before pushing."
 - Every `ineligible` line of `<tag>-verdicts` with its reason. An
   `other-repo` line reads "#<N> of another repository: not processed".
+- § Decisions on the user's behalf's report: "Decisions made on your
+  behalf", then "Waiting for you".
+- **"Merges performed under your authorisation"**, opening with the
+  run-start auto-merge line, copied. A log `merge` line says only that the
+  pinned command ran after the prompt; whether it merged comes from
+  `gh pr view <N> --json state,mergeCommit,mergedAt,headRefOid` now, never
+  from this line or from memory. A PR with a `merge` line that GitHub shows
+  MERGED at the line's sha is listed here: the sha, `mergedAt`, the
+  approval ("your click on the permission prompt"), and the merge commit.
+- **"Not merged"**: every other `pr-open` item, with its merge-check
+  reasons, or "you declined", or, for a `merge` line GitHub doesn't show
+  merged at that sha, "head moved or merge refused" with the state GitHub
+  reports and gh's message; and the manual command
+  `gh pr merge <N> --match-head-commit <sha> --<method>`.
+- A PR GitHub shows MERGED with no `merge` line is listed as "merged
+  outside the run", and never counted as merged under your authorisation.
 
 Then close the anchor, the `<tag>-verdicts` record, and every item,
 exception and `-done` record: write a response file for each with
@@ -1067,11 +1476,16 @@ interruption.
 - No new state file — rounds derive from slug counts; the branch anchor is
   a message file; team state is `team.json`; dispatch state is
   `peers.jsonl`. Issue-run records (verdicts, item, exception) are message
-  files too.
-- No hook of its own. The only hook added since spec 0028 is the stateless
-  push guard, active for every session in an opted-in repo, enforcing push
-  rules this skill already states. Issue runs require it for unattended
-  mode; plan/spec runs need nothing beyond 0028.
+  files too. The one exception is the decision log (§ Decisions on the
+  user's behalf): a log of what was decided can't be derived from slug
+  counts.
+- No hook of its own. The only hooks added since spec 0028 are the push
+  guard, active for every session in an opted-in repo, enforcing push
+  rules this skill already states, and, while a run is open in any repo,
+  its merge rules (§ Merge on your approval); the GitHub MCP merge rule
+  (`hooks/pretooluse-mcp-guard.mjs`), the same rules for GitHub MCP tool
+  calls; and the PostToolUse record that logs each approved merge. Issue runs require the push guard for
+  unattended mode; plan/spec runs need nothing beyond 0028.
 - No change to `msg.mjs list`'s row shape, no new frontmatter key, and no
   change to the injected state block's cap or fields.
 - No reliance on the injected state block as a content channel — see
