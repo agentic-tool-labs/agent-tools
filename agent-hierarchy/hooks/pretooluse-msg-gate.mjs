@@ -80,8 +80,10 @@ try {
 
   if (isSend) {
     const to = typeof toolInput.to === "string" ? stripRef(toolInput.to.trim()) : "";
-    const repoBasename = teamPrefix(cwd, resolved.team);
-    role = chainRoles(resolved).find((r) => resolvedPeerTargets(r, resolved.roles[r], repoBasename).includes(to)) || null;
+    // A session that owns several live teams matches the name against each team's prefix.
+    const teams = resolved.ownedTeams && resolved.ownedTeams.length > 1 ? resolved.ownedTeams : [resolved.team];
+    const prefixes = teams.map((t) => teamPrefix(cwd, t));
+    role = chainRoles(resolved).find((r) => prefixes.some((p) => resolvedPeerTargets(r, resolved.roles[r], p).includes(to))) || null;
   }
 
   const dir = hierarchyDir(cwd);

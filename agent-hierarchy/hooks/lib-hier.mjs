@@ -21,8 +21,8 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realp
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { availabilityView, chainRoles, customTierText, hierarchyDir, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, tierOf } from "./lib-config.mjs";
-import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
+import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
+import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamArgName, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
 
 export { hierarchyDir };
 
@@ -502,6 +502,19 @@ export function openExchanges(dir, team) {
   });
 }
 
+/** The slug an autonomous pipeline run's anchor exchange carries while the run is live. */
+export const PIPELINE_ANCHOR_SLUG = "pipeline-run-anchor";
+
+/**
+ * Whether a pipeline run is live in this checkout: an open run-anchor exchange in its hierarchy
+ * dir (from a worktree, the main checkout's too), whichever team wrote it. A stale open anchor
+ * counts as live; the next run reports it anyway.
+ */
+export function pipelineRunLive(cwd) {
+  const dirs = [...new Set([hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean))];
+  return dirs.some((dir) => openExchanges(dir).some((e) => e.slug === PIPELINE_ANCHOR_SLUG));
+}
+
 /** Frontmatter `created` if parseable, else file mtime, as epoch ms. */
 function createdMs(path) {
   const parsed = readMsgFile(path);
@@ -551,6 +564,11 @@ function isUnder(path, dir) {
 const outsidePool = (dir) =>
   `file is outside this session's message pool (${msgsDir(dir)}) — the pool follows the session cwd; if cwd moved into a worktree or another repo, the file is fine and the cwd is wrong`;
 
+// A response lives beside the request it answers, wherever that pool is; the remedy for a
+// stray one is to re-create it with --req, not to move the session's cwd.
+const outsideRequestDir = (reqDir, reqPath) =>
+  `response file is not in its request's directory (${reqDir}) — write it with msg.mjs new --type response … --req ${reqPath}, which places it beside the request`;
+
 /**
  * Validate the request pointer a dispatch carries. Returns `{ok:true, path,
  * fm}` or `{ok:false, why}` where `why` is one of the deny reasons in the spec.
@@ -559,9 +577,9 @@ export function validateRequestToken(text, dir, expectedTo) {
   const path = extractMsgToken(text);
   if (!path) return { ok: false, why: "missing token" };
   if (!isAbsolute(path) || !existsSync(path)) return { ok: false, why: `path not found (${path})` };
+  if (!path.endsWith("--request.md")) return { ok: false, why: "not a request file" };
   const parsed = readMsgFile(path);
   if (!isUnder(path, msgsDir(dir)) && !messageHome(path, parsed && parsed.fm)) return { ok: false, why: outsidePool(dir) };
-  if (!path.endsWith("--request.md")) return { ok: false, why: "not a request file" };
   if (!parsed || !parsed.fm || parsed.fm.type !== "request") return { ok: false, why: "not a request file" };
   if (expectedTo && parsed.fm.to !== expectedTo) {
     return { ok: false, why: `wrong to: (file says ${parsed.fm.to}, dispatch is ${expectedTo})` };
@@ -577,13 +595,18 @@ export function validateRequestToken(text, dir, expectedTo) {
  * with a document about something else — worse than a missing token, because
  * it looks answered. Returns `{ok:true, path, fm}` or `{ok:false, why}`.
  */
-export function validateResponseToken(text, dir, expectedFrom, expectedId) {
+export function validateResponseToken(text, dir, expectedFrom, expectedId, reqPath = null) {
   const path = extractMsgToken(text);
   if (!path) return { ok: false, why: "missing token" };
   if (!isAbsolute(path) || !existsSync(path)) return { ok: false, why: `path not found (${path})` };
-  const parsed = readMsgFile(path);
-  if (!isUnder(path, msgsDir(dir)) && !messageHome(path, parsed && parsed.fm)) return { ok: false, why: outsidePool(dir) };
   if (!path.endsWith("--response.md")) return { ok: false, why: "not a response file" };
+  const parsed = readMsgFile(path);
+  if (!isUnder(path, msgsDir(dir)) && !messageHome(path, parsed && parsed.fm)) {
+    const anchored = typeof reqPath === "string" && isAbsolute(reqPath) && reqPath.endsWith("--request.md") && existsSync(reqPath);
+    if (!anchored) return { ok: false, why: outsidePool(dir) };
+    const reqDir = dirname(realCwd(reqPath));
+    if (dirname(realCwd(path)) !== reqDir) return { ok: false, why: outsideRequestDir(reqDir, reqPath) };
+  }
   if (!parsed || !parsed.fm || parsed.fm.type !== "response") return { ok: false, why: "not a response file" };
   if (expectedFrom && parsed.fm.from !== expectedFrom) {
     return { ok: false, why: `wrong from: (file says ${parsed.fm.from}, expected ${expectedFrom})` };
@@ -739,8 +762,11 @@ export function roleForAnyPeerName(dir, name, resolved, repoBasename) {
   } catch {
     // team lookup is best-effort; fall through to the existing paths
   }
+  // A session that owns several live teams matches the name against each team's prefix.
+  const owned = resolved.ownedTeams && resolved.ownedTeams.length > 1 ? resolved.ownedTeams : null;
+  const prefixes = owned ? owned.map((team) => teamPrefix(resolved.cwd, team)) : [repoBasename];
   for (const role of chainRoles(resolved)) {
-    if (resolvedPeerTargets(role, resolved.roles[role], repoBasename).includes(name)) return role;
+    if (prefixes.some((prefix) => resolvedPeerTargets(role, resolved.roles[role], prefix).includes(name))) return role;
   }
   return roleFromName(name, resolved);
 }
@@ -1047,12 +1073,8 @@ export function routeLine(route) {
   return `route: ${route.value} (from ${route.source}) — change with /hierarchy route or just say so`;
 }
 
-/**
- * The HIERARCHY STATE block appended after the directive on every SessionStart
- * matcher. `sessionId`/`route` may be null (unit callers); the route line
- * degrades to the generic form.
- */
-export function buildStateBlock(dir, resolved, repoBasename, model, sessionId = null, route = null, now = Date.now()) {
+/** One team's lines in HIERARCHY STATE: its open exchanges, and its members or live peers. */
+function teamStateLines(dir, resolved, repoBasename, now) {
   const open = openExchanges(dir, (resolved && resolved.team) || null);
   const shown = open.slice(0, 10).map((e) => `${e.id} ${e.to} ${e.slug} ${fmtAge(exchangeAgeSec(e, now))}`);
   const openLine = open.length
@@ -1073,8 +1095,29 @@ export function buildStateBlock(dir, resolved, repoBasename, model, sessionId = 
     const anyPeer = chainRoles(resolved).some((r) => ros[r].length);
     peersLine = `peers: ${anyPeer ? rosterLine(ros) : "none"}`;
   }
+  return [openLine, peersLine];
+}
+
+/**
+ * The HIERARCHY STATE block appended after the directive on every SessionStart
+ * matcher. `sessionId`/`route` may be null (unit callers); the route line
+ * degrades to the generic form.
+ */
+export function buildStateBlock(dir, resolved, repoBasename, model, sessionId = null, route = null, now = Date.now()) {
+  // A session that owns several live teams gets each team's part under a line naming it, each built
+  // from that team's own resolved config; the route and tier lines don't depend on a team.
+  const owned = ownedTeamConfigs(resolved);
+  const body = owned
+    ? [
+        ownedTeamsLead(owned.map(({ team }) => team)),
+        ...owned.flatMap(({ team, resolved: r }) => [
+          `Team ${teamArgName(team)} (roster ${(readTeam(dir, team) || {}).roster ?? "default"}):`,
+          ...teamStateLines(dir, r, teamPrefix(r.cwd, team), now),
+        ]),
+      ]
+    : teamStateLines(dir, resolved, repoBasename, now);
   const eff = route || (sessionId ? effectiveRoute(dir, resolved, sessionId) : null);
-  const lines = [`HIERARCHY STATE (${dir}):`, openLine, peersLine, routeLine(eff), tierLine(resolved, model)];
+  const lines = [`HIERARCHY STATE (${dir}):`, ...body, routeLine(eff), tierLine(resolved, model)];
   // Spec 0033 §3.4: surface orphaned team records (dead orchestrator pid), never auto-delete —
   // best-effort, must never cost the rest of the state block.
   try {

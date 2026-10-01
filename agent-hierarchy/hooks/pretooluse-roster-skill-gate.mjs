@@ -23,6 +23,11 @@
  * where the skill genuinely does not apply. Its `deny` outranks
  * pretooluse-ah-cli.mjs's `allow` (documented precedence, 0048 §2.4.4).
  *
+ * A second rule, apart from the one-shot one: a role-pack trust commit (`role set … --from …` or
+ * `role trust`, not a dry run) is asked of the user, or denied outside their own top-level session;
+ * see `judgeTrustCommit`. So is a command the ah grammar can't parse whose text names one
+ * (`UNPARSED_TRUST_RE`). It is checked on every call and fails closed.
+ *
  * No subagent context: only an orchestrator session stands up Teams. Fails
  * OPEN (allow) on any parse/state-read error — the opposite of the
  * disband-close gate's fail-closed choice, because that gate guards an
@@ -30,10 +35,10 @@
  * crashing hook must never make roster operations unusable.
  */
 
-import { isSubagent, logHookError, readHookInput, ROSTER_CLI } from "./lib-config.mjs";
-import { appendGate, hierarchyDir, readGates } from "./lib-hier.mjs";
+import { isSubagent, logHookError, readHookInput, resolveHierarchyRole, ROSTER_CLI } from "./lib-config.mjs";
+import { appendGate, hierarchyDir, pipelineRunLive, readGates } from "./lib-hier.mjs";
 import { dirname, join } from "node:path";
-import { parseAhCommand } from "./lib-ah-cli.mjs";
+import { isTrustCommit, parseAhCommand } from "./lib-ah-cli.mjs";
 
 const VERBS = ["create", "adopt", "move", "dismiss", "disband", "untrack"];
 const GATED_VERBS = new Set(VERBS);
@@ -50,6 +55,50 @@ function deny(reason, systemMessage) {
     })
   );
   process.exit(0);
+}
+
+function ask(reason) {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }));
+  process.exit(0);
+}
+
+/**
+ * The second rule: a commit that trusts role-pack content (`role set … --from …` or `role trust`,
+ * without `--dry-run`) is the user's to approve, in Claude Code's own prompt, which a model can't
+ * answer. Every such commit is judged, nothing is recorded, and it runs before the subagent exit.
+ * The permission modes are those in which that prompt was seen to reach the user; a payload that
+ * carries none is asked, and Claude Code decides.
+ */
+const ASK_MODES = new Set(["default", "acceptEdits", "auto", "plan", "dontAsk", "bypassPermissions"]);
+const TRUST_REFUSED = "ah: BLOCKED — trusting role-pack content is the user's decision, made in their own top-level session.";
+
+/**
+ * A command the ah grammar can't parse whose text still names a trust commit: `roster.mjs`, then
+ * the word `role`, then the word `trust` or the token `--from`. It is judged as a commit even when
+ * it says `--dry-run`, since the gate can't tell what the shell will pass. Matching text can catch a
+ * command that commits nothing (a grep, say); at a trust boundary that is the safe side.
+ */
+const UNPARSED_TRUST_RE = /roster\.mjs[\s\S]*\brole\b[\s\S]*(\btrust\b|(^|[\s"'=])--from([\s="']|$))/;
+const PLAIN_COMMAND =
+  "Run the ah command on its own, as one plain command with the absolute path to roster.mjs (no `cd`, env prefix, `$VAR`, `bash -c`, heredoc or trailing comment). If this command doesn't commit trust, rephrase it so it doesn't name roster.mjs, role and trust (or --from) in that order.";
+
+/** The `--cwd` an unparsed command names, best effort, or null. */
+function unparsedCwd(text) {
+  const m = /--cwd(?:=|\s+)("([^"]*)"|'([^']*)'|(\S+))/.exec(text);
+  return m ? m[2] ?? m[3] ?? m[4] : null;
+}
+
+/** `cwds` are the command's `--cwd` and the session's own: a live run at either one denies, so a
+    `--cwd` pointed elsewhere doesn't hide the run the session is in. */
+function judgeTrustCommit(input, cwds) {
+  if (isSubagent(input)) return { deny: `${TRUST_REFUSED} A subagent can't commit it; tell the user to run the command themselves.` };
+  const { role } = resolveHierarchyRole(input);
+  if (role && role !== "orchestrator") return { deny: `${TRUST_REFUSED} This is a ${role} session; tell your orchestrator, and the user runs it.` };
+  if (process.env.AH_TEAM_FILE) return { deny: `${TRUST_REFUSED} This session is a team member; tell your orchestrator, and the user runs it.` };
+  if (cwds.some((cwd) => pipelineRunLive(cwd))) return { deny: `${TRUST_REFUSED} A pipeline run is live in this checkout; adopt or trust pack roles once it has finished.` };
+  const mode = input.permission_mode;
+  if (typeof mode === "string" && !ASK_MODES.has(mode)) return { deny: `${TRUST_REFUSED} In permission mode ${JSON.stringify(mode)} the approval prompt isn't known to reach the user; switch to the default mode and run it again.` };
+  return { ask: "ah: trusting role-pack content — approve only if you reviewed this role's dry run (its fields, tools and pin) yourself." };
 }
 
 const DENY_REASON = [
@@ -73,13 +122,30 @@ function alreadyDenied(dir, sessionId) {
 
 try {
   const input = await readHookInput();
-  if (isSubagent(input)) process.exit(0);
   if (input.tool_name !== "Bash") process.exit(0);
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
   const parsed = parseAhCommand(toolInput.command);
+  const cwdOf = () => (typeof parsed.flags.cwd === "string" && parsed.flags.cwd ? parsed.flags.cwd : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+  const unparsedTrust = !parsed && typeof toolInput.command === "string" && UNPARSED_TRUST_RE.test(toolInput.command);
+  if (isTrustCommit(parsed) || unparsedTrust) {
+    // Fails closed, unlike the skill rule below: an error while judging denies.
+    let verdict;
+    try {
+      const own = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+      const named = unparsedTrust ? unparsedCwd(toolInput.command) : cwdOf();
+      verdict = judgeTrustCommit(input, [...new Set([named, own].filter(Boolean))]);
+    } catch (err) {
+      logHookError("pretooluse-roster-skill-gate.mjs", err);
+      verdict = { deny: `${TRUST_REFUSED} The gate couldn't judge this command (${err && err.message ? err.message : String(err)}), so it is refused.` };
+    }
+    const advice = unparsedTrust ? ` This command isn't one plain ah command, so it is judged as a trust commit whatever it says. ${PLAIN_COMMAND}` : "";
+    if (verdict.ask) ask(`${verdict.ask}${advice}`);
+    deny(`${verdict.deny}${advice}`, "ah: refused a role-pack trust commit outside the user's own session.");
+  }
+  if (isSubagent(input)) process.exit(0);
   if (!parsed || parsed.script !== "roster" || !GATED_VERBS.has(parsed.verb)) process.exit(0);
 
-  const cwd = typeof parsed.flags.cwd === "string" && parsed.flags.cwd ? parsed.flags.cwd : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  const cwd = cwdOf();
   const sessionId = typeof input.session_id === "string" && input.session_id ? input.session_id : "__nosession__";
   const dir = hierarchyDir(cwd);
 

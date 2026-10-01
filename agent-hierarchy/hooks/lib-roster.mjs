@@ -19,7 +19,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 
 import { homedir } from "node:os";
 
-import { checkoutRoot, CLASSES, declaredTier, isValidTeamAlias, KIND_DEFAULT, KIND_RE, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
+import { checkoutRoot, CLASSES, declaredTier, isTeamAliasShape, isValidTeamAlias, KIND_DEFAULT, KIND_RE, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
 
 // Spec 0043 §1.1/§1.5: `kind`/`route`-shape helpers are DEFINED in lib-config.mjs (the leaf) and
 // re-exported here so the member schema still reads as one module. Defining them here instead
@@ -850,14 +850,16 @@ export function teamMembersForRole(dir, role, team = null) {
   return t.members.filter((m) => m.role === role && routeHasPane(m.route));
 }
 
-/** Basenames (sans `.json`) of every named team under `dir/teams/` — does NOT include the default team. */
+/** Basenames (sans `.json`) of every named team under `dir/teams/` — does NOT include the default
+    team. A file whose base name no `--team` could give (`@default.json`, say) isn't a team. */
 export function listTeamNames(dir) {
   const teamsDir = join(dir, "teams");
   if (!existsSync(teamsDir)) return [];
   try {
     return readdirSync(teamsDir)
       .filter((f) => f.endsWith(".json"))
-      .map((f) => f.slice(0, -5));
+      .map((f) => f.slice(0, -5))
+      .filter(isTeamAliasShape);
   } catch {
     return [];
   }
@@ -891,8 +893,14 @@ export function legacyTeamPrefix(dir) {
  * team's own name. No team file → null.
  */
 export function teamRosterKey(dir, teamName) {
+  return teamRosterEntry(dir, teamName) ?? null;
+}
+
+/** What `teamRosterKey` reads, keeping "no team file" (undefined) apart from "the file records the
+    default block" (null). */
+export function teamRosterEntry(dir, teamName) {
   const t = readTeam(dir, teamName);
-  if (!t) return null;
+  if (!t) return undefined;
   if (!Object.prototype.hasOwnProperty.call(t, "roster")) return teamName || null;
   return typeof t.roster === "string" && t.roster ? t.roster : null;
 }
@@ -1099,15 +1107,47 @@ export function resolveSessionTeam(dir, role, explicitTeam = null) {
 export const TEAM_STALE_AGE_SEC = 24 * 3600;
 
 /**
- * Whether `invoker` (`{pid, sessionId}`) owns team `t`: the recorded owner pid is the invoker's and
- * is alive, and — when both the invocation and the team know a session id — the two agree. That
- * session check is the only guard against a reused pid; without one, the pid alone decides.
+ * Whether `invoker` (`{pid, sessionId}`, either may be null) owns team `t` — the one owner rule
+ * roster.mjs, the hooks and msg.mjs share. Either the same session: both session ids are known and
+ * equal, whatever the pids (a resumed session keeps its teams). Or the same process: the recorded
+ * owner pid is the invoker's, and the session ids don't conflict (both known and different). The
+ * rule never checks liveness: a caller that can't vouch for its pid leaves it out of `invoker`.
  */
 export function teamOwnedBy(t, invoker) {
-  if (!t || !invoker || !Number.isInteger(invoker.pid)) return false;
+  if (!t || !invoker) return false;
   const orch = t.orchestrator || {};
-  if (Number(orch.pid) !== invoker.pid || !pidAlive(invoker.pid)) return false;
-  return !(invoker.sessionId && orch.session_id && orch.session_id !== invoker.sessionId);
+  const bothSessions = Boolean(invoker.sessionId) && Boolean(orch.session_id);
+  if (bothSessions && orch.session_id === invoker.sessionId) return true;
+  return Number.isInteger(invoker.pid) && Number(orch.pid) === invoker.pid && !bothSessions;
+}
+
+/**
+ * The teams `invoker` owns in hierarchy dir `dir`: every team `teamOwnedBy` gives it, live at any
+ * age, over the default team (null) and every `teams/*.json`, the default team first and the rest
+ * by name. Empty when the invoker has neither a pid nor a session id.
+ */
+export function ownedTeams(dir, invoker) {
+  if (!invoker || (!Number.isInteger(invoker.pid) && !invoker.sessionId)) return [];
+  return [null, ...listTeamNames(dir).sort()].filter((name) => teamOwnedBy(readTeam(dir, name), invoker));
+}
+
+/** The teams among `teams` (names, null for the default team) whose members include `name`. */
+export function teamsWithMember(dir, teams, name) {
+  return name ? teams.filter((team) => teamMemberNameSet(dir, team).has(name)) : [];
+}
+
+/** The `--team` value that names the default team (team.json). No team can take it as a name: it
+    fails `validateTeamAlias`, which roster.mjs and msg.mjs check only after this value. */
+export const DEFAULT_TEAM_ARG = "@default";
+
+/** A team name as the user or the model passes it back with `--team`: the default team is `@default`. */
+export function teamArgName(team) {
+  return team === null ? DEFAULT_TEAM_ARG : team;
+}
+
+/** How a list of team names reads in a refusal: `"foo", "bar"`, the default team as `"@default"`. */
+export function teamListText(teams) {
+  return teams.map((n) => `"${teamArgName(n)}"`).join(", ");
 }
 
 /**

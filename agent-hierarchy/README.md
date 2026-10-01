@@ -370,6 +370,133 @@ under [docs/specs/](./docs/specs/). Good places to start:
 [0026](./docs/specs/0026-downstream-dispatch-visibility-and-orchestrator-only-route-gate.md) (route gate),
 [0028](./docs/specs/0028-orchestrator-conduit-and-liveness.md) (conduit and liveness).
 
+## What's new
+
+- **0.106.0** named rosters: several rosters side by side, pick one per repo, machine or session.
+- **0.107.0** role packs: roles shipped in a plugin, adopted one at a time behind a pin.
+- **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
+- **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
+
+The installed version is in `.claude-plugin/plugin.json`. Each feature below
+is complete enough to use; the linked page has the detail.
+
+## Named rosters
+
+A roster is the list of members a team is built from. Until now there was one
+per level; now a level can hold several, as `rosters.<name>` blocks beside the
+default one. Commands that read or edit a roster use the first of `--roster
+<name>`, the `AH_ROSTER` environment variable, the `activeRoster` config key,
+then the default block. A running team keeps the roster it was built from.
+
+```
+/agent-roster copy default docs     # new roster "docs", starting from the default
+/agent-roster use docs              # later teams you create use it (this repo, just you)
+/agent-roster list                  # what exists, where, and which is selected
+AH_ROSTER=docs claude               # or: one session only
+```
+
+`use docs --level repo` shares the choice with the repo, `--level global` makes
+it machine-wide; `use default` goes back. More, including names and deleting:
+[docs/getting-started.md](./docs/getting-started.md#named-rosters).
+
+## Role packs: roles from someone else's plugin
+
+A role pack is an ordinary Claude Code plugin that also has an `ah-roles.json`.
+You install it with Claude Code, but nothing in it routes, dispatches or
+spawns until you adopt a role: you review its dry run (fields, tools, what else
+the plugin carries) and approve a pin in Claude Code's own prompt. The pin
+covers the whole plugin, so any change, even a plain `claude plugin update`,
+makes its roles unavailable until you review and trust them again. A pack role
+never runs with permission checks off, and in `/pipeline` runs it may implement
+but never review.
+
+```
+/agent-role install owner/my-pack   # shows the roles and everything else the plugin carries, then installs
+/agent-role adopt                   # dry run, then commit with the pin it prints
+/agent-role trust my-role           # after an update: review the change, re-pin
+```
+
+Nothing is trusted on your say-so in a subagent, peer or pipeline session; the
+approval is yours, in your own session. Writing a pack, the trust model and its
+limits: [docs/custom-roles.md](./docs/custom-roles.md#6-role-packs).
+
+## Several teams in one session
+
+A session can own more than one team. Ask for them in a sentence, and the
+Orchestrator asks only what you left out (a name, a roster, a model):
+
+```
+create team foo from roster x and team bar from roster y
+```
+
+Afterwards, say which team you mean: `disband foo`. A member's name already
+says its team: `dismiss bar-reviewer`. The session's start-up note lists the
+teams you own, and a command about a whole team (`disband`, `untrack --all`)
+needs `--team foo` when you own several (`--team @default` is a legacy
+`team.json` team). A session you resume doesn't own its teams again on its
+own: re-claim each with `roster.mjs adopt --orchestrator-pid <pid> --team foo`.
+More:
+[docs/getting-started.md](./docs/getting-started.md#5-spawning-a-team),
+[docs/troubleshooting.md](./docs/troubleshooting.md#several-owned-teams).
+
+## `/pipeline`: run a plan or issues to completion
+
+`/pipeline` (`/ah:pipeline` where the plugin name is needed) works through a
+list of items unattended. Each item goes through Architect, Implementor and
+Reviewer; the Reviewer takes item N while the Implementor starts N+1. An item
+gets at most 3 rework rounds. If it is still failing after the third, the run
+stops that item and tells you, rather than starting a fourth. Issue runs add
+caps of their own: at most 2 plan rounds per issue, and 3 per step and per
+gate.
+
+After the first notice (branch, route, permission mode, secret scanner) it
+only interrupts you when something needs a person: a round cap, a real
+blocker, an Ultra-Advisor escalation, a red build, a secret-scan finding or a
+halted push. **It never merges.** Issue runs push an `ah/issue-<N>` branch per
+issue (dependent issues stack on the branch they depend on) and open a draft
+PR that says `Refs #N` or `Closes #N`; you review and merge. Before every push
+it scans the patch for secrets, with gitleaks if installed, otherwise with the
+`ah:secret-scanner` agent, and it stops on a finding.
+
+    /pipeline docs/plans/search.md                   # a plan or spec file, run item by item
+    /pipeline docs/plans/search.md --branch feat/search   # …on a branch you name
+    /pipeline 12 14                                  # GitHub issues 12 and 14
+    /pipeline #12 https://github.com/acme/app/issues/14   # refs may be #N or an issue URL
+    /pipeline --labelled                             # every open issue carrying the trigger label
+
+Give a plan run `--branch`: the skill defines no default branch for one. It
+never pushes to `main` or a protected branch. A file and issue refs can't be
+mixed, and `--branch` doesn't apply to issue runs. A bare number is an issue; write `./12` for a file named `12`. For a
+list of acceptance criteria, put it in a file and pass the path.
+
+**Who does the work.** The run builds its team itself with `roster.mjs
+create`, so no team has to exist first, and the roster is chosen as in
+[Named rosters](#named-rosters): `--roster`, then `AH_ROSTER`, then
+`activeRoster`, then the default block. Select a roster before you start
+(`/agent-roster use docs`, or launch the session with `AH_ROSTER=docs`). The
+route is peer sessions unless you asked for subagents.
+
+**Pack roles.** A role adopted from a [role pack](#role-packs-roles-from-someone-elses-plugin)
+may take implementation work in a run, and is never launched with permission
+checks off. The Reviewer and designer slots stay first-party: a pack Reviewer or
+designer is refused while a run is open, and a run halts before starting if a
+pack overrides the built-in Reviewer or Architect. Adopting or trusting a pack
+role is refused while a run is live.
+
+**Before you start.** The session must be in `--permission-mode auto`. Issue
+runs also need `gh` installed and logged in to github.com, a GitHub `origin`,
+and a `.claude/ah-conventions.json` that sets `issues.trigger_label` (plus
+`trusted_actors` for an organisation's repo). The same file can switch on the
+push guard, which refuses force pushes, protected branches, other remotes and
+`--no-verify`. Most of the rules above, including never merging, draft PRs, the round caps
+and the secret scan, are the run's own instructions, not hook guarantees;
+only the push guard is enforced by a hook, and it matches command text, so
+`gh` misuse isn't covered. Run state lives in the gitignored `.claude/hierarchy/`; a stale
+open run anchor there makes the next run halt. Everything the conventions file
+accepts is in [docs/pipeline-conventions.md](./docs/pipeline-conventions.md);
+the full run procedure is
+[skills/autonomous-pipeline/SKILL.md](./skills/autonomous-pipeline/SKILL.md).
+
 ## Commands
 
 ```
@@ -383,9 +510,9 @@ under [docs/specs/](./docs/specs/). Good places to start:
 /hierarchy peers                    # live peer roster
 /hierarchy sweep [days]             # archive old closed exchanges
 /hierarchy on | off                 # toggle without losing the config
-/agent-roster [show|init|add|edit|remove]   # define the roster
+/agent-roster [show|init|add|edit|remove|list|copy|delete|use]   # define the roster, or keep several and pick one
 /agent-team [create [auto|manual]|spawn-one <role>|spawn-ad-hoc <role>|dismiss <name>|disband|untrack|teams|resync|move|adopt|reap|history]   # stand up, reshape, or tear down a live team
-/agent-role [list|add|edit|remove|check] [name]   # define your own roles
+/agent-role [list|add|edit|remove|check|install|update|uninstall|adopt|trust] [name]   # define your own roles, or take them from a role pack
 /pipeline <plan-or-spec-path> [--branch <name>]   # run a plan to completion on its own
 ```
 
@@ -398,7 +525,8 @@ afterwards is `/agent-roster`, and starting it in a live team is `/agent-team`.
 `/pipeline` takes a plan, a spec, or a list of acceptance criteria and runs it
 to completion by itself: round after round of Architect, Implementor, and
 Reviewer, with a hard cap on escalations and as few check-ins with you as it
-can manage.
+can manage. How to use it:
+[`/pipeline`](#pipeline-run-a-plan-or-issues-to-completion).
 
 Which roles exist, and their model, effort, and route, is `/agent-roster`'s
 job, not `/hierarchy`'s. `/hierarchy set <role> <model>` was replaced by

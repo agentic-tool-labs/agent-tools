@@ -20,7 +20,7 @@
 
 import { logHookError, readHookInput } from "./lib-config.mjs";
 import { hierarchyDir } from "./lib-hier.mjs";
-import { readTeam } from "./lib-roster.mjs";
+import { DEFAULT_TEAM_ARG, readTeam } from "./lib-roster.mjs";
 import { isCloseCommand, parseAhCommand } from "./lib-ah-cli.mjs";
 
 function ask(reason) {
@@ -83,7 +83,9 @@ try {
     try {
       const cwd = typeof parsed.flags.cwd === "string" && parsed.flags.cwd ? parsed.flags.cwd : null;
       if (cwd) {
-        const team = readTeam(hierarchyDir(cwd), typeof parsed.flags.team === "string" ? parsed.flags.team : null);
+        // `--team @default` is the default team, team.json.
+        const flag = typeof parsed.flags.team === "string" ? parsed.flags.team : null;
+        const team = readTeam(hierarchyDir(cwd), flag === DEFAULT_TEAM_ARG ? null : flag);
         if (team && Array.isArray(team.members)) names = team.members.map((m) => m.name).filter(Boolean).join(", ") || null;
       }
     } catch {

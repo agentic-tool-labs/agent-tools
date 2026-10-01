@@ -57,7 +57,8 @@ export const ROSTER_BOOL_FLAGS = new Set([
 export const MSG_BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all"]);
 
 const SCRIPTS = { "roster.mjs": "roster", "msg.mjs": "msg" };
-const META = new Set([";", "&", "|", "<", ">", "(", ")", "`", "$", "\\", "\n", "\r"]);
+// An unquoted `#` can start a shell comment, which drops the rest of the command from what runs.
+const META = new Set([";", "&", "|", "<", ">", "(", ")", "`", "$", "\\", "\n", "\r", "#"]);
 // The shell expands `{ } * ? [ ] ~` before node ever sees the command, so any of them outside quotes
 // makes the text parsed here and the command executed two different things. Checked one CHARACTER at
 // a time in the unquoted branch: a token-level check misses a token that mixes quoting, where an
@@ -101,7 +102,8 @@ function tokenize(command) {
       const end = command.indexOf('"', i + 1);
       if (end === -1) return null;
       const body = command.slice(i + 1, end);
-      for (const ch of body) if (META.has(ch)) return null;
+      // Inside double quotes `#` is literal to the shell, so only an unquoted one ends the parse.
+      for (const ch of body) if (META.has(ch) && ch !== "#") return null;
       add(body, true);
       i = end;
       continue;
@@ -187,4 +189,15 @@ export const CLOSE_VERBS = ["dismiss", "disband"];
 
 export function isCloseCommand(parsed) {
   return !!parsed && parsed.script === "roster" && CLOSE_VERBS.includes(parsed.verb) && parsed.flags.close === true;
+}
+
+/**
+ * A commit that trusts role-pack content: `role set <name> --from …` or `role trust <name>`, without
+ * `--dry-run`. The roster skill gate asks the user about exactly these, and the allow hook stays
+ * silent on them so that `ask` is the only decision in play.
+ */
+export function isTrustCommit(parsed) {
+  if (!parsed || parsed.script !== "roster" || parsed.verb !== "role" || parsed.flags["dry-run"] === true) return false;
+  const sub = parsed.positional[0];
+  return (sub === "set" && parsed.flags.from !== undefined) || sub === "trust";
 }

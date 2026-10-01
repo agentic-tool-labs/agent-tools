@@ -25,9 +25,10 @@
  * the current working directory — that is what `/hierarchy status` uses.
  */
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Cycle with lib-roster.mjs (which imports ROLES/VALID_MODELS_BY_ROLE from here): safe only
@@ -35,7 +36,7 @@ import { fileURLToPath } from "node:url";
 // bodies called later (statusReport here; validateMember/validateRosterBlock there). Keep it that
 // way — a top-level use on either side would risk the top-level-await deadlock class documented
 // in lib-roster.mjs's header.
-import { legacyTeamPrefix, listTeamNames, memberTeam, readTeam, ROSTER_LAYOUT_VALUES, teamRosterKey } from "./lib-roster.mjs";
+import { legacyTeamPrefix, listTeamNames, memberTeam, ownedTeams, readTeam, teamArgName, ROSTER_LAYOUT_VALUES, teamRosterEntry, teamRosterKey } from "./lib-roster.mjs";
 import { normalizeSessionId } from "./lib-gate.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 
@@ -661,8 +662,8 @@ export function teamLayoutPreference() {
 }
 
 /** Keys a global config file holds when all it records is user preferences: the stored team
-    layout and declared model tiers. Such a file configures no hierarchy. */
-const PREFERENCE_ONLY_KEYS = new Set(["version", "teamLayout", "modelTiers"]);
+    layout, declared model tiers and the selected roster. Such a file configures no hierarchy. */
+const PREFERENCE_ONLY_KEYS = new Set(["version", "teamLayout", "modelTiers", "activeRoster"]);
 
 export function projectConfigPath(cwd) {
   if (typeof cwd !== "string" || !cwd) return null;
@@ -817,7 +818,7 @@ export function rosterMemberNames(members, repoBasename) {
  */
 export function validateTeamAlias(alias, resolved = null) {
   if (typeof alias !== "string" || !alias) return { ok: false, why: "alias must be a non-empty string" };
-  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(alias)) {
+  if (!isTeamAliasShape(alias)) {
     return {
       ok: false,
       why: "alias must start with a letter or digit, be 1-32 characters, and contain only letters, digits, and -",
@@ -831,6 +832,12 @@ export function validateTeamAlias(alias, resolved = null) {
     };
   }
   return { ok: true };
+}
+
+/** Whether `name` has a team name's shape: 1-32 letters, digits and `-`, starting with a letter or
+    digit. The role-token check in `validateTeamAlias` comes on top of this. */
+export function isTeamAliasShape(name) {
+  return typeof name === "string" && /^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(name);
 }
 
 /** Convenience boolean wrapper over `validateTeamAlias`. */
@@ -1016,6 +1023,97 @@ export function namedRosterKeys(cwd) {
     }
   }
   return [...keys].sort();
+}
+
+/** The roster name that means the unnamed `roster` block wherever a roster is selected. A team's
+    recorded key is never read this way, so a legacy `rosters.default` block keeps serving its team. */
+export const DEFAULT_ROSTER = "default";
+
+/**
+ * The `activeRoster` that applies: the first one set, most specific level first, across the same
+ * candidate paths `resolveRoster` reads — so a main checkout's repo-level value also applies in its
+ * linked worktrees. `{value, level, path}`, or null when none is set. A JSON null counts as unset.
+ */
+export function activeRosterSetting(cwd) {
+  const candidates = rosterLevelCandidates(cwd);
+  for (const level of ROSTER_LEVELS) {
+    for (const path of candidates[level]) {
+      if (!existsSync(path)) continue;
+      let data;
+      try {
+        data = JSON.parse(readFileSync(path, "utf8"));
+      } catch {
+        continue;
+      }
+      if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+      if (data.activeRoster !== undefined && data.activeRoster !== null) return { value: data.activeRoster, level, path };
+    }
+  }
+  return null;
+}
+
+/**
+ * Which roster block a command uses, and why — the one selection rule, for roster.mjs's template
+ * verbs and `create`, and for `resolveConfig`. The first match wins: `flag`; with `team` given
+ * (`{dir, name}`), the key that team's file records when the file exists; a non-empty `AH_ROSTER`;
+ * `activeRoster`; else the default block. `default` from any source but a team file means the
+ * unnamed block. Returns `{roster, key, source, level, path}`: `roster` is the name or "default",
+ * `key` the `rosters.*` key or null for the unnamed block, and `level`/`path` are set only for
+ * source `activeRoster`.
+ */
+export function rosterSelection(cwd, { flag = null, team = null } = {}) {
+  const chosen = (value, source, level = null, path = null) => {
+    const key = value === DEFAULT_ROSTER ? null : value;
+    return { roster: key === null ? DEFAULT_ROSTER : key, key, source, level, path };
+  };
+  if (typeof flag === "string" && flag) return chosen(flag, "flag");
+  if (team) {
+    const recorded = teamRosterEntry(team.dir, team.name);
+    if (recorded !== undefined) return { roster: recorded === null ? DEFAULT_ROSTER : recorded, key: recorded, source: "team", level: null, path: null };
+  }
+  const env = process.env.AH_ROSTER;
+  if (typeof env === "string" && env !== "") return chosen(env, "env");
+  const active = activeRosterSetting(cwd);
+  if (active) return chosen(active.value, "activeRoster", active.level, active.path);
+  return chosen(DEFAULT_ROSTER, "default");
+}
+
+/** The named rosters a selection can name: every `rosters.<name>` key some visible level holds,
+    even with no members, less a legacy `rosters.default`, which the name `default` never reaches. */
+export function selectableRosters(cwd) {
+  return namedRosterKeys(cwd).filter((k) => k !== DEFAULT_ROSTER);
+}
+
+/** The `selection` object CLI output carries. */
+export function selectionView(selection) {
+  const { roster, source, level, path } = selection;
+  return { roster, source, level, path };
+}
+
+/**
+ * Null when `selection` is usable, else why not: a flag, `AH_ROSTER` or `activeRoster` naming a
+ * roster that no visible level defines — a `rosters.<name>` key, even one with no members. The
+ * message names the source, the defined rosters and the fixes. The verbs refuse with it, except
+ * `init`, which is how a missing roster gets made; `resolveConfig` warns with it and uses the
+ * default block; `doctor` reports it red.
+ */
+export function rosterSelectionProblem(cwd, selection) {
+  if (!["flag", "env", "activeRoster"].includes(selection.source) || selection.key === null) return null;
+  if (typeof selection.key !== "string" || selection.key === "") {
+    return (
+      `activeRoster at ${selection.level} in ${selection.path} must be a roster name, got ${JSON.stringify(selection.key)}. ` +
+      `Fix with \`roster.mjs roster use <name> --level ${selection.level}\` or \`roster.mjs roster use --clear --level ${selection.level}\`.`
+    );
+  }
+  const defined = selectableRosters(cwd);
+  if (defined.includes(selection.key)) return null;
+  const source =
+    selection.source === "flag" ? "--roster" : selection.source === "env" ? "AH_ROSTER" : `activeRoster at ${selection.level} in ${selection.path}`;
+  const name = selection.key;
+  return (
+    `${source} selects roster "${name}", but there is no rosters.${name} block at any level (defined: ${defined.join(", ") || "none"}). ` +
+    `Fix with \`roster.mjs roster use default\`, \`roster.mjs roster use <other>\`, or \`roster.mjs init --roster ${name}\`.`
+  );
 }
 
 /**
@@ -1221,49 +1319,102 @@ function loadScope(path, scope, warnings) {
 /**
  * The active team scope (spec 0011 §4.4): (1) `opts.team` if given —
  * trusted as-is, the CLI layer validates it with `validateTeamAlias` before
- * we ever see it; (2) the team (default or named) whose `team.json` binds
- * `orchestrator.session_id === opts.sessionId`, letting an orchestrator omit
- * `--team` after `create`; (3) the team whose `orchestrator.session_id` is
- * unset and whose `orchestrator.pid` is the calling Claude session's pid —
- * `spawn-one`/`spawn-ad-hoc` record only the pid, so without this the
- * session that spawned a team cannot see it; (4) for a session that owns none, the team it was
- * launched into (`AH_TEAM_FILE`), else the live team whose member row holds its pane — the
- * orchestrator steps come first so an owner always resolves to its own team; (5) `null`, the
- * default team.
+ * we ever see it; (2) the teams the calling session owns, by the owner rule roster.mjs and msg.mjs
+ * share (`ownedTeams`: the recorded owner pid is the caller's, and the session ids agree when both
+ * are known), which lets an orchestrator omit `--team` after `create`; (3) for a session that owns
+ * none, the team it was launched into (`AH_TEAM_FILE`), else the live team whose member row holds
+ * its pane — the owner step comes first so an owner always resolves to its own team; (4) `null`,
+ * the default team.
  * The caller pid is `opts.pid`, else `process.ppid` (a hook's parent is the
  * Claude process). A CLI's parent is a shell, so CLI callers pass the pid
  * spawn-* records (`--orchestrator-pid`, else `CLAUDE_PID`); a non-integer
- * pid skips (3). A team with a session_id is
- * never adopted by pid. Any read failure (missing team file, unreadable
+ * pid skips (2). Any read failure (missing team file, unreadable
  * member list) degrades to `null` rather than throwing — 0009 §8.12's
  * fail-open catch, extended to team resolution.
  *
- * Returns `{name, home, via}`: `home` is the hierarchy dir holding that team's file (null when not
- * known — an explicit `opts.team` without `opts.teamHome`, or no team); `via` is the step that
- * answered — `team`, `session`, `pid` (the session's own team), `env` or `pane` (a team it was only
- * attributed to, which may be read but never cleared or rewritten), or null.
+ * Returns `{name, home, via, owned}`: `home` is the hierarchy dir holding that team's file (null
+ * when not known — an explicit `opts.team` without `opts.teamHome`, or no team); `via` is the step
+ * that answered — `team`, `session` or `pid` (the session's own team, matched with or without a
+ * session id), `env` or `pane` (a team it was only attributed to, which may be read but never
+ * cleared or rewritten), or null. `owned` lists every team the session owns, in `ownedTeams` order;
+ * when it holds more than one, `name` is its first and the caller must treat each in turn.
  */
 function resolveTeamScope(cwd, opts) {
-  if (opts && typeof opts.team === "string" && opts.team) return { name: opts.team, home: opts.teamHome || null, via: "team" };
+  if (opts && typeof opts.team === "string" && opts.team) return { name: opts.team, home: opts.teamHome || null, via: "team", owned: [] };
+  if (opts && opts.defaultTeam === true) return { name: null, home: opts.teamHome || null, via: "team", owned: [] };
   const pid = opts && opts.pid !== undefined ? opts.pid : process.ppid;
   try {
     const dir = hierarchyDir(cwd);
-    const teams = [null, ...listTeamNames(dir)].map((name) => ({ name, orch: (readTeam(dir, name) || {}).orchestrator }));
-    if (opts && opts.sessionId) {
-      const hit = teams.find((t) => t.orch && t.orch.session_id === opts.sessionId);
-      if (hit) return { name: hit.name, home: dir, via: "session" };
-    }
-    if (Number.isInteger(pid) && pid > 0) {
-      const hit = teams.find((t) => t.orch && !t.orch.session_id && t.orch.pid === pid);
-      if (hit) return { name: hit.name, home: dir, via: "pid" };
+    const sessionId = (opts && opts.sessionId) || null;
+    const owned = ownedTeams(dir, { pid: Number.isInteger(pid) && pid > 0 ? pid : null, sessionId });
+    if (owned.length) {
+      const orch = (readTeam(dir, owned[0]) || {}).orchestrator || {};
+      return { name: owned[0], home: dir, via: sessionId && orch.session_id === sessionId ? "session" : "pid", owned };
     }
     // A session that owns no team: the team it was launched into, else the live team holding its pane.
     const member = memberTeam(dir, [dir, mainHierarchyDir(cwd)], process.env.HERDR_PANE_ID || process.env.TMUX_PANE || null);
-    if (member) return { name: member.teamName, home: member.home, via: member.via };
+    if (member) return { name: member.teamName, home: member.home, via: member.via, owned: [] };
   } catch {
     // fail-open to default — see doc comment above.
   }
-  return { name: null, home: null, via: null };
+  return { name: null, home: null, via: null, owned: [] };
+}
+
+/**
+ * A built-in's `from` row: the pack supplies only its agent (the row keeps its own `model`,
+ * `dispatch` and `peer`), and the pack role's class must be the built-in's. When nothing on this
+ * machine says what the role is, the agent is guessed from `from` so the override still shows, and
+ * fails, as unavailable.
+ */
+function builtinFromRow(role, entry) {
+  const expanded = expandFromRow(entry);
+  const f = parseFrom(entry.from);
+  const guess = f ? `${f.plugin}:${f.role}` : `ah:${role}`;
+  if (expanded.error) {
+    const status = expanded.error.slice(0, expanded.error.indexOf(":"));
+    return { ...entry, agent: guess, pack: { status, message: expanded.error.slice(status.length + 2), subcode: null, from: entry.from, agentText: null, agentPath: null, pinNow: null } };
+  }
+  const pack = expanded.raw.class === BUILTIN_CLASS[role]
+    ? expanded.pack
+    : { ...expanded.pack, status: "pack-invalid", message: `the pack role's class, ${expanded.raw.class}, isn't the ${role}'s class, ${BUILTIN_CLASS[role]}` };
+  return { ...entry, agent: expanded.raw.agent, pack };
+}
+
+/** The selection for a session whose team scope is `team` (null: the default team) in `teamHome`. */
+function scopedRosterSelection(resolvedCwd, opts, team, teamHome) {
+  return rosterSelection(resolvedCwd, {
+    flag: opts.roster === null ? DEFAULT_ROSTER : opts.roster,
+    team: { dir: teamHome || hierarchyDir(resolvedCwd), name: team },
+  });
+}
+
+/** The roster selection `resolveConfig(cwd, opts)` uses, with the session's team scope resolved the
+    same way, so a CLI report (doctor) and the hooks agree on it. */
+export function sessionRosterSelection(cwd, opts = {}) {
+  const resolvedCwd = resolve(typeof cwd === "string" && cwd ? cwd : process.cwd());
+  const { name: team, home: teamHome } = resolveTeamScope(resolvedCwd, opts);
+  return scopedRosterSelection(resolvedCwd, opts, team, teamHome);
+}
+
+/** One `{team, selection}` per team the session owns when it owns more than one, else null. */
+export function ownedRosterSelections(cwd, opts = {}) {
+  const resolvedCwd = resolve(typeof cwd === "string" && cwd ? cwd : process.cwd());
+  const { owned } = resolveTeamScope(resolvedCwd, opts);
+  if (owned.length < 2) return null;
+  const home = hierarchyDir(resolvedCwd);
+  return owned.map((team) => ({ team, selection: scopedRosterSelection(resolvedCwd, opts, team, home) }));
+}
+
+/**
+ * For a session that owns more than one live team: one `{team, resolved}` per owned team, each
+ * resolved as that team (its own roster), in `resolved.ownedTeams` order. Null for a session with
+ * at most one, which keeps its single-team path. `opts` is passed on to each `resolveConfig`.
+ */
+export function ownedTeamConfigs(resolved, opts = {}) {
+  const owned = resolved && Array.isArray(resolved.ownedTeams) ? resolved.ownedTeams : [];
+  if (owned.length < 2) return null;
+  const teamHome = hierarchyDir(resolved.cwd);
+  return owned.map((team) => ({ team, resolved: resolveConfig(resolved.cwd, { ...opts, ...(team === null ? { defaultTeam: true } : { team }), teamHome }) }));
 }
 
 /**
@@ -1277,7 +1428,7 @@ export function resolveConfig(cwd, opts = {}) {
   const resolvedCwd = resolve(typeof cwd === "string" && cwd ? cwd : process.cwd());
   // `teamHome` is the hierarchy dir the team's file lives in — a worktree peer's team is the main
   // checkout's, which is not `hierarchyDir(cwd)`.
-  const { name: team, home: teamHome, via: teamVia } = resolveTeamScope(resolvedCwd, opts);
+  const { name: team, home: teamHome, via: teamVia, owned: ownedTeamNames } = resolveTeamScope(resolvedCwd, opts);
   const userPath = userConfigPath();
   // Fix 2 (spec 0032 §4): worktree-aware candidate lists, matching resolveRoster — first
   // existing path per scope, never merged across candidates within a level (§4 rationale:
@@ -1296,7 +1447,13 @@ export function resolveConfig(cwd, opts = {}) {
 
   // Least specific first: repo-user is the new highest-precedence layer. A global file holding only
   // the stored team layout is a create's side effect, not hierarchy config, so it configures nothing.
-  const preferenceOnly = (layer) => layer.scope === "user" && Object.keys(layer.data).every((k) => PREFERENCE_ONLY_KEYS.has(k));
+  // Choosing a roster never makes a setup look configured either: a repo or repo-user file holding
+  // only `activeRoster` configures nothing, though its selection still applies.
+  const preferenceOnly = (layer) => {
+    const keys = Object.keys(layer.data);
+    if (layer.scope === "user") return keys.every((k) => PREFERENCE_ONLY_KEYS.has(k));
+    return keys.length === 1 && keys[0] === "activeRoster";
+  };
   const layers = [user, project, repoUser].filter(Boolean).filter((layer) => !preferenceOnly(layer));
   warnings.push(...teamLayoutPreference().warnings);
 
@@ -1327,6 +1484,7 @@ export function resolveConfig(cwd, opts = {}) {
       rosterLevel: null,
       team,
       teamVia,
+      ownedTeams: ownedTeamNames,
     };
   }
 
@@ -1394,7 +1552,7 @@ export function resolveConfig(cwd, opts = {}) {
       }
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
       // Shallow replacement: the whole role object is swapped, not merged key-by-key.
-      roles[role] = { ...entry };
+      roles[role] = isFromRow(entry) ? builtinFromRow(role, entry) : { ...entry };
       sources[role] = layer.scope;
       (definedBy[role] ||= []).push(layer.scope);
     }
@@ -1437,13 +1595,18 @@ export function resolveConfig(cwd, opts = {}) {
   const customRows = {};
   for (const name of Object.keys(customRaw).sort()) {
     const info = customRaw[name];
-    const checked = checkCustomRow(name, info.raw);
+    const expanded = isFromRow(info.raw) ? expandFromRow(info.raw) : null;
+    if (expanded && expanded.error) {
+      exclude(name, info, expanded.error);
+      continue;
+    }
+    const checked = checkCustomRow(name, expanded ? expanded.raw : info.raw);
     if (checked.error) {
       exclude(name, info, checked.error);
       continue;
     }
     for (const w of checked.warnings) warnings.push(`ah: custom role "${name}": ${w}`);
-    customRows[name] = checked.row;
+    customRows[name] = expanded ? { ...checked.row, from: info.raw.from, pin: info.raw.pin, pack: expanded.pack } : checked.row;
   }
   // An agent maps to exactly one role: a custom row whose agent a built-in already owns is invalid
   // (built-ins win), and custom rows sharing one agent are all invalid — neither can own it.
@@ -1465,8 +1628,12 @@ export function resolveConfig(cwd, opts = {}) {
     if (CLASSES[row.class].chain) normalizeDispatch(name, roles, warnings);
   }
 
-  // The block is the team's recorded template (or an explicit `opts.roster`); the names are the team's own.
-  const rosterKey = opts.roster !== undefined ? opts.roster : teamRosterKey(teamHome || hierarchyDir(resolvedCwd), team);
+  // The block is the team's recorded template (or an explicit `opts.roster`, else the selection);
+  // the names are the team's own. A selection naming no defined roster is warned about, never thrown.
+  const selection = scopedRosterSelection(resolvedCwd, opts, team, teamHome);
+  const selectionProblem = rosterSelectionProblem(resolvedCwd, selection);
+  if (selectionProblem) warnings.push(`ah: ${selectionProblem} Using the default roster block until then.`);
+  const rosterKey = selectionProblem ? null : selection.key;
   const rosterResult = resolveRoster(cwd, rosterKey, teamPrefix(resolvedCwd, team), { roles });
   return {
     configured: true,
@@ -1487,6 +1654,7 @@ export function resolveConfig(cwd, opts = {}) {
     rosterLevel: rosterResult ? rosterResult.level : null,
     team,
     teamVia,
+    ownedTeams: ownedTeamNames,
   };
 }
 
@@ -1558,19 +1726,695 @@ export function locateAgentFile(ref, cwd) {
   }
   const plugin = ref.slice(0, colon);
   const agent = ref.slice(colon + 1);
-  let records = [];
-  try {
-    const data = JSON.parse(readFileSync(installedPluginsPath(), "utf8"));
-    const plugins = data && data.plugins && typeof data.plugins === "object" ? data.plugins : {};
-    for (const [key, list] of Object.entries(plugins)) {
-      if (key.split("@")[0] === plugin && Array.isArray(list)) records.push(...list);
-    }
-  } catch {
-    records = [];
+  const records = [];
+  for (const [key, list] of installedPluginEntries()) {
+    if (key.split("@")[0] === plugin) records.push(...list);
   }
   const candidates = records.filter((r) => r && typeof r.installPath === "string").map((r) => join(r.installPath, "agents", `${agent}.md`));
   const path = candidates.find((p) => existsSync(p)) || null;
   return { kind: "plugin", path, level: path ? "plugin" : null, shadowed: null, error: path ? null : "plugin-unresolvable", records: records.length, candidates };
+}
+
+/** installed_plugins.json's `plugins` entries as `[key, records]`, each record list an array: the one
+    reader of that file here. Empty when it can't be read. */
+function installedPluginEntries() {
+  try {
+    const data = JSON.parse(readFileSync(installedPluginsPath(), "utf8"));
+    const plugins = data && data.plugins && typeof data.plugins === "object" ? data.plugins : {};
+    return Object.entries(plugins).filter(([, list]) => Array.isArray(list));
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------- role packs
+
+/**
+ * A role pack is an installed Claude Code plugin whose root holds `ah-roles.json`. Nothing from a pack
+ * reaches the registry until a user adopts one of its roles with `role set <name> --from
+ * <plugin>@<marketplace>:<role>`, which stores only `from`, `pin` and the user's own fields; the
+ * rest is read from the pack each time the row resolves. The pin covers the whole plugin tree, and
+ * a role is available only while the installed tree still hashes to it and this machine holds a
+ * stored copy of what the user trusted.
+ */
+export const PACK_MANIFEST = "ah-roles.json";
+const PACK_ROLE_FIELDS = ["class", "agent", "label", "description", "routes", "model", "dispatch"];
+/** The frontmatter keys a pack agent may use. Anything else could grant more than its tools do. */
+export const PACK_AGENT_KEYS = ["name", "description", "model", "tools", "disallowedTools", "color", "effort", "maxTurns"];
+/** Keys a pack's plugin.json may hold without being listed among what else the plugin carries. */
+const PLUGIN_JSON_PLAIN_KEYS = ["name", "version", "description", "author", "homepage", "repository", "license", "keywords"];
+/** The dry run's line for an implement-class pack role that routes work. */
+export const UNATTENDED_LINE = "takes work in unattended /ah:pipeline runs (pushes draft PRs, does not merge)";
+/** Tools the dry runs flag in a pack agent's effective list, besides every MCP tool. */
+const FLAGGED_TOOLS = ["Bash", "Agent", "Write", "Edit"];
+/** The name prefix Claude Code gives a tool an MCP server provides. The no-MCP check exempts this
+    one line, by its exact text, so every MCP-tool check must go through it. */
+const MCP_TOOL_PREFIX = "mcp__";
+export const PIN_RE = /^sha256:[0-9a-f]{64}$/;
+const FROM_RE = /^([A-Za-z0-9][A-Za-z0-9_.-]*)(?:@([^:@\s]+))?:([^:@\s]+)$/;
+/** A word YAML (1.1 or 1.2) reads as null or a boolean rather than a string, in any case. */
+const YAML_NULL_BOOL_RE = /^(~|null|true|false|yes|no|on|off|y|n)$/i;
+/** A pack agent's tool entry: a plain name, so no quoting, flow list or `Tool(scope)` form. */
+const PACK_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+const isPackToolName = (e) => PACK_TOOL_NAME_RE.test(e) && !YAML_NULL_BOOL_RE.test(e);
+/** What a pack agent's description can't hold beyond the hidden characters: a space YAML keeps but
+    trim() strips, a character outside YAML's printable set, or a private-use character. */
+const PACK_DESCRIPTION_BAD_RE = /[\uFFFE\uFFFF\uE000-\uF8FF\u{F0000}-\u{10FFFF}]|(?! )\p{Zs}/u;
+/** Characters that hide text: control characters other than newline and tab, Unicode format
+    characters (category Cf: the bidirectional controls and zero-width characters among them), the
+    tag block, variation selectors (a known way to carry an invisible payload, so an emoji written
+    with U+FE0F is refused too), the line and paragraph separators, and the invisible fillers
+    (the braille blank among them). */
+const HIDDEN_CHAR_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\p{Cf}\u{E0000}-\u{E007F}\uFE00-\uFE0F\u{E0100}-\u{E01EF}\u2028\u2029\u034F\u115F\u1160\u3164\uFFA0\u2800]/u;
+const HIDDEN_CHAR_RE_G = new RegExp(HIDDEN_CHAR_RE.source, "gu");
+
+/** Every install record with an install path: `{key, plugin, marketplace, installPath, version, scope}`. */
+export function installRecords() {
+  const out = [];
+  for (const [key, list] of installedPluginEntries()) {
+    const at = key.indexOf("@");
+    const plugin = at === -1 ? key : key.slice(0, at);
+    const marketplace = at === -1 ? null : key.slice(at + 1);
+    for (const r of list) {
+      if (!r || typeof r.installPath !== "string") continue;
+      out.push({ key, plugin, marketplace, installPath: r.installPath, version: typeof r.version === "string" ? r.version : null, scope: typeof r.scope === "string" ? r.scope : null });
+    }
+  }
+  return out;
+}
+
+/** Install records whose install path holds a pack manifest. */
+export function packRecords() {
+  return installRecords().filter((r) => existsSync(join(r.installPath, PACK_MANIFEST)));
+}
+
+/** `<plugin>@<marketplace>:<role>` (marketplace optional) → `{plugin, marketplace, role}`, or null. */
+export function parseFrom(from) {
+  const m = typeof from === "string" ? FROM_RE.exec(from) : null;
+  return m ? { plugin: m[1], marketplace: m[2] || null, role: m[3] } : null;
+}
+
+/** Whether a config row adopts a pack role. */
+export function isFromRow(raw) {
+  return !!raw && typeof raw === "object" && !Array.isArray(raw) && typeof raw.from === "string";
+}
+
+/** The first hidden character in `text`, as `U+XXXX at line L, column C` (1-based, columns in
+    code points), or null. */
+export function hiddenCharAt(text) {
+  const s = String(text);
+  const m = HIDDEN_CHAR_RE.exec(s);
+  if (!m) return null;
+  const before = s.slice(0, m.index);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  return charWhere(before.split("\n").length, s.slice(lineStart), m.index - lineStart);
+}
+
+/** `U+XXXX at line L, column C` for the character at `index` of `line` (columns in code points). */
+function charWhere(lineNo, line, index) {
+  return `U+${line.codePointAt(index).toString(16).toUpperCase().padStart(4, "0")} at line ${lineNo}, column ${[...line.slice(0, index)].length + 1}`;
+}
+
+/** Pack text made safe to print: every hidden character (ANSI escapes included) shown as `\u{…}`. */
+export function escapeTerminal(text) {
+  return String(text).replace(HIDDEN_CHAR_RE_G, (c) => `\\u{${c.codePointAt(0).toString(16)}}`);
+}
+
+function sha256Hex(data) {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+/** UTF-8 text of `buf`, keeping a byte-order mark as text; null when the bytes aren't valid UTF-8. */
+function decodeUtf8(buf) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buf);
+  } catch {
+    return null;
+  }
+}
+
+/** A plugin's name at `dir`: its plugin.json `name`, else the directory's basename. */
+export function pluginNameAt(dir) {
+  try {
+    const pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+    if (pj && typeof pj.name === "string" && pj.name) return pj.name;
+  } catch {}
+  return basename(resolve(dir));
+}
+
+function checkPackRole(name, raw, plugin) {
+  const warnings = [];
+  const bad = (code, message) => ({ raw, agent: null, row: null, error: { code, message }, warnings });
+  const nameErr = roleNameError(name);
+  if (nameErr) return bad("pack-invalid", `role ${JSON.stringify(name)}: ${nameErr}`);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return bad("pack-invalid", `role ${name}: must be an object`);
+  if (raw.peer !== undefined) return bad("pack-invalid", `role ${name}: peer is a local setting, not allowed in a pack`);
+  for (const k of Object.keys(raw)) if (!PACK_ROLE_FIELDS.includes(k)) warnings.push(`role ${name}: unknown key ${JSON.stringify(k)} is ignored`);
+  for (const k of PACK_ROLE_FIELDS) {
+    const at = typeof raw[k] === "string" ? hiddenCharAt(raw[k]) : null;
+    if (at) return bad("pack-hidden-chars", `role ${name}: ${k} holds a hidden character (${at})`);
+  }
+  const agent = raw.agent === undefined ? name : raw.agent;
+  if (typeof agent !== "string" || !agent || /[:/\\]|\.\./.test(agent)) {
+    return bad("pack-invalid", `role ${name}: agent ${JSON.stringify(agent)} must name an agent in this plugin, with no ":", "/", "\\" or ".."`);
+  }
+  const fields = Object.fromEntries(PACK_ROLE_FIELDS.filter((k) => raw[k] !== undefined).map((k) => [k, raw[k]]));
+  const checked = checkCustomRow(name, { ...fields, agent: `${plugin}:${agent}` });
+  if (checked.error) return bad("pack-invalid", `role ${name}: ${checked.error}`);
+  warnings.push(...checked.warnings.map((w) => `role ${name}: ${w}`));
+  return { raw, agent, row: checked.row, error: null, warnings };
+}
+
+/**
+ * A pack's `ah-roles.json` at `dir`, read and checked. Never throws. `{error, warnings, roles}`:
+ * `error` (`{code, message}`) when the whole pack is unreadable — code `pack-missing`, `pack-invalid`
+ * or `pack-version`. Each role is `{raw, agent, row, error, warnings}`: `raw` the row as written,
+ * `agent` its agent's name in the plugin, `row` the checked custom row (agent `<plugin>:<agent>`),
+ * `error` a `{code, message}` when the role can't be used.
+ */
+export function readPackManifest(dir, plugin) {
+  const path = join(dir, PACK_MANIFEST);
+  const unreadable = (code, message) => ({ error: { code, message }, warnings: [], roles: {} });
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return unreadable("pack-missing", `no ${PACK_MANIFEST} in ${dir}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return unreadable("pack-invalid", `${path} is not valid JSON`);
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return unreadable("pack-invalid", `${path} must hold a JSON object`);
+  if (data.version !== 1) return unreadable("pack-version", `${path}: version must be 1, got ${JSON.stringify(data.version)}`);
+  if (!data.roles || typeof data.roles !== "object" || Array.isArray(data.roles)) return unreadable("pack-invalid", `${path}: roles must be an object`);
+  const warnings = Object.keys(data).filter((k) => k !== "version" && k !== "roles").map((k) => `unknown key ${JSON.stringify(k)} is ignored`);
+  const roles = {};
+  for (const [name, raw] of Object.entries(data.roles)) roles[name] = checkPackRole(name, raw, plugin);
+  return { error: null, warnings, roles };
+}
+
+const packTreeCache = new Map();
+
+/**
+ * Every regular file under `root` as `[relpath, sha256hex]` pairs sorted by path (`/` separators, a
+ * top-level .git skipped), with the first symbolic link met (never followed) as `symlink`. Cached
+ * for the life of the process, since every adopted role from one plugin reads the same tree.
+ */
+export function packTree(root) {
+  if (packTreeCache.has(root)) return packTreeCache.get(root);
+  const files = [];
+  let symlink = null;
+  const walk = (dir, rel) => {
+    for (const name of readdirSync(dir)) {
+      if (!rel && name === ".git") continue;
+      const p = join(dir, name);
+      const r = rel ? `${rel}/${name}` : name;
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) symlink ||= r;
+      else if (st.isDirectory()) walk(p, r);
+      else if (st.isFile()) files.push([r, sha256Hex(readFileSync(p))]);
+    }
+  };
+  let result;
+  try {
+    walk(root, "");
+    files.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    result = { files, symlink, error: null };
+  } catch (err) {
+    result = { files: [], symlink: null, error: err && err.message ? err.message : String(err) };
+  }
+  packTreeCache.set(root, result);
+  return result;
+}
+
+/** The pin: `sha256:` over `JSON.stringify([1, row, agentText, files])`, `row`'s keys sorted. This
+    form is permanent: every stored pin depends on it. */
+export function packPin(row, agentText, files) {
+  const sorted = Object.fromEntries(Object.keys(row).sort().map((k) => [k, row[k]]));
+  return `sha256:${sha256Hex(Buffer.from(JSON.stringify([1, sorted, agentText, files]), "utf8"))}`;
+}
+
+/** A tree's content digest: `sha256:` over `JSON.stringify(files)`. */
+export function packDigest(files) {
+  return `sha256:${sha256Hex(Buffer.from(JSON.stringify(files), "utf8"))}`;
+}
+
+function storedCopyPath(pin) {
+  return join(homedir(), ".claude", "agent-hierarchy", "trusted", `${pin.slice("sha256:".length)}.json`);
+}
+
+/** This machine's stored copy for `pin` — `{row, agentText, files}` — only when it re-hashes to `pin`. */
+export function readStoredCopy(pin) {
+  if (typeof pin !== "string" || !PIN_RE.test(pin)) return null;
+  try {
+    const c = JSON.parse(readFileSync(storedCopyPath(pin), "utf8"));
+    if (c && c.row && typeof c.row === "object" && typeof c.agentText === "string" && Array.isArray(c.files) && packPin(c.row, c.agentText, c.files) === pin) return c;
+  } catch {}
+  return null;
+}
+
+/** Store what `pin` was computed from, keyed by the pin so every repo on this machine shares it. */
+export function writeStoredCopy(pin, { row, agentText, files }) {
+  const path = storedCopyPath(pin);
+  mkdirSync(dirname(path), { recursive: true });
+  const sorted = Object.fromEntries(Object.keys(row).sort().map((k) => [k, row[k]]));
+  writeFileSync(path, `${JSON.stringify({ row: sorted, agentText, files })}\n`, "utf8");
+  return path;
+}
+
+/**
+ * The agent name a (non-pack-checked) agent file declares, read as YAML would: `{name}`, `{none}`
+ * (no `name`, or a null one, or no frontmatter) or `{unsure}` when ah can't be sure — an escape in a
+ * quoted key, a YAML tag, anchor, alias or merge key, a complex or flow key at the top level, more
+ * than one `name` key, or a `name` value that spans lines, is a flow collection or doesn't decode.
+ */
+function declaredAgentName(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines[0].replace(/^\uFEFF/, "").trim() !== "---") return { none: true };
+  const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+  if (end === -1) return { none: true };
+  const unsure = { unsure: true };
+  let value;
+  let count = 0;
+  for (let i = 1; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const node = line.replace(/^\s*(?:-\s+)*/, "");
+    if (/^[&*!]/.test(node) || /^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s"'#][^:]*?)\s*:\s+[&*!]/.test(node) || /^<<\s*:/.test(node)) return unsure;
+    if (/^\s/.test(line) || /^-(\s|$)/.test(line)) continue;
+    if (/^(\?|[{[])/.test(line)) return unsure;
+    let m;
+    let key;
+    let rest;
+    if ((m = /^"((?:[^"\\]|\\.)*)"\s*:(?:\s+(.*))?$/.exec(line))) {
+      if (m[1].includes("\\")) return unsure;
+      [key, rest] = [m[1], m[2]];
+    } else if ((m = /^'((?:[^']|'')*)'\s*:(?:\s+(.*))?$/.exec(line))) {
+      if (m[1].includes("''")) return unsure;
+      [key, rest] = [m[1], m[2]];
+    } else if ((m = /^(.*?)\s*:(?:\s+(.*))?$/.exec(line))) [key, rest] = [m[1], m[2]];
+    else continue;
+    if (key !== "name") continue;
+    count += 1;
+    const next = lines.slice(i + 1, end).find((l) => l.trim() && !/^\s*#/.test(l));
+    if (next !== undefined && /^\s/.test(next)) return unsure;
+    const v = (rest || "").trim();
+    if (v[0] === '"') {
+      try {
+        value = JSON.parse(v.replace(/\s+#.*$/, ""));
+      } catch {
+        return unsure;
+      }
+    } else if (v[0] === "'") {
+      const q = /^'((?:[^']|'')*)'(?:\s+#.*)?$/.exec(v);
+      if (!q) return unsure;
+      value = q[1].replace(/''/g, "'");
+    } else if (/^[|>[{]/.test(v)) return unsure;
+    else {
+      const plain = v.replace(/\s+#.*$/, "");
+      value = plain === "" || /^(~|null|Null|NULL)$/.test(plain) ? null : plain;
+    }
+  }
+  if (count > 1) return unsure;
+  return value === null || value === undefined ? { none: true } : { name: String(value) };
+}
+
+/** The finding for agent files that take pack agent `agent`'s name. */
+export function packClaimMessage(plugin, agent, files) {
+  return `${files.map(escapeTerminal).join(", ")} also ${files.length > 1 ? "take" : "takes"} the agent name ${agent}, so Claude Code might launch ${files.length > 1 ? "one of them" : "it"} as ${escapeTerminal(plugin)}:${agent} instead of agents/${agent}.md`;
+}
+
+const packClaimsCache = new Map();
+
+/**
+ * Agent files that take a pack role's agent name. Claude Code registers a plugin agent under its
+ * frontmatter `name`, so any `.md` (any case, any depth) under `agents/` or under a path in
+ * plugin.json's `agents` could be what `<plugin>:<agent>` launches. A file other than the role's own
+ * claims the role when it declares that name, when it declares none and its file name is that name
+ * (both compared ignoring case, since whether Claude Code does isn't known), or when ah can't be
+ * sure what it declares (then it claims every role). `{error, byRole, files}`:
+ * `error` is a message when plugin.json's `agents` isn't a path or a list of paths, or one resolves
+ * outside `dir`; `byRole` maps a role to the claiming files, and `files` a file to the roles it
+ * claims, both by `/`-separated path relative to `dir`.
+ */
+export function packNameClaims(dir, manifest) {
+  if (packClaimsCache.has(dir)) return packClaimsCache.get(dir);
+  const result = { error: null, byRole: new Map(), files: new Map() };
+  packClaimsCache.set(dir, result);
+  const found = new Set();
+  const walk = (p) => {
+    let st;
+    try {
+      st = lstatSync(p);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) for (const n of readdirSync(p)) walk(join(p, n));
+    else if (st.isFile() && /\.md$/i.test(p)) found.add(p);
+  };
+  walk(join(dir, "agents"));
+  let pj = null;
+  try {
+    pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+  } catch {}
+  if (pj && typeof pj === "object" && !Array.isArray(pj) && pj.agents !== undefined) {
+    const paths = typeof pj.agents === "string" ? [pj.agents] : Array.isArray(pj.agents) && pj.agents.every((p) => typeof p === "string") ? pj.agents : null;
+    if (!paths) {
+      result.error = "plugin.json's agents must be a path or a list of paths";
+      return result;
+    }
+    for (const p of paths) {
+      const rel = relative(dir, resolve(dir, p));
+      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        result.error = `plugin.json's agents path ${escapeTerminal(JSON.stringify(p))} resolves outside the plugin`;
+        return result;
+      }
+      walk(resolve(dir, p));
+    }
+  }
+  const sameFile = (a, b) => {
+    try {
+      const x = statSync(a);
+      const y = statSync(b);
+      return x.ino === y.ino && x.dev === y.dev;
+    } catch {
+      return false;
+    }
+  };
+  const roles = Object.entries((manifest && manifest.roles) || {}).filter(([, m]) => m && m.agent && !m.error);
+  for (const abs of [...found].sort()) {
+    let decl;
+    try {
+      const text = decodeUtf8(readFileSync(abs));
+      decl = text === null ? { unsure: true } : declaredAgentName(text);
+    } catch {
+      decl = { unsure: true };
+    }
+    const rel = relative(dir, abs).split(sep).join("/");
+    for (const [role, m] of roles) {
+      if (sameFile(abs, join(dir, "agents", `${m.agent}.md`))) continue;
+      const agent = m.agent.toLowerCase();
+      if (!(decl.unsure || (decl.name !== undefined && decl.name.toLowerCase() === agent) || (decl.none && basename(abs).replace(/\.md$/i, "").toLowerCase() === agent))) continue;
+      if (!result.byRole.has(role)) result.byRole.set(role, []);
+      result.byRole.get(role).push(rel);
+      if (!result.files.has(rel)) result.files.set(rel, []);
+      result.files.get(rel).push(role);
+    }
+  }
+  return result;
+}
+
+/** One install record's view of pack role `role`: status "ok" with the pin, or the reason it can't be used. */
+function packCandidate(record, role) {
+  const base = { record, status: "ok", message: null, subcode: null, manifestRole: null, agentText: null, agentPath: null, files: null, pin: null };
+  const manifest = readPackManifest(record.installPath, record.plugin);
+  if (manifest.error) {
+    return { ...base, status: manifest.error.code === "pack-missing" ? "pack-missing" : "pack-invalid", subcode: manifest.error.code, message: manifest.error.message };
+  }
+  const r = manifest.roles[role];
+  if (!r) return { ...base, status: "pack-missing", message: `${record.key} offers no role ${role}` };
+  if (r.error) return { ...base, status: "pack-invalid", subcode: r.error.code, message: r.error.message, manifestRole: r };
+  const agentPath = join(record.installPath, "agents", `${r.agent}.md`);
+  let buf;
+  try {
+    buf = readFileSync(agentPath);
+  } catch {
+    return { ...base, status: "pack-invalid", message: `${record.key} has no agents/${r.agent}.md`, manifestRole: r, agentPath };
+  }
+  const agentText = decodeUtf8(buf);
+  if (agentText === null) return { ...base, status: "pack-invalid", message: `${agentPath} is not valid UTF-8`, manifestRole: r, agentPath };
+  const hidden = hiddenCharAt(agentText);
+  if (hidden) return { ...base, status: "pack-invalid", subcode: "pack-hidden-chars", message: `${agentPath} holds a hidden character (${hidden})`, manifestRole: r, agentPath };
+  const claims = packNameClaims(record.installPath, manifest);
+  if (claims.error) return { ...base, status: "pack-invalid", message: `${record.key}: ${claims.error}`, manifestRole: r, agentText, agentPath };
+  const claimedBy = claims.byRole.get(role);
+  if (claimedBy) return { ...base, status: "pack-invalid", message: packClaimMessage(record.plugin, r.agent, claimedBy), manifestRole: r, agentText, agentPath };
+  const tree = packTree(record.installPath);
+  if (tree.error) return { ...base, status: "pack-invalid", message: `${record.installPath} could not be read: ${tree.error}`, manifestRole: r, agentText, agentPath };
+  if (tree.symlink) return { ...base, status: "pack-symlink", message: `${record.installPath} holds a symbolic link, ${tree.symlink}, and what it points at isn't pinned`, manifestRole: r, agentText, agentPath };
+  return { ...base, manifestRole: r, agentText, agentPath, files: tree.files, pin: packPin(r.raw, agentText, tree.files) };
+}
+
+/**
+ * Pack role `from` as installed now, checked against `pin` (null skips the pin and stored-copy
+ * checks, for a first adoption). Every install record of the plugin's name is a candidate, since
+ * Claude Code resolves `<plugin>:<agent>` by that name alone. `status` is "ok" or the first that
+ * applies of: pack-missing, pack-invalid, pack-ambiguous, pack-symlink, pack-changed,
+ * pack-untrusted-here. The rest is the candidate for the recorded marketplace (else the first).
+ */
+export function packRoleState(from, pin = null) {
+  const f = parseFrom(from);
+  if (!f || !f.marketplace) return { status: "pack-invalid", message: `from ${JSON.stringify(from)} must be <plugin>@<marketplace>:<role>`, from: f, records: [] };
+  const records = installRecords().filter((r) => r.plugin === f.plugin);
+  if (!records.length) return { status: "pack-missing", message: `plugin ${f.plugin} is not installed`, from: f, records: [] };
+  const listed = records.map((r) => `${r.key} (${r.installPath})`);
+  // Only the recorded marketplace's install counts as this pack: another marketplace's plugin of the
+  // same name is someone else's content, never a stand-in for it.
+  if (!records.some((r) => r.marketplace === f.marketplace)) {
+    return { status: "pack-missing", message: `${f.plugin}@${f.marketplace} is not installed (installed under that name: ${listed.join(", ")})`, from: f, records: listed };
+  }
+  const candidates = records.map((r) => packCandidate(r, f.role));
+  const chosen = candidates.find((c) => c.record.marketplace === f.marketplace);
+  const state = { ...chosen, from: f, records: listed };
+  if (chosen.status === "pack-missing" || chosen.status === "pack-invalid") return state;
+  if (new Set(candidates.map((c) => c.pin || c.status)).size > 1) {
+    return { ...state, status: "pack-ambiguous", message: `${records.length} install records of ${f.plugin} differ, and which one Claude Code loads can't be known: ${state.records.join(", ")}` };
+  }
+  if (chosen.status !== "ok" || pin === null) return state;
+  if (chosen.pin !== pin) return { ...state, status: "pack-changed", message: `${f.plugin} changed since this role was trusted (pinned ${String(pin).slice(0, 19)}…, now ${chosen.pin.slice(0, 19)}…)` };
+  if (!readStoredCopy(pin)) return { ...state, status: "pack-untrusted-here", message: `this machine holds no stored copy of what ${pin.slice(0, 19)}… pinned, so nobody here has trusted it` };
+  return state;
+}
+
+/**
+ * A `from` row expanded into the full row resolution checks: the pack's own fields (from the
+ * installed manifest, else from this machine's stored copy for the row's pin), with the row's own
+ * `label`, `description`, `routes`, `model` and `dispatch` laid over them; an empty `routes` or
+ * `description` removes the field, so `--routes ""` makes a side role. `{raw, pack}`, or `{error}`
+ * when nothing on this machine says what the role is.
+ */
+export function expandFromRow(entry) {
+  const state = packRoleState(entry.from, typeof entry.pin === "string" ? entry.pin : "");
+  const f = state.from;
+  let source = state.manifestRole && !state.manifestRole.error ? state.manifestRole.raw : null;
+  if (!source) {
+    const copy = readStoredCopy(entry.pin);
+    if (copy) source = copy.row;
+  }
+  if (!f || !source) return { error: `${state.status}: ${state.message}` };
+  const raw = {};
+  for (const k of PACK_ROLE_FIELDS) if (source[k] !== undefined) raw[k] = source[k];
+  raw.agent = `${f.plugin}:${source.agent === undefined ? f.role : source.agent}`;
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) {
+    if (entry[k] === undefined) continue;
+    if (entry[k] === "" && (k === "routes" || k === "description")) delete raw[k];
+    else raw[k] = entry[k];
+  }
+  const pack = {
+    status: state.status,
+    message: state.message,
+    subcode: state.subcode || null,
+    from: entry.from,
+    agentText: state.agentText,
+    agentPath: state.agentPath,
+    pinNow: state.pin,
+  };
+  return { raw, pack };
+}
+
+const indentOf = (line) => line.length - line.trimStart().length;
+
+/**
+ * Why YAML would refuse a one-line value, or read it as something other than its text; null when
+ * it reads as written. A quoted value must close at the end of the line with no escape inside. A
+ * plain one can't hold `: `, end in `:`, or start with a YAML indicator (`&`, `*` and `#` have
+ * their own findings).
+ */
+function yamlValueProblem(value) {
+  if (value[0] === '"' || value[0] === "'") {
+    return /^"[^"\\]*"$|^'[^']*'$/.test(value) ? null : "a quoted value must close at the end of the line, with no escape inside (no \\ or '')";
+  }
+  if (/:(\s|$)/.test(value)) return 'a plain value can\'t hold ": " or end in ":" (quote it)';
+  if (YAML_NULL_BOOL_RE.test(value)) return "a plain value YAML reads as null or a boolean (quote it)";
+  if (/^([@`%!|>[\]{},?]|-(\s|$))/.test(value)) return "a plain value can't start with a YAML indicator (quote it)";
+  return null;
+}
+
+/**
+ * The one reader of a pack agent's frontmatter, strict so that it reads exactly what YAML would:
+ * only `PACK_AGENT_KEYS`, each written once as an unquoted top-level key; a continuation only as a
+ * `- item` under an empty-valued `tools` or `disallowedTools`, or as a line of a `|` / `>` block
+ * scalar under `description`, list items at the first item's indentation and block lines at least
+ * at the first line's; a one-line value that YAML reads as written; no tab in indentation, no `#` comment, no YAML anchor, alias or merge
+ * key, no line that can't be classified; `tools` required and non-empty, and every tool entry a
+ * plain name. `{findings, fm}`: every finding is an error, and `fm` (the shape
+ * `parseAgentFrontmatter` returns) is what the dry run shows and the class contract judges. It fails
+ * closed: a quoted `"permissionMode":` is valid YAML to Claude Code even though ah's lenient reader
+ * skips it. A user's own files aren't held to it.
+ */
+export function packAgentParse(text, path = null) {
+  const findings = [];
+  const fm = { frontmatter: false, name: null, description: null, model: null, tools: null, disallowedTools: null, parseErrors: [] };
+  const err = (code, message) =>
+    findings.push(finding("error", code, path, null, message, [{ kind: "edit-frontmatter", detail: `a pack agent's frontmatter may hold only ${PACK_AGENT_KEYS.join(", ")}, as plain unquoted keys` }]));
+  const lines = String(text).split("\n");
+  const end = lines[0] === "---" ? lines.findIndex((l, i) => i > 0 && l === "---") : -1;
+  if (end === -1) {
+    err("pack-agent-frontmatter", "no --- frontmatter block");
+    return { findings, fm };
+  }
+  fm.frontmatter = true;
+  const seen = new Set();
+  // The key whose continuation lines may follow: kind "list" (an empty tools or disallowedTools:
+  // `- item` lines), "block" (description's `|` or `>` block: indented text) or "none".
+  let cur = null;
+  const toolEntries = (key, entries) => {
+    const bad = entries.filter((e) => !isPackToolName(e));
+    for (const e of bad) err("pack-agent-tools", `${key} entry ${JSON.stringify(e)} isn't a plain tool name (letters, digits, _ and -, and not a word YAML reads as null or a boolean)`);
+    fm[key] = entries.filter(isPackToolName);
+  };
+  const finish = () => {
+    if (!cur) return;
+    const { key, kind } = cur;
+    if (key === "tools" || key === "disallowedTools") toolEntries(key, kind === "list" ? cur.items : cur.value.split(",").map((e) => e.trim()));
+    else if (key === "description") {
+      if (kind === "block") {
+        const block = [...cur.block];
+        while (block.length && !block[block.length - 1]) block.pop();
+        fm.description = cur.style[0] === "|" ? block.join("\n") : block.filter((l) => l).join(" ");
+      } else fm.description = unquote(cur.value) || null;
+    } else if (key === "name" || key === "model") fm[key] = unquote(cur.value) || null;
+    cur = null;
+  };
+  for (const [i, line] of lines.slice(1, end).entries()) {
+    // Outside the description's content the frontmatter is printable ASCII, since JavaScript's
+    // whitespace (trim, \s) takes Unicode spaces that YAML's indentation and separators don't.
+    const content = cur && cur.kind === "block" && line[0] === " " ? /^ */.exec(line)[0].length : line.startsWith("description: ") ? "description: ".length : line.length;
+    const outside = /[^\x20-\x7E]/.exec(line.slice(0, content));
+    if (outside) err("pack-agent-line", `${charWhere(i + 2, line, outside.index)} is outside printable ASCII, which a pack agent's frontmatter keeps to outside its description`);
+    const inside = PACK_DESCRIPTION_BAD_RE.exec(line.slice(content));
+    if (inside) err("pack-agent-line", `${charWhere(i + 2, line, content + inside.index)} can't be in a pack agent's description (a space other than U+0020, a private-use character, U+FFFE or U+FFFF)`);
+    if (!line.trim()) {
+      if (cur && cur.kind === "block") cur.block.push("");
+      continue;
+    }
+    if (/^[ ]*\t/.test(line)) {
+      err("pack-agent-line", `line ${JSON.stringify(line)} is indented with a tab`);
+      continue;
+    }
+    if (/(^|\s)#/.test(line)) {
+      err("pack-agent-line", `line ${JSON.stringify(line)} holds a # comment, which YAML would drop`);
+      continue;
+    }
+    if (/^\s/.test(line) || /^-(\s|$)/.test(line)) {
+      if (!cur) err("pack-agent-line", `line ${JSON.stringify(line)} continues no key`);
+      else if (cur.kind === "list") {
+        const item = /^\s*-\s+(\S.*)$/.exec(line);
+        if (item) cur.indent ??= indentOf(line);
+        if (!item) err("pack-agent-line", `line ${JSON.stringify(line)} isn't a "- item" of the list above`);
+        else if (indentOf(line) !== cur.indent) err("pack-agent-line", `line ${JSON.stringify(line)} isn't indented like the list's first item`);
+        else if (/^[&*]/.test(item[1]) || /<<\s*:/.test(item[1])) err("pack-agent-yaml", `YAML anchor, alias or merge key: ${JSON.stringify(line.trim())}`);
+        else cur.items.push(item[1].trim());
+      } else if (cur.kind === "block") {
+        if (/^\s/.test(line)) cur.indent ??= indentOf(line);
+        if (!/^\s/.test(line)) err("pack-agent-line", `line ${JSON.stringify(line)} isn't indented inside the block above`);
+        else if (indentOf(line) < cur.indent) err("pack-agent-line", `line ${JSON.stringify(line)} is indented less than the block's first line, which ends the block, yet it isn't a key`);
+        else cur.block.push(line.slice(cur.indent));
+      } else {
+        err("pack-agent-line", `line ${JSON.stringify(line)} continues a one-line value — use "- item" lines under an empty tools or disallowedTools, or a | or > block under description`);
+      }
+      continue;
+    }
+    finish();
+    if (/^<<\s*:/.test(line)) {
+      err("pack-agent-yaml", `YAML merge key: ${JSON.stringify(line)}`);
+      continue;
+    }
+    if (/^["']/.test(line)) {
+      err("pack-agent-quoted-key", `quoted key: ${JSON.stringify(line)}`);
+      continue;
+    }
+    const m = /^([A-Za-z][A-Za-z0-9_-]*):(?:\s(.*)|$)/.exec(line);
+    if (!m) {
+      err("pack-agent-line", `line ${JSON.stringify(line)} can't be classified`);
+      continue;
+    }
+    const key = m[1];
+    const value = (m[2] || "").trim();
+    if (!PACK_AGENT_KEYS.includes(key)) err("pack-agent-key", `key ${key} isn't allowed in a pack agent`);
+    if (seen.has(key)) err("pack-agent-duplicate-key", `key ${key} appears twice`);
+    seen.add(key);
+    if (/^[&*]/.test(value)) err("pack-agent-yaml", `YAML anchor or alias: ${JSON.stringify(line)}`);
+    const toolKey = key === "tools" || key === "disallowedTools";
+    if (/^[|>][-+]?$/.test(value)) {
+      if (key === "description") cur = { key, kind: "block", style: value, block: [] };
+      else {
+        err("pack-agent-line", `only description may use a | or > block, not ${key}`);
+        cur = { key, kind: "none", value: "" };
+      }
+    } else if (value === "" && toolKey) cur = { key, kind: "list", items: [] };
+    else {
+      let why = value ? yamlValueProblem(value) : null;
+      if (!why && key === "maxTurns" && !/^-?(0|[1-9][0-9]*)$/.test(value)) why = "maxTurns must be a plain decimal integer";
+      if (why) err("pack-agent-line", `line ${JSON.stringify(line)}: ${why}`);
+      cur = { key, kind: "none", value };
+    }
+  }
+  finish();
+  if (!seen.has("tools")) err("pack-agent-tools", "tools is required: without it the agent inherits every tool, MCP tools and Agent included");
+  else if (!fm.tools || !fm.tools.length) err("pack-agent-tools", "tools must be a non-empty list");
+  return { findings, fm };
+}
+
+/** The pack-agent frontmatter findings — `packAgentParse`'s. */
+export function packAgentFindings(text, path = null) {
+  return packAgentParse(text, path).findings;
+}
+
+/** A pack agent's effective tools (its `tools` less `disallowedTools`) and the ones worth flagging,
+    from `fm`, the frontmatter `packAgentParse` read. */
+export function packToolReport(fm) {
+  const disallowed = fm.disallowedTools || [];
+  const effective = (fm.tools || []).filter((t) => !disallowed.includes(t));
+  const flagged = effective.filter((t) => FLAGGED_TOOLS.includes(t) || t.startsWith(MCP_TOOL_PREFIX));
+  return { effective, flagged };
+}
+
+/**
+ * What a plugin at `dir` carries besides its roles, found by exclusion so a new kind of component is
+ * listed without a code change: root entries other than the manifest, `agents/`, `.claude-plugin/`
+ * and README, LICENSE or CHANGELOG files; plugin.json keys beyond the descriptive ones; and agent
+ * files the manifest doesn't name.
+ */
+export function packExtras(dir, manifest) {
+  const extras = [];
+  let entries = [];
+  try {
+    entries = readdirSync(dir).sort();
+  } catch {}
+  for (const name of entries) {
+    if ([PACK_MANIFEST, "agents", ".claude-plugin"].includes(name) || /^(README|LICENSE|CHANGELOG)(\..*)?$/i.test(name)) continue;
+    extras.push({ kind: "root", name });
+  }
+  try {
+    const pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+    if (pj && typeof pj === "object" && !Array.isArray(pj)) {
+      for (const k of Object.keys(pj)) if (!PLUGIN_JSON_PLAIN_KEYS.includes(k)) extras.push({ kind: "plugin.json", name: k });
+    }
+  } catch {}
+  const named = new Set(Object.values((manifest && manifest.roles) || {}).map((r) => r.agent).filter(Boolean));
+  let agents = [];
+  try {
+    agents = readdirSync(join(dir, "agents")).filter((n) => n.endsWith(".md")).sort();
+  } catch {}
+  for (const n of agents) if (!named.has(n.slice(0, -3))) extras.push({ kind: "agent", name: `agents/${n}` });
+  const claims = packNameClaims(dir, manifest).files;
+  for (const e of extras) if (e.kind === "agent" && claims.has(e.name)) e.claims = claims.get(e.name);
+  for (const [rel, roles] of claims) if (!extras.some((e) => e.kind === "agent" && e.name === rel)) extras.push({ kind: "agent", name: rel, claims: roles });
+  return extras;
 }
 
 const TOOL_TOKEN_RE = /^(\*|[A-Za-z_][A-Za-z0-9_.-]*(\([^()]*\))?)$/;
@@ -1720,8 +2564,10 @@ function finding(level, code, path, field, message, fix) {
  */
 export function validateAgentContract({ role, cls, agent, description = null, builtin = false, cwd, inMemory = null }) {
   const findings = [];
+  // `inMemory.fm`, when given, is frontmatter already read (a pack agent's strict parse): it is
+  // judged as it is, so the contract and the dry run read one parse.
   const file = inMemory
-    ? { ...parseAgentFrontmatter(inMemory.text), found: inMemory.path, location: { kind: "bare", path: inMemory.path, level: null, shadowed: null, error: null, candidates: [inMemory.path] } }
+    ? { ...(inMemory.fm || parseAgentFrontmatter(inMemory.text)), found: inMemory.path, location: { kind: "bare", path: inMemory.path, level: null, shadowed: null, error: null, candidates: [inMemory.path] } }
     : readAgentFile(agent, cwd);
   const loc = file.location;
   const scaffoldFix = [
@@ -1846,11 +2692,47 @@ export function formatFindings(findings) {
 export function validateRole(role, resolved) {
   const entry = resolved && resolved.roles && resolved.roles[role];
   if (!entry) return null;
+  // A pack agent is judged from the text the pin covers, through its one strict parse.
+  const parsed = entry.pack && typeof entry.pack.agentText === "string" ? packAgentParse(entry.pack.agentText, entry.pack.agentPath) : null;
+  const inMemory = parsed ? { path: entry.pack.agentPath, text: entry.pack.agentText, fm: parsed.fm } : null;
+  let result;
   if (isBuiltinRole(role)) {
     if (!isOverride(role, entry)) return null;
-    return validateAgentContract({ role, cls: BUILTIN_CLASS[role], agent: roleAgent(role, entry), builtin: true, cwd: resolved.cwd });
+    result = validateAgentContract({ role, cls: BUILTIN_CLASS[role], agent: roleAgent(role, entry), builtin: true, cwd: resolved.cwd, inMemory });
+  } else {
+    result = validateAgentContract({ role, cls: entry.class, agent: entry.agent, description: entry.description || null, cwd: resolved.cwd, inMemory });
   }
-  return validateAgentContract({ role, cls: entry.class, agent: entry.agent, description: entry.description || null, cwd: resolved.cwd });
+  return entry.pack ? { ...result, findings: [...packFindings(role, entry.pack, parsed), ...result.findings] } : result;
+}
+
+/** The agents adopted pack roles resolve to — a `from` row's, or a built-in's agent a pack
+    overrides — whether or not the role is available now. */
+export function packAgentRefs(resolved) {
+  const out = new Set();
+  for (const role of registryRoles(resolved)) {
+    const entry = resolved.roles[role];
+    if (entry && entry.from) out.add(roleAgent(role, entry));
+  }
+  return out;
+}
+
+/** An adopted role's pack findings: its pack reason when it isn't "ok", then the pack-agent
+    frontmatter checks (`parsed`, its `packAgentParse`, when the caller holds it). Every one is an
+    error, so the role is unavailable through the usual path. */
+export function packFindings(role, pack, parsed = null) {
+  const out = [];
+  if (pack.status !== "ok") {
+    const fix =
+      pack.status === "pack-changed" || pack.status === "pack-untrusted-here"
+        ? [{ kind: "trust", detail: `review it with \`roster.mjs role trust ${role} --dry-run\`, then commit with the pin it prints` }]
+        : pack.status === "pack-ambiguous"
+          ? [{ kind: "uninstall", detail: "uninstall all but one install of the plugin" }]
+          : [{ kind: "remove", detail: `\`roster.mjs role remove ${role}\`, or reinstall the pack` }];
+    out.push(finding("error", pack.status, pack.agentPath, null, `${role} (from ${pack.from}): ${pack.message}${pack.subcode && pack.subcode !== pack.status ? ` [${pack.subcode}]` : ""}`, fix));
+  }
+  if (parsed) out.push(...parsed.findings);
+  else if (typeof pack.agentText === "string") out.push(...packAgentFindings(pack.agentText, pack.agentPath));
+  return out;
 }
 
 /** The subagent_type to dispatch for a role: its agent (`roleAgent`), or task-runner's `delegate` when its agent is not overridden. */
@@ -1865,9 +2747,11 @@ export function subagentType(role, entry) {
  * One dispatch line per role. `inherit` renders as "omit the parameter", never
  * as a value. A chain role gets its peer target, the spawn command for when none
  * is live, and where to turn when it cannot be launched — never a subagent call.
- * A legwork role gets the subagent call alone.
+ * A legwork role gets the subagent call alone. `owned` (from `ownedTeamConfigs`) is set when the
+ * session owns several live teams: a chain role's line then names each team's peer target and gives
+ * each team's own spawn command, with that team's verb and `--team`.
  */
-function roleLines(resolved, repoBasename) {
+function roleLines(resolved, repoBasename, owned = null) {
   const cwd = resolved.cwd || "<abs cwd>";
   return registryRoles(resolved).map((role) => {
     const entry = resolved.roles[role];
@@ -1879,6 +2763,12 @@ function roleLines(resolved, repoBasename) {
         : `Agent(subagent_type:"${type}", model:"${entry.model}")`;
     if (classProp(role, resolved, "chain") !== true) {
       return `- ${roleLabel(role, resolved)}${tag} — ${agentCall}`;
+    }
+    if (owned) {
+      const targets = owned.flatMap(({ team }) => resolvedPeerTargets(role, entry, teamPrefix(resolved.cwd, team)).map((p) => `"${p}" (team ${teamArgName(team)})`));
+      const who = targets.length ? `${targets.join(" or ")}, the one whose team owns the work` : "the live teammate of the team that owns the work (names: `ListAgents` / `roster.mjs teams`)";
+      const spawns = owned.map(({ team, resolved: r }) => `team ${teamArgName(team)}: \`node "${ROSTER_CLI}" ${rosterMemberFor(r, role) ? "spawn-one" : "spawn-ad-hoc"} ${role} --team ${teamArgName(team)} --cwd ${cwd}\``);
+      return `- ${roleLabel(role, resolved)}${tag} — SendMessage ${who}; none live → ${spawns.join("; ")}; then SendMessage the name it prints. Can't launch → agent-team 'When a role can't take the work'.`;
     }
     const explicit = entry.peer && entry.peer !== "auto";
     const target = explicit
@@ -2108,7 +2998,7 @@ export function buildDirective(fullResolved, sessionId, extra = {}) {
     "Agent hierarchy ACTIVE. You are the Orchestrator: decompose, dispatch, synthesize — do not design or implement non-trivial changes yourself, except where agent-team 'When a role can't take the work' has you take a role over.",
     "",
     "Roles — dispatch route per role below. Ultra-Advisor, Architect, Reviewer, Implementor are peer sessions, never subagents: SendMessage the live one; none live → spawn it with the command on its line, then SendMessage the name it prints (Ultra-Advisor is approval-gated — item 7). Legwork (Task-Runner) always spawns or delegates to task-gopher; pass `model` on the Agent call — agent frontmatter is fallback only:",
-    ...roleLines(resolved, repoBasename),
+    ...roleLines(resolved, repoBasename, ownedTeamConfigs(fullResolved)),
     ...registryNotes,
     "",
     "PEER BRIEF CONTRACT — a peer session is an independent Claude session: unlike a subagent, NOTHING returns its result to you automatically; a peer that finishes goes idle without telling you unless the brief itself obliges it to report. Every SendMessage that tasks a role peer must:",
@@ -2200,6 +3090,9 @@ export function statusReport(cwd) {
   const userPath = userConfigPath();
   const projectPath = projectConfigPath(cwd);
   const seen = Object.fromEntries(resolved.layers.map((l) => [l.scope, l.path]));
+  // A session that owns several live teams: the lead line first, then each team's own sections.
+  const owned = ownedTeamConfigs(resolved);
+  if (owned) out.push(ownedTeamsLead(owned.map(({ team }) => team)));
 
   out.push(`ah: ${!resolved.configured ? "NOT CONFIGURED" : resolved.enabled ? "ON" : "OFF (enabled:false)"}`);
   out.push(`user config:    ${seen.user || `${userPath} (none)`}`);
@@ -2214,10 +3107,11 @@ export function statusReport(cwd) {
   out.push("Resolved effective table:");
   out.push(`  Orchestrator  ${"session model".padEnd(14)} fixed (this session's agent)`);
   const repoBasename = teamPrefix(resolved.cwd, resolved.team);
+  const prefixes = owned ? owned.map(({ team }) => teamPrefix(resolved.cwd, team)) : [repoBasename];
   for (const role of ROLES) {
     const entry = resolved.roles[role];
     const model = entry.model === "inherit" ? "inherit*" : entry.model;
-    const peers = resolvedPeerTargets(role, entry, repoBasename);
+    const peers = [...new Set(prefixes.flatMap((prefix) => resolvedPeerTargets(role, entry, prefix)))];
     const dispatch = PEER_ELIGIBLE_ROLES.includes(role) ? (peers.length ? `dispatch: peer ${peers.map((p) => `"${p}"`).join(" / ")}` : "dispatch: subagent-only") : "";
     out.push(
       `  ${ROLE_LABELS[role].padEnd(13)} ${model.padEnd(14)} from ${resolved.sources[role].padEnd(8)} -> ${subagentType(role, entry)}${dispatch ? `  [${dispatch}]` : ""}`
@@ -2233,6 +3127,48 @@ export function statusReport(cwd) {
   out.push("");
   out.push("* inherit = omit the `model` parameter on the Agent call (never pass \"inherit\").");
   out.push("");
+  if (owned) {
+    const dir = hierarchyDir(resolved.cwd);
+    for (const { team, resolved: r } of owned) {
+      const t = readTeam(dir, team);
+      const prefix = teamPrefix(r.cwd, team);
+      out.push(`Team ${teamArgName(team)} (roster ${(t && t.roster) ?? "default"}):`);
+      out.push(...rosterSectionLines(r));
+      out.push(`Team name: ${prefix} (team) — agents named ${prefix}-<role>`);
+      out.push(t ? `Team: ${t.team_id} (${t.transport}, ${t.members.length} member(s)${teamIsPartial(dir, r.cwd, team, t, r) ? ", partial" : ""})` : "Team: none active");
+    }
+    for (const w of staleTeamKeys(resolved.cwd, resolved).warnings) out.push(w);
+    out.push(`Stand up one missing peer: node "${ROSTER_CLI}" spawn-one <role> --team <team> --cwd ${resolved.cwd}. Full-team Create is the /agent-team skill's job — do not hand-assemble create calls.`);
+  } else {
+    out.push(...rosterSectionLines(resolved));
+    const nameSource = resolved.team ? "team" : teamPrefixInfo(resolved.cwd, null).source;
+    out.push(`Team name: ${repoBasename} (${nameSource}) — agents named ${repoBasename}-<role>`);
+    for (const w of staleTeamKeys(resolved.cwd, resolved).warnings) out.push(w);
+    out.push(`Stand up one missing peer: node "${ROSTER_CLI}" spawn-one <role> --cwd ${resolved.cwd}. Full-team Create is the /agent-team skill's job — do not hand-assemble create calls.`);
+    let team = null;
+    try {
+      team = readTeam(hierarchyDir(resolved.cwd));
+    } catch {
+      team = null;
+    }
+    out.push(team ? `Team: ${team.team_id} (${team.transport}, ${team.members.length} member(s)${teamIsPartial(hierarchyDir(resolved.cwd), resolved.cwd, null, team, resolved) ? ", partial" : ""})` : "Team: none active — /agent-team create to instantiate the roster");
+  }
+  if (resolved.shadowed.length) {
+    out.push(`WARNING: project config shadows user-scope values for: ${resolved.shadowed.join(", ")}.`);
+  }
+  for (const warning of resolved.warnings) out.push(warning);
+  out.push("Changes apply to this session now; other live sessions pick them up at their next start, clear, or compaction.");
+  return out.join("\n");
+}
+
+/** The lead line of every surface that shows several owned teams. */
+export function ownedTeamsLead(teams) {
+  return `You own ${teams.length} live teams: ${teams.map(teamArgName).join(", ")}. Pass --team <name> to roster.mjs team verbs and to msg.mjs new; a member name already says its team.`;
+}
+
+/** `/hierarchy status`'s Roster lines for one resolved config. */
+function rosterSectionLines(resolved) {
+  const out = [];
   if (resolved.roster) {
     const r = resolved.roster;
     out.push(`Roster: level=${r.level} route=${r.route} path=${r.path}`);
@@ -2264,23 +3200,7 @@ export function statusReport(cwd) {
   } else {
     out.push("Roster: none configured — /agent-roster init to define one (roles/route above stay in effect).");
   }
-  const nameSource = resolved.team ? "team" : teamPrefixInfo(resolved.cwd, null).source;
-  out.push(`Team name: ${repoBasename} (${nameSource}) — agents named ${repoBasename}-<role>`);
-  for (const w of staleTeamKeys(resolved.cwd, resolved).warnings) out.push(w);
-  out.push(`Stand up one missing peer: node "${ROSTER_CLI}" spawn-one <role> --cwd ${resolved.cwd}. Full-team Create is the /agent-team skill's job — do not hand-assemble create calls.`);
-  let team = null;
-  try {
-    team = readTeam(hierarchyDir(resolved.cwd));
-  } catch {
-    team = null;
-  }
-  out.push(team ? `Team: ${team.team_id} (${team.transport}, ${team.members.length} member(s)${teamIsPartial(hierarchyDir(resolved.cwd), resolved.cwd, null, team, resolved) ? ", partial" : ""})` : "Team: none active — /agent-team create to instantiate the roster");
-  if (resolved.shadowed.length) {
-    out.push(`WARNING: project config shadows user-scope values for: ${resolved.shadowed.join(", ")}.`);
-  }
-  for (const warning of resolved.warnings) out.push(warning);
-  out.push("Changes apply to this session now; other live sessions pick them up at their next start, clear, or compaction.");
-  return out.join("\n");
+  return out;
 }
 
 // Run directly: print the status table for the current working directory.

@@ -17,6 +17,15 @@
  *                       [--effort E] [--route ...] [--auto-mode A] [--on-missing auto|prompt|never] [--cwd <path>]
  *                       (--model "" and --effort "" clear the field)
  *   roster.mjs remove  [level] [--level L] [--roster <r>] --member <NAME> [--cwd <path>]
+ *   roster.mjs roster list [--json] [--cwd <path>]
+ *   roster.mjs roster copy <src> <dst> [--level L] [--dry-run] [--cwd <path>]
+ *   roster.mjs roster delete <name> [--level L] [--dry-run] [--cwd <path>]
+ *   roster.mjs roster use <name>|default [--level L] [--cwd <path>]
+ *   roster.mjs roster use --clear [--level L] [--cwd <path>]
+ *                       Named rosters are `rosters.<name>` blocks. show/init/add/edit/remove and
+ *                       create use --roster <r>, else AH_ROSTER, else the most specific
+ *                       activeRoster, else the default `roster` block; `default` names that block.
+ *                       `use` writes activeRoster (default level: repo-user in a repo, else global).
  *   roster.mjs create  [--plan] [--commit --verified <json> --transport <t>
  *                       (--verified: JSON array of member objects from the spawn/check-in
  *                       cycle, OR a JSON array of member-name strings hydrated from the
@@ -86,6 +95,16 @@
  *   roster.mjs whoami  [--team <T>] [--cwd <path>]
  *                       Read-only: which team member this session's pane is, and its
  *                       orchestrator's pid / liveness / best-effort reply address.
+ *   roster.mjs role set <name> --from <plugin>@<marketplace>:<role> [--label L] [--description D]
+ *                       [--routes R] [--model M] [--dispatch D] [--level L] (--dry-run | --pin sha256:…)
+ *                       Adopts one role from an installed role pack (a plugin carrying ah-roles.json).
+ *                       The dry run shows what is trusted and prints the pin; the commit needs that pin.
+ *   roster.mjs role trust <name> [--level L] (--dry-run | --pin sha256:…) [--cwd <path>]
+ *                       Shows what changed in an adopted role's pack since it was trusted, and re-pins it.
+ *   roster.mjs pack list [--json] [--cwd <path>]
+ *   roster.mjs pack show <plugin>[@<marketplace>] | --path <dir> [--json] [--cwd <path>]
+ *                       Read-only: installed role packs; one pack's roles, findings, what else the
+ *                       plugin carries, and its content digest.
  *   roster.mjs doctor [--cwd <path>] [--check]
  *                       Read-only self-check: one JSON object, one row per thing that can be
  *                       wrong. `--check` exits 1 when any row is red. Writes nothing, ever.
@@ -132,18 +151,18 @@
  * memory only (no write) — see docs/specs/0008-roster-relocate.md.
  */
 
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { AGENT_REF_RE, agentRefError, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, TIER, userConfigPath } from "./lib-config.mjs";
-import { ageSecOf, appendRosterRecord, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
-import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
+import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
 const DISBAND_FLAGS = new Set(["kill", "plan", "close", "confirm", "plan-token", "allow-global", "cwd", "team"]);
@@ -254,7 +273,7 @@ function gitPorcelain(dir) {
 /** Read-only state report: rows a human or an agent can read in one pass. Writes nothing. */
 // ---------------------------------------------------------------- role verbs (custom roles)
 
-const ROLE_FLAGS = new Set(["class", "agent", "label", "description", "routes", "model", "dispatch", "level", "scaffold", "dry-run", "json", "cwd"]);
+const ROLE_FLAGS = new Set(["class", "agent", "label", "description", "routes", "model", "dispatch", "level", "scaffold", "from", "pin", "dry-run", "json", "cwd"]);
 
 /** resolveConfig's scope names → roster level names. */
 function levelOfScope(scope) {
@@ -300,8 +319,15 @@ function roleRows() {
       status,
       path: v ? v.file.found : null,
       findings: v ? v.findings : [],
+      // Adopted from a pack (a built-in included, whose agent the pack then overrides).
+      ...(entry.from ? { from: entry.from, pin_state: packPinState(entry.pack), ...(builtin ? { pack_override: true } : {}) } : {}),
     };
   });
+}
+
+/** `trusted` for an adopted role whose pack checks pass, else its pack reason. */
+function packPinState(pack) {
+  return !pack || pack.status === "ok" ? "trusted" : pack.status;
 }
 
 function roleList() {
@@ -310,7 +336,7 @@ function roleList() {
   const excluded = reg.excludedRoles.map((e) => ({ name: e.name, level: levelOfScope(e.scope), path: e.path, reason: e.reason }));
   if (opts.json === true) return out({ roles, excluded });
   const lines = roles.map(
-    (r) => `${r.name.padEnd(20)} ${r.builtin ? "built-in" : "custom  "} ${r.class.padEnd(9)} ${r.agent.padEnd(26)} ${String(r.model).padEnd(8)} ${String(r.level).padEnd(9)} ${r.placement} — ${r.status}${r.description ? ` — "${r.description}" (${r.description_source})` : ""}`
+    (r) => `${r.name.padEnd(20)} ${r.builtin ? "built-in" : "custom  "} ${r.class.padEnd(9)} ${r.agent.padEnd(26)} ${String(r.model).padEnd(8)} ${String(r.level).padEnd(9)} ${r.placement} — ${r.status}${r.description ? ` — "${r.from ? escapeTerminal(r.description) : r.description}" (${r.description_source})` : ""}${r.from ? ` — from ${r.from} (${r.pin_state})` : ""}`
   );
   for (const e of excluded) lines.push(`EXCLUDED ${e.name} (${e.level}, ${e.path}): ${e.reason}`);
   process.stdout.write(`${lines.join("\n")}\n`);
@@ -320,7 +346,7 @@ function roleList() {
 function seedRow(name, entry) {
   const seed = {};
   for (const [k, v] of Object.entries(entry)) {
-    if (k === "effectiveDescription") continue;
+    if (k === "effectiveDescription" || k === "pack") continue;
     if (k === "dispatch" && v === "peer") continue;
     if (k === "peer" && v === "auto") continue;
     if (!isBuiltinRole(name) && k === "agent" && v === name) continue;
@@ -353,6 +379,8 @@ function scaffoldText(agent, cls, label, description, routes) {
 
 function roleSet(name) {
   if (typeof name !== "string" || !name) fail("role set needs a role name: role set <name> [flags]");
+  if (opts.from !== undefined) return roleSetFrom(name);
+  if (opts.pin !== undefined) fail(`role set ${name}: --pin goes with --from; to re-trust an adopted role, use \`role trust ${name}\``);
   const reg = registry();
   const builtin = isBuiltinRole(name);
   const dry = opts["dry-run"] === true;
@@ -375,6 +403,10 @@ function roleSet(name) {
   const data = readLevelFile(path);
   const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : null;
   const atLevel = layerRoles && layerRoles[name] && typeof layerRoles[name] === "object" && !Array.isArray(layerRoles[name]) ? layerRoles[name] : null;
+  if (atLevel && isFromRow(atLevel)) return roleSetAdoptedFields(name, { level, path, data, layerRoles, atLevel, given, dry, builtin });
+  if (!atLevel && reg.roles[name] && reg.roles[name].from) {
+    fail(`role set ${name}: it is adopted from a pack (${reg.roles[name].from}) at level "${defined}" — edit it there with --level ${defined}`);
+  }
   const row = atLevel ? { ...atLevel } : reg.roles[name] ? seedRow(name, reg.roles[name]) : {};
   for (const k of ["class", "agent", "label", "model", "dispatch"]) if (typeof given[k] === "string") row[k] = given[k];
   for (const k of ["description", "routes"]) {
@@ -412,9 +444,10 @@ function roleSet(name) {
   const owner = registryRoles(reg).find((r) => r !== name && roleAgent(r, reg.roles[r]) === agent);
   if (owner) fail(`role set ${name}: agent ${JSON.stringify(agent)} is already the ${owner} role's agent — an agent maps to exactly one role`);
   if (!builtin) {
-    const prefix = roleSetPrefix();
-    const v = validateTeamAlias(prefix, { roles: { ...reg.roles, [name]: checked } });
-    if (!v.ok) fail(`role set ${name}: the team prefix "${prefix}" collides with this role name (${v.why}) — rename the role, or create the team with a different \`--team <name>\``);
+    for (const { team, prefix } of roleSetPrefixes()) {
+      const v = validateTeamAlias(prefix, { roles: { ...reg.roles, [name]: checked } });
+      if (!v.ok) fail(`role set ${name}: ${team ? `team ${team}'s prefix` : "the team prefix"} "${prefix}" collides with this role name (${v.why}) — rename the role, or create the team with a different \`--team <name>\``);
+    }
     if (checked.routes) {
       const rival = customRoleNames(reg).find((r) => r !== name && reg.roles[r].class === cls && reg.roles[r].routes);
       if (rival) warnings.push(`class ${cls} already has an alternative (${rival}); candidates are tried in name order and the first fit wins`);
@@ -422,9 +455,10 @@ function roleSet(name) {
   }
   const loc = agent.includes(":") ? null : locateAgentFile(agent, cwd);
   if (!builtin) {
-    const prefix = roleSetPrefix();
-    const peerName = `${prefix}-${name}`;
-    if (!validateHerdrName(peerName).ok) warnings.push(`under the team prefix "${prefix}" its peer name, ${peerName}, is ${peerName.length} characters — Herdr allows at most 32 ([a-z][a-z0-9_-]), so spawning it under Herdr is refused; use a shorter role name, or create the team with a shorter \`--team <name>\``);
+    for (const { team, prefix } of roleSetPrefixes()) {
+      const peerName = `${prefix}-${name}`;
+      if (!validateHerdrName(peerName).ok) warnings.push(`under ${team ? `team ${team}'s prefix` : "the team prefix"} "${prefix}" its peer name, ${peerName}, is ${peerName.length} characters — Herdr allows at most 32 ([a-z][a-z0-9_-]), so spawning it under Herdr is refused; use a shorter role name, or create the team with a shorter \`--team <name>\``);
+    }
   }
   if (level === "repo" && loc && loc.level === "user") warnings.push(`this repo-level row points at ${loc.path}, which exists only in your user agents dir — other users of this repo will not have it`);
 
@@ -521,8 +555,13 @@ function roleRemove(name) {
   const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : null;
   if (!layerRoles || !layerRoles[name]) fail(`role remove ${name}: no row for it at level "${level}" (${path})`);
   if (builtin) {
-    if (layerRoles[name].agent === undefined) fail(`role remove ${name}: a built-in role cannot be removed, and it has no agent override at level "${level}"`);
+    const adopted = isFromRow(layerRoles[name]);
+    if (layerRoles[name].agent === undefined && !adopted) fail(`role remove ${name}: a built-in role cannot be removed, and it has no agent override at level "${level}"`);
     delete layerRoles[name].agent;
+    if (adopted) {
+      delete layerRoles[name].from;
+      delete layerRoles[name].pin;
+    }
     // An empty row would still shadow a wider level's row for this role under whole-row precedence.
     if (!Object.keys(layerRoles[name]).length) delete layerRoles[name];
   } else {
@@ -531,6 +570,646 @@ function roleRemove(name) {
   writeLevelFile(path, data);
   return { removed: name, level, path, override_only: builtin };
 }
+
+// ---------------------------------------------------------------- role packs (adopt, trust, inspect)
+
+/** A pack's fields as the user reviews them: verbatim, with every hidden character shown escaped. */
+function shownFields(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === "string" ? escapeTerminal(v) : v]));
+}
+
+/** The row an adopted role resolves to: the pack's fields with the user's `overlay` laid over them. */
+function adoptedRaw(state, overlay) {
+  const raw = {};
+  for (const k of ["class", "label", "description", "routes", "model", "dispatch"]) if (state.manifestRole.raw[k] !== undefined) raw[k] = state.manifestRole.raw[k];
+  raw.agent = `${state.from.plugin}:${state.manifestRole.agent}`;
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) {
+    if (overlay[k] === undefined) continue;
+    if (overlay[k] === "" && (k === "routes" || k === "description")) delete raw[k];
+    else raw[k] = overlay[k];
+  }
+  return raw;
+}
+
+/** A pack reason as a finding, for a dry run or a refusal. */
+function packStateFinding(state) {
+  return { level: "error", code: state.status, path: state.agentPath || null, field: null, message: `${state.message}${state.subcode && state.subcode !== state.status ? ` [${state.subcode}]` : ""}`, fix: [] };
+}
+
+/**
+ * Everything a person reviews before trusting pack role `state` as `name`: the effective row, the
+ * contract findings and pack-agent findings, the tools, what else the plugin carries, and whether
+ * it takes unattended pipeline work. `{raw, cls, findings, warnings, review}`.
+ */
+function packReview(name, state, overlay) {
+  const builtin = isBuiltinRole(name);
+  const findings = [];
+  const warnings = [];
+  if (state.status !== "ok") findings.push(packStateFinding(state));
+  const raw = adoptedRaw(state, overlay);
+  let cls = raw.class;
+  if (builtin) {
+    cls = roleClass(name, null);
+    if (raw.class !== cls) fail(`role set ${name}: the pack role's class is ${raw.class}, but ${name} is a ${cls} role — a pack role can override a built-in only of its own class`);
+  } else {
+    const c = checkCustomRow(name, raw);
+    if (c.error) fail(`role set ${name}: ${c.error}`);
+    warnings.push(...c.warnings);
+  }
+  // One parse of the agent file feeds the grammar findings, the class contract and the tools shown.
+  const parsed = packAgentParse(state.agentText, state.agentPath);
+  const v = validateAgentContract({ role: name, cls, agent: raw.agent, description: builtin ? null : raw.description || null, builtin, cwd, inMemory: { path: state.agentPath, text: state.agentText, fm: parsed.fm } });
+  findings.push(...parsed.findings, ...v.findings);
+  const manifest = readPackManifest(state.record.installPath, state.from.plugin);
+  const effectiveRoutes = builtin ? null : raw.routes;
+  return {
+    raw,
+    cls,
+    findings,
+    warnings,
+    review: {
+      from: `${state.from.plugin}@${state.from.marketplace}:${state.from.role}`,
+      install_path: state.record.installPath,
+      fields: shownFields(state.manifestRole.raw),
+      agent_file: state.agentPath,
+      tools: packToolReport(parsed.fm),
+      also_in_plugin: packExtras(state.record.installPath, manifest).map((e) => ({ ...e, name: escapeTerminal(e.name) })),
+      ...(cls === "implement" && effectiveRoutes ? { unattended: UNATTENDED_LINE } : {}),
+    },
+  };
+}
+
+/**
+ * A trust commit (`role set --from` or `role trust`, not a dry run) is refused here, before any
+ * write, from a team member or while a pipeline run is live at `--cwd` or at this process's own
+ * cwd — whatever shell form ran it, so a command the gate couldn't read is covered too. An error
+ * while checking refuses.
+ */
+function refuseTrustCommitHere(label) {
+  let why = null;
+  try {
+    const team = process.env.AH_TEAM_FILE;
+    if (typeof team === "string" && team !== "") why = "this session is a team member (AH_TEAM_FILE is set)";
+    else if ([...new Set([cwd, process.cwd()])].some((dir) => pipelineRunLive(dir))) why = "a pipeline run is live in this checkout";
+  } catch (err) {
+    why = `the check couldn't run (${err && err.message ? err.message : String(err)})`;
+  }
+  if (why) fail(`${label}: refused — ${why}. Trust is committed only from the user's own top-level session, outside a pipeline run; nothing was written.`);
+}
+
+/**
+ * `role set <name> --from <plugin>@<marketplace>:<role>`: adopt one pack role. The dry run prints
+ * what the user is trusting and the pin; the commit needs exactly that pin, so what is trusted is
+ * what was shown, and stores only `from`, `pin` and the flags passed.
+ */
+function roleSetFrom(name) {
+  const dry = opts["dry-run"] === true;
+  for (const k of ["class", "agent", "scaffold"]) {
+    if (opts[k] !== undefined) fail(`role set ${name}: --${k} can't be used with --from — a pack role's ${k === "scaffold" ? "agent file" : k} comes from the pack. To change it, remove the role and define your own`);
+  }
+  for (const k of ["from", "pin", "label", "description", "routes", "model", "dispatch", "level"]) {
+    if (opts[k] === true) fail(`role set: --${k} needs a value`);
+  }
+  if (!dry) refuseTrustCommitHere(`role set ${name} --from`);
+  if (!dry && typeof opts.pin !== "string") fail(`role set ${name} --from: committing needs --pin <the pin the dry run printed> — run it with --dry-run first`);
+  const builtin = isBuiltinRole(name);
+  if (builtin) {
+    for (const k of ["label", "description", "routes"]) if (opts[k] !== undefined) fail(`role set ${name}: --${k} does not apply to a built-in role — only --model and --dispatch`);
+  } else {
+    const why = roleNameError(name);
+    if (why) fail(`role set ${name}: ${why}`);
+  }
+  const f = parseFrom(opts.from);
+  if (!f) fail(`role set ${name}: --from must be <plugin>@<marketplace>:<role>, got ${JSON.stringify(opts.from)}`);
+  let marketplace = f.marketplace;
+  if (!marketplace) {
+    const offering = [...new Set(installRecords().filter((r) => r.plugin === f.plugin).map((r) => r.marketplace))];
+    if (!offering.length) fail(`role set ${name}: plugin ${f.plugin} is not installed`);
+    if (offering.length > 1) fail(`role set ${name}: plugin ${f.plugin} is offered by ${offering.length} marketplaces (${offering.join(", ")}) — name one: --from ${f.plugin}@<marketplace>:${f.role}`);
+    marketplace = offering[0];
+  }
+  const from = `${f.plugin}@${marketplace}:${f.role}`;
+  const state = packRoleState(from, null);
+  if (!state.manifestRole || state.manifestRole.error || typeof state.agentText !== "string") {
+    fail(`role set ${name} --from ${from}: ${state.status}: ${state.message}${state.subcode && state.subcode !== state.status ? ` [${state.subcode}]` : ""}`);
+  }
+
+  const reg = registry();
+  const defined = levelOfScope(reg.sources[name]);
+  const level = typeof opts.level === "string" ? requireLevel(opts.level) : defined && defined !== "shipped" ? defined : "global";
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : {};
+  const atLevel = layerRoles[name];
+  if (atLevel && !(isFromRow(atLevel) && atLevel.from === from)) {
+    fail(`role set ${name}: ${name} is already defined at level "${level}" (${path}) ${isFromRow(atLevel) ? `from ${atLevel.from}` : "by a row of its own"} — pick another name or remove it first`);
+  }
+  const row = { from, ...(atLevel ? Object.fromEntries(Object.entries(atLevel).filter(([k]) => k !== "from" && k !== "pin")) : {}) };
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) if (typeof opts[k] === "string") row[k] = opts[k];
+  if (row.dispatch !== undefined && !DISPATCH_MODES.includes(row.dispatch)) fail(`role set ${name}: --dispatch must be one of ${DISPATCH_MODES.join(", ")}`);
+  if (builtin && row.model !== undefined && !CLASSES[roleClass(name, null)].models.includes(row.model)) {
+    fail(`role set ${name}: model ${JSON.stringify(row.model)} is not allowed for ${name} (allowed: ${CLASSES[roleClass(name, null)].models.join(", ")})`);
+  }
+  const { raw, findings, warnings, review } = packReview(name, state, row);
+  const owner = registryRoles(reg).find((r) => r !== name && roleAgent(r, reg.roles[r]) === raw.agent);
+  if (owner) fail(`role set ${name}: agent ${JSON.stringify(raw.agent)} is already the ${owner} role's agent — an agent maps to exactly one role`);
+  if (findings.length) process.stderr.write(`${escapeTerminal(formatFindings(findings))}\n`);
+  if (review.unattended) process.stderr.write(`roster.mjs: ${name} ${review.unattended}\n`);
+  for (const w of warnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
+  const result = { level, path, role: name, from, row: { ...row, pin: state.pin }, pack: review, findings, warnings, pin: state.pin };
+  if (dry) return { dry_run: true, ...result };
+  if (opts.pin !== state.pin) {
+    fail(`role set ${name} --from: --pin ${opts.pin} doesn't match what is installed now (${state.pin}) — nothing was written. Run --dry-run again and review what changed`);
+  }
+  if (hasContractErrors(findings)) fail(`role set ${name} --from: errors stand (above) — nothing was written`);
+  writeStoredCopy(state.pin, { row: state.manifestRole.raw, agentText: state.agentText, files: state.files });
+  writeLevelFile(path, { ...data, version: data.version || CONFIG_VERSION, roles: { ...layerRoles, [name]: { ...row, pin: state.pin } } });
+  return { written: true, ...result };
+}
+
+/** `role set` on a row already adopted from a pack: only the user's own fields change, and the pin
+    stays, since the pack's content doesn't. */
+function roleSetAdoptedFields(name, { level, path, data, layerRoles, atLevel, given, dry, builtin }) {
+  for (const k of ["class", "agent", "scaffold"]) {
+    if (given[k] !== undefined) fail(`role set ${name}: --${k} can't change a role adopted from a pack (${atLevel.from}) — remove it and define your own role to change that`);
+  }
+  const row = { ...atLevel };
+  for (const k of ["label", "description", "routes", "model", "dispatch"]) if (typeof given[k] === "string") row[k] = given[k];
+  if (row.dispatch !== undefined && !DISPATCH_MODES.includes(row.dispatch)) fail(`role set ${name}: --dispatch must be one of ${DISPATCH_MODES.join(", ")}`);
+  const expanded = expandFromRow(row);
+  if (expanded.error) fail(`role set ${name}: ${expanded.error}`);
+  if (builtin) {
+    const cls = roleClass(name, null);
+    if (row.model !== undefined && !CLASSES[cls].models.includes(row.model)) fail(`role set ${name}: model ${JSON.stringify(row.model)} is not allowed for ${name} (allowed: ${CLASSES[cls].models.join(", ")})`);
+  } else {
+    const c = checkCustomRow(name, expanded.raw);
+    if (c.error) fail(`role set ${name}: ${c.error}`);
+  }
+  const result = { level, path, role: name, row };
+  if (dry) return { dry_run: true, ...result };
+  writeLevelFile(path, { ...data, version: data.version || CONFIG_VERSION, roles: { ...layerRoles, [name]: row } });
+  return { written: true, ...result };
+}
+
+/** A line diff of two texts: the system `diff -u` when there is one, else both texts in full. */
+function textDiff(before, after) {
+  if (before === after) return "";
+  const dir = mkdtempSync(join(tmpdir(), "ah-trust-"));
+  try {
+    const a = join(dir, "trusted");
+    const b = join(dir, "installed");
+    writeFileSync(a, before, "utf8");
+    writeFileSync(b, after, "utf8");
+    try {
+      execFileSync("diff", ["-u", a, b], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      return "";
+    } catch (err) {
+      if (err && typeof err.stdout === "string" && err.status === 1) return err.stdout;
+      return `--- trusted\n${before}\n+++ installed\n${after}`;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `role trust <name>`: review what changed in an adopted role's pack since it was trusted, against
+ * this machine's stored copy, and re-pin it. The commit needs exactly the pin the dry run printed,
+ * and keeps the user's own fields.
+ */
+function roleTrust(name) {
+  if (typeof name !== "string" || !name) fail("role trust needs a role name: role trust <name> (--dry-run | --pin sha256:…)");
+  const dry = opts["dry-run"] === true;
+  if (opts.pin === true) fail("role trust: --pin needs a value");
+  if (!dry) refuseTrustCommitHere(`role trust ${name}`);
+  if (!dry && typeof opts.pin !== "string") fail(`role trust ${name}: committing needs --pin <the pin the dry run printed> — run it with --dry-run first`);
+  const reg = registry();
+  const excluded = reg.excludedRoles.find((e) => e.name === name);
+  const defined = levelOfScope(reg.sources[name] || (excluded && excluded.scope));
+  const level = typeof opts.level === "string" ? requireLevel(opts.level) : defined && defined !== "shipped" ? defined : fail(`role trust ${name}: it is not defined at any level`);
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  const layerRoles = data.roles && typeof data.roles === "object" && !Array.isArray(data.roles) ? data.roles : {};
+  const row = layerRoles[name];
+  if (!isFromRow(row)) fail(`role trust ${name}: it isn't adopted from a pack at level "${level}" (${path}) — role trust works only on a row set with --from`);
+  const state = packRoleState(row.from, null);
+  if (!state.manifestRole || state.manifestRole.error || typeof state.agentText !== "string") {
+    fail(`role trust ${name}: ${state.status}: ${state.message}${state.subcode && state.subcode !== state.status ? ` [${state.subcode}]` : ""}`);
+  }
+  const { findings, review } = packReview(name, state, row);
+  const stored = readStoredCopy(row.pin);
+  let changes;
+  if (stored) {
+    const now = state.manifestRole.raw;
+    const fields = [...new Set([...Object.keys(stored.row), ...Object.keys(now)])].sort()
+      .filter((k) => JSON.stringify(stored.row[k]) !== JSON.stringify(now[k]))
+      .map((k) => ({ field: k, trusted: shownFields({ v: stored.row[k] }).v ?? null, installed: shownFields({ v: now[k] }).v ?? null }));
+    const before = new Map(stored.files);
+    const after = new Map(state.files);
+    changes = {
+      stored_copy: true,
+      fields_changed: fields,
+      agent_diff: escapeTerminal(textDiff(stored.agentText, state.agentText)),
+      files: {
+        added: [...after.keys()].filter((p) => !before.has(p)).map(escapeTerminal),
+        removed: [...before.keys()].filter((p) => !after.has(p)).map(escapeTerminal),
+        changed: [...after.keys()].filter((p) => before.has(p) && before.get(p) !== after.get(p)).map(escapeTerminal),
+      },
+    };
+  } else {
+    changes = {
+      stored_copy: false,
+      note: "no stored copy of what was trusted is on this machine, so the whole agent file and every file are shown",
+      fields: shownFields(state.manifestRole.raw),
+      agent_text: escapeTerminal(state.agentText),
+      files: { all: state.files.map(([p]) => escapeTerminal(p)) },
+    };
+  }
+  if (findings.length) process.stderr.write(`${escapeTerminal(formatFindings(findings))}\n`);
+  const result = { level, path, role: name, from: row.from, pinned: row.pin || null, ...changes, pack: review, findings, pin: state.pin };
+  if (dry) return { dry_run: true, ...result };
+  if (opts.pin !== state.pin) fail(`role trust ${name}: --pin ${opts.pin} doesn't match what is installed now (${state.pin}) — nothing was written. Run --dry-run again and review what changed`);
+  if (hasContractErrors(findings)) fail(`role trust ${name}: errors stand (above) — nothing was written`);
+  writeStoredCopy(state.pin, { row: state.manifestRole.raw, agentText: state.agentText, files: state.files });
+  writeLevelFile(path, { ...data, version: data.version || CONFIG_VERSION, roles: { ...layerRoles, [name]: { ...row, pin: state.pin } } });
+  return { written: true, ...result };
+}
+
+/** The registry rows adopted from `from`, as `{name, level, state}` with state `trusted` or the pack reason. */
+function adoptionsOf(reg, from) {
+  return registryRoles(reg)
+    .filter((r) => reg.roles[r].from === from)
+    .map((r) => ({ name: r, level: levelOfScope(reg.sources[r]), state: packPinState(reg.roles[r].pack) }));
+}
+
+/** The version a plugin at `dir` declares in its plugin.json, else `fallback`, escaped for printing. */
+function pluginVersionAt(dir, fallback) {
+  let version = fallback;
+  try {
+    const pj = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8"));
+    if (pj && typeof pj.version === "string") version = pj.version;
+  } catch {}
+  return typeof version === "string" ? escapeTerminal(version) : version;
+}
+
+/** One manifest role as `pack list` shows it. */
+function packRoleSummary(role, m) {
+  const src = m.row || (m.raw && typeof m.raw === "object" ? m.raw : {});
+  return { name: escapeTerminal(role), class: src.class ?? null, agent: m.agent ? escapeTerminal(m.agent) : null, routes: typeof src.routes === "string" ? escapeTerminal(src.routes) : null, ...(m.error ? { error: m.error.code } : {}) };
+}
+
+/** `pack list [--json]`: every installed pack, its roles, their adoptions, and a count of what else it carries. */
+function packList() {
+  const reg = registry();
+  const packs = packRecords().map((r) => {
+    const manifest = readPackManifest(r.installPath, r.plugin);
+    return {
+      plugin: escapeTerminal(r.plugin),
+      marketplace: r.marketplace === null ? null : escapeTerminal(r.marketplace),
+      version: pluginVersionAt(r.installPath, r.version),
+      path: r.installPath,
+      ...(manifest.error ? { manifest_error: manifest.error } : {}),
+      roles: Object.entries(manifest.roles).map(([role, m]) => ({ ...packRoleSummary(role, m), adopted: adoptionsOf(reg, `${r.plugin}@${r.marketplace}:${role}`) })),
+      also_in_plugin: packExtras(r.installPath, manifest).length,
+    };
+  });
+  if (opts.json === true) return out({ packs });
+  const lines = [];
+  for (const p of packs) {
+    lines.push(`${p.plugin}@${p.marketplace} ${p.version || "?"} — ${p.path}${p.manifest_error ? ` — ${p.manifest_error.code}: ${escapeTerminal(p.manifest_error.message)}` : ""}${p.also_in_plugin ? ` — also carries ${p.also_in_plugin} other thing${p.also_in_plugin > 1 ? "s" : ""} (pack show)` : ""}`);
+    for (const role of p.roles) {
+      const adopted = role.adopted.map((a) => `${a.name} at ${a.level}, ${a.state}`).join("; ");
+      lines.push(`  ${role.name} · ${role.class ?? "?"} · ${role.agent ?? "?"}${role.routes ? ` · routes "${role.routes}"` : ""}${role.error ? ` · ${role.error}` : ""}${adopted ? ` — adopted as ${adopted}` : ""}`);
+    }
+  }
+  process.stdout.write(lines.length ? `${lines.join("\n")}\n` : "no role packs installed\n");
+}
+
+/**
+ * `pack show <plugin>[@<marketplace>]` or `pack show --path <dir>` (a plugin not installed yet): one
+ * pack in full — manifest findings, each role's fields verbatim with its findings, what else the
+ * plugin carries, and the content digest that tells the same tree before and after install.
+ */
+function packShow(target) {
+  let dir;
+  let plugin;
+  let record = null;
+  if (typeof opts.path === "string") {
+    if (target !== undefined) fail("pack show: pass a plugin name or --path <dir>, not both");
+    dir = resolve(cwd, opts.path);
+    if (!existsSync(dir)) fail(`pack show --path: ${dir} does not exist`);
+    plugin = pluginNameAt(dir);
+  } else {
+    if (typeof target !== "string" || !target) fail("usage: roster.mjs pack show <plugin>[@<marketplace>] | pack show --path <dir> [--json]");
+    const [name, marketplace] = target.split("@");
+    const matches = packRecords().filter((r) => r.plugin === name && (!marketplace || r.marketplace === marketplace));
+    if (!matches.length) fail(`pack show: no installed role pack ${target} — pack list shows the installed ones, and pack show --path <dir> reads one that isn't installed`);
+    if (matches.length > 1) fail(`pack show: ${target} has ${matches.length} install records (${matches.map((r) => `${r.key} at ${r.installPath}`).join(", ")}) — name the marketplace, or use --path`);
+    record = matches[0];
+    dir = record.installPath;
+    plugin = record.plugin;
+  }
+  const manifest = readPackManifest(dir, plugin);
+  const tree = packTree(dir);
+  const reg = record ? registry() : null;
+  const claims = packNameClaims(dir, manifest);
+  const roles = Object.entries(manifest.roles).map(([role, m]) => {
+    const shown = { name: escapeTerminal(role), fields: shownFields(m.raw), agent: m.agent ? escapeTerminal(m.agent) : null, warnings: m.warnings.map(escapeTerminal), findings: [] };
+    if (m.error) shown.findings.push({ level: "error", code: m.error.code, path: null, field: null, message: escapeTerminal(m.error.message), fix: [] });
+    if (m.row) {
+      if (claims.error) shown.findings.push({ level: "error", code: "pack-invalid", path: null, field: null, message: claims.error, fix: [] });
+      const claimedBy = claims.byRole.get(role);
+      if (claimedBy) shown.findings.push({ level: "error", code: "pack-invalid", path: join(dir, claimedBy[0]), field: null, message: packClaimMessage(plugin || "?", m.agent, claimedBy), fix: [] });
+      const agentPath = join(dir, "agents", `${m.agent}.md`);
+      let text = null;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(agentPath));
+      } catch (err) {
+        shown.findings.push({ level: "error", code: "pack-invalid", path: agentPath, field: null, message: existsSync(agentPath) ? `${agentPath} is not valid UTF-8` : `no agents/${m.agent}.md`, fix: [] });
+      }
+      if (text !== null) {
+        const hidden = hiddenCharAt(text);
+        if (hidden) shown.findings.push({ level: "error", code: "pack-hidden-chars", path: agentPath, field: null, message: `${agentPath} holds a hidden character (${hidden})`, fix: [] });
+        const parsed = packAgentParse(text, agentPath);
+        shown.findings.push(...parsed.findings.map((x) => ({ ...x, message: escapeTerminal(x.message) })));
+        const v = validateAgentContract({ role, cls: m.row.class, agent: m.row.agent, description: m.row.description || null, cwd, inMemory: { path: agentPath, text, fm: parsed.fm } });
+        shown.findings.push(...v.findings.map((x) => ({ ...x, message: escapeTerminal(x.message) })));
+        shown.tools = packToolReport(parsed.fm);
+      }
+    }
+    if (record) shown.adopted = adoptionsOf(reg, `${record.plugin}@${record.marketplace}:${role}`);
+    return shown;
+  });
+  const result = {
+    plugin: escapeTerminal(plugin),
+    marketplace: record && record.marketplace !== null ? escapeTerminal(record.marketplace) : null,
+    installed: Boolean(record),
+    version: pluginVersionAt(dir, record ? record.version : null),
+    path: dir,
+    manifest: { error: manifest.error ? { ...manifest.error, message: escapeTerminal(manifest.error.message) } : null, warnings: manifest.warnings.map(escapeTerminal) },
+    roles,
+    also_in_plugin: packExtras(dir, manifest).map((e) => ({ ...e, name: escapeTerminal(e.name) })),
+    digest: tree.error ? null : packDigest(tree.files),
+    ...(tree.symlink ? { symlink: escapeTerminal(tree.symlink) } : {}),
+  };
+  if (opts.json === true) return out(result);
+  const lines = [`${result.plugin}${result.marketplace ? `@${result.marketplace}` : ""} ${result.version || "?"} — ${dir}${result.installed ? "" : " (not installed)"}`, `digest ${result.digest}`];
+  if (result.manifest.error) lines.push(`manifest: ${result.manifest.error.code}: ${result.manifest.error.message}`);
+  for (const w of result.manifest.warnings) lines.push(`manifest warning: ${w}`);
+  for (const r of roles) {
+    lines.push(`role ${r.name}: ${JSON.stringify(r.fields)}`);
+    if (r.tools) lines.push(`  tools: ${r.tools.effective.join(", ") || "(none)"}${r.tools.flagged.length ? ` — flagged: ${r.tools.flagged.join(", ")}` : ""}`);
+    for (const x of r.findings) lines.push(`  ${x.level.toUpperCase()} ${x.code}: ${x.message}`);
+    for (const w of r.warnings) lines.push(`  warning: ${w}`);
+    if (r.adopted && r.adopted.length) lines.push(`  adopted as ${r.adopted.map((a) => `${a.name} at ${a.level}, ${a.state}`).join("; ")}`);
+  }
+  lines.push(result.also_in_plugin.length ? "also in this plugin:" : "also in this plugin: nothing");
+  for (const e of result.also_in_plugin) lines.push(`  ${e.kind}: ${e.name}${e.claims ? ` — claims role ${e.claims.join(", ")}` : ""}`);
+  if (result.symlink) lines.push(`symbolic link: ${result.symlink}`);
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+// ---------------------------------------------------------------- named rosters (list/copy/delete/use)
+
+/** A level file's parsed object, or null when it is missing or not an object. Reads only. */
+function levelFileData(path) {
+  if (!existsSync(path)) return null;
+  try {
+    const data = JSON.parse(readFileSync(path, "utf8"));
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    dropNonObjectMembers(data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/** Every visible level file holding roster block `key` (null: the unnamed `roster` block), most
+    specific first, as `{level, path, block, members, route}`. */
+function rosterDefinitions(key) {
+  const candidates = rosterLevelCandidates(cwd);
+  const defs = [];
+  const seen = new Set();
+  for (const level of ROSTER_LEVELS) {
+    for (const path of candidates[level]) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      const data = levelFileData(path);
+      if (!data) continue;
+      const map = data.rosters && typeof data.rosters === "object" && !Array.isArray(data.rosters) ? data.rosters : {};
+      const block = key === null ? data.roster : Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+      if (block === undefined || block === null) continue;
+      const members = typeof block === "object" && Array.isArray(block.members) ? block.members : [];
+      defs.push({ level, path, block, members, route: typeof block === "object" && block.route !== undefined ? block.route : null });
+    }
+  }
+  return defs;
+}
+
+/** The definition that wins, by resolveRoster's rule: the first with members, else the first. */
+function winningDefinition(defs) {
+  return defs.find((d) => d.members.length > 0) || defs[0] || null;
+}
+
+/** Every team file in this checkout's hierarchy dir, and from a worktree the main checkout's, by the
+    roster key `teamRosterKey` gives it (null: the default block), as `{team, file}` lists. */
+function teamsByRosterKey() {
+  const byKey = new Map();
+  const dirs = [...new Set([hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean))];
+  for (const dir of dirs) {
+    for (const name of [null, ...listTeamNames(dir)]) {
+      if (!readTeam(dir, name)) continue;
+      const key = teamRosterKey(dir, name);
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push({ team: name, file: teamPath(dir, name) });
+    }
+  }
+  return byKey;
+}
+
+function rosterLevelOpt() {
+  return opts.level === undefined ? null : requireLevel(opts.level);
+}
+
+const LEGACY_DEFAULT_NOTE =
+  "a block named `default` can't be selected or copied — `default` means the unnamed `roster` block — but a team whose file records it keeps using it";
+
+function rosterList() {
+  const sel = rosterSelection(cwd);
+  const teams = teamsByRosterKey();
+  const entry = (key) => {
+    const defs = rosterDefinitions(key);
+    const win = winningDefinition(defs);
+    return {
+      roster: key === null ? DEFAULT_ROSTER : key,
+      block: containerLabel(key),
+      level: win ? win.level : null,
+      path: win ? win.path : null,
+      shadowed: defs.filter((d) => d !== win).map(({ level, path }) => ({ level, path })),
+      members: win ? win.members.length : 0,
+      route: win ? win.route : null,
+      selected: key === DEFAULT_ROSTER ? false : sel.key === key,
+      teams: teams.get(key) || [],
+      ...(key === DEFAULT_ROSTER ? { note: LEGACY_DEFAULT_NOTE } : {}),
+    };
+  };
+  const rosters = [entry(null), ...namedRosterKeys(cwd).map(entry)];
+  if (opts.json === true) return out({ selection: selectionView(sel), rosters });
+  const from = sel.source === "activeRoster" ? `activeRoster at ${sel.level}, ${sel.path}` : sel.source === "env" ? "AH_ROSTER" : "nothing selected";
+  const lines = [`selection: ${sel.roster} (${from})`];
+  for (const r of rosters) {
+    const where = r.level ? `${r.level} ${r.path}` : "not defined";
+    const parts = [`${r.selected ? "*" : " "} ${r.roster} (${r.block})`, where, `${r.members} member${r.members === 1 ? "" : "s"}`, `route ${r.route ?? "-"}`];
+    if (r.shadowed.length) parts.push(`shadows ${r.shadowed.map((s) => `${s.level} ${s.path}`).join(", ")}`);
+    if (r.teams.length) parts.push(`teams: ${r.teams.map((t) => t.team ?? "the default team").join(", ")}`);
+    if (r.note) parts.push(r.note);
+    lines.push(parts.join(" · "));
+  }
+  process.stdout.write(lines.join("\n") + "\n");
+}
+
+function rosterCopy(src, dst) {
+  if (typeof src !== "string" || typeof dst !== "string") fail("usage: roster.mjs roster copy <src> <dst> [--level L] [--dry-run]");
+  const srcKey = src === DEFAULT_ROSTER ? null : src;
+  if (srcKey !== null) {
+    const v = validateTeamAlias(srcKey);
+    if (!v.ok) fail(`roster copy: <src> ${JSON.stringify(src)}: ${v.why}`);
+  }
+  const win = winningDefinition(rosterDefinitions(srcKey));
+  if (!win) fail(`roster copy: ${srcKey === null ? "the default `roster` block" : `roster "${src}"`} is not defined at any level (defined: ${selectableRosters(cwd).join(", ") || "none"})`);
+  if (dst === DEFAULT_ROSTER) fail("roster copy: <dst> can't be `default` — it means the unnamed `roster` block");
+  const v = validateTeamAlias(dst);
+  if (!v.ok) fail(`roster copy: <dst> ${JSON.stringify(dst)}: ${v.why}`);
+  const level = rosterLevelOpt() || win.level;
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  // Any file at this level counts: from a worktree, the main checkout's would be shadowed by the copy.
+  const taken = rosterDefinitions(dst).find((d) => d.level === level);
+  if (taken) {
+    const from = taken.path === path ? "" : ` --cwd ${checkoutRoot(cwd)}`;
+    fail(`roster copy: rosters.${dst} is already defined at level "${level}" (${taken.path}) — pick another name, or delete it first with \`roster.mjs roster delete ${dst} --level ${level}${from}\``);
+  }
+  const block = JSON.parse(JSON.stringify(win.block.route === undefined ? { members: win.members } : { route: win.block.route, members: win.members }));
+  const dryRun = opts["dry-run"] === true;
+  if (!dryRun) {
+    installRosterBlock(data, dst, block);
+    writeLevelFile(path, data);
+  }
+  out({
+    copied: !dryRun,
+    dry_run: dryRun,
+    from: { roster: srcKey === null ? DEFAULT_ROSTER : src, block: containerLabel(srcKey), level: win.level, path: win.path },
+    to: { roster: dst, block: containerLabel(dst), level, path },
+    route: block.route ?? null,
+    members: block.members.length,
+  });
+}
+
+function rosterDelete(name) {
+  if (typeof name !== "string" || !name) fail("usage: roster.mjs roster delete <name> [--level L] [--dry-run]");
+  if (name === DEFAULT_ROSTER) fail("roster delete: `default` is the unnamed `roster` block, which delete never removes");
+  const explicit = rosterLevelOpt();
+  const win = explicit ? null : winningDefinition(rosterDefinitions(name));
+  if (!explicit && !win) fail(`roster delete ${name}: no level defines it (defined: ${selectableRosters(cwd).join(", ") || "none"})`);
+  const level = explicit || win.level;
+  const path = rosterLevelPaths(cwd)[level];
+  const data = readLevelFile(path);
+  if (!existsSync(path) || !data.rosters || typeof data.rosters !== "object" || !Object.prototype.hasOwnProperty.call(data.rosters, name)) {
+    // From a worktree, the block may live only in the main checkout's file at this level.
+    const elsewhere = rosterDefinitions(name).find((d) => d.level === level && d.path !== path);
+    if (elsewhere) {
+      fail(
+        `roster delete ${name}: rosters.${name} at level "${level}" is in the main checkout's file (${elsewhere.path}), not this worktree's (${path}) — nothing was deleted. ` +
+          `Delete it from the main checkout: \`roster.mjs roster delete ${name} --level ${level} --cwd ${checkoutRoot(cwd)}\``
+      );
+    }
+    fail(`roster delete ${name}: no rosters.${name} at level "${level}" (${path})`);
+  }
+  const users = teamsByRosterKey().get(name) || [];
+  if (users.length) {
+    fail(
+      `roster delete ${name}: ${users.map((t) => `${t.team === null ? "the default team" : `team "${t.team}"`} (${t.file})`).join(", ")} ${users.length === 1 ? "uses" : "use"} it — ` +
+        "nothing was deleted. Disband the team first (`roster.mjs disband`), or remove an orphaned record with `roster.mjs reap --commit`."
+    );
+  }
+  if (data.activeRoster === name) {
+    fail(`roster delete ${name}: activeRoster in ${path} selects it — nothing was deleted. Select another first: \`roster.mjs roster use <other> --level ${level}\`, or \`roster.mjs roster use --clear --level ${level}\`.`);
+  }
+  const warnings = [];
+  const candidates = rosterLevelCandidates(cwd);
+  for (const other of ROSTER_LEVELS) {
+    for (const p of candidates[other]) {
+      if (p === path) continue;
+      const d = levelFileData(p);
+      if (d && d.activeRoster === name) warnings.push(`activeRoster at ${other} in ${p} still selects "${name}"; once it is deleted, commands there will refuse until that selection changes`);
+    }
+  }
+  for (const w of warnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
+  const dryRun = opts["dry-run"] === true;
+  if (!dryRun) {
+    delete data.rosters[name];
+    writeLevelFile(path, data);
+  }
+  out({ deleted: !dryRun, dry_run: dryRun, roster: name, block: containerLabel(name), level, path, ...(warnings.length ? { warnings } : {}) });
+}
+
+function rosterUse(name) {
+  const clear = opts.clear === true;
+  if (clear && name !== undefined) fail("roster use: pass a roster name or --clear, not both");
+  if (!clear && (typeof name !== "string" || !name)) fail("usage: roster.mjs roster use <name>|default [--level L] | roster use --clear [--level L]");
+  const level = rosterLevelOpt() || (findGitRoot(cwd) ? "repo-user" : "global");
+  const path = rosterLevelPaths(cwd)[level];
+  const warnings = [];
+  if (clear) {
+    const had = (levelFileData(path) || {}).activeRoster !== undefined;
+    let fileRemoved = false;
+    if (had) {
+      const data = readLevelFile(path);
+      delete data.activeRoster;
+      // A file left with no keys held nothing but the selection, and reads as absent either way.
+      if (Object.keys(data).length === 0) {
+        unlinkSync(path);
+        fileRemoved = true;
+      } else {
+        writeLevelFile(path, data);
+      }
+    }
+    return out({ level, path, activeRoster: null, cleared: had, ...(fileRemoved ? { file_removed: true } : {}), selection: selectionView(rosterSelection(cwd)) });
+  }
+  if (name !== DEFAULT_ROSTER) {
+    const defined = selectableRosters(cwd);
+    if (!defined.includes(name)) {
+      fail(`roster use ${name}: no level defines roster "${name}" (defined: ${defined.join(", ") || "none"}) — make it with \`roster.mjs init --roster ${name}\` or \`roster.mjs roster copy <src> ${name}\``);
+    }
+    // Whoever reads the target level must be able to see the roster; repo-user's only reader sees every level.
+    if (level !== "repo-user" && !rosterDefinitions(name).some((d) => d.level === level)) {
+      warnings.push(
+        level === "global"
+          ? `roster "${name}" is not defined in the global file, so other repos will see this selection as missing — select it at repo-user or repo level instead`
+          : `roster "${name}" is defined only in your own files (repo-user or global), so others working in this repo will see this selection as missing — define it at repo level, or select it at repo-user instead`
+      );
+    }
+  }
+  // Writing the selection never changes whether the file counts as configured: a file created here
+  // holds only `activeRoster` and reads as absent, while an existing empty file, which counts as
+  // configured, also gets `version` so it still does.
+  const existed = existsSync(path);
+  const data = existed ? readLevelFile(path) : {};
+  if (existed && Object.keys(data).length === 0) data.version = CONFIG_VERSION;
+  data.activeRoster = name;
+  writeLevelFile(path, data);
+  for (const w of warnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
+  out({ level, path, activeRoster: name, selection: selectionView(rosterSelection(cwd)), ...(warnings.length ? { warnings } : {}) });
+}
+
+/** Flags each `roster` subcommand takes, `--cwd` included. */
+const ROSTER_SUB_FLAGS = {
+  list: new Set(["json", "cwd"]),
+  copy: new Set(["level", "dry-run", "cwd"]),
+  delete: new Set(["level", "dry-run", "cwd"]),
+  use: new Set(["level", "clear", "cwd"]),
+};
 
 function doctorReport(cwd) {
   const rows = [];
@@ -603,6 +1282,17 @@ function doctorReport(cwd) {
 
   rows.push(row("team", () => {
     const dir = hierarchyDir(cwd);
+    const owned = ownedLiveTeams(dir);
+    if (owned.length > 1) {
+      // Owning several live teams: every one is named, with the roster it was built from.
+      const known = new Set(registryRoles(registry()));
+      const parts = owned.map((name) => {
+        const t = readTeam(dir, name) || {};
+        const orphans = (t.members || []).filter((m) => m && m.role && !known.has(m.role)).length;
+        return { orphans, text: `${teamArgName(name)} (roster ${t.roster ?? "default"}, team_id ${t.team_id || "?"}${orphans ? `, ${orphans} member(s) with a role not defined here` : ""})` };
+      });
+      return { status: parts.some((p) => p.orphans) ? "warn" : "ok", detail: `this session owns ${owned.length} live teams: ${parts.map((p) => p.text).join("; ")}` };
+    }
     const team = readTeam(dir, teamFile);
     if (!team) return { status: "ok", detail: `no team file at ${teamPath(dir, teamFile)}` };
     const pid = team.orchestrator && team.orchestrator.pid;
@@ -672,6 +1362,17 @@ function doctorReport(cwd) {
   // reading output learns so, and only when there is something to say.
   const stale = staleTeamKeys(cwd, registry()).warnings;
   if (stale.length) rows.push({ name: "stale-config-keys", status: "warn", detail: stale.join(" ") });
+  // Only when broken: every template verb and `create` refuses such a selection until it is fixed.
+  // Owning several live teams, each team's selection is checked, and a broken one names its team.
+  const perTeam = ownedRosterSelections(cwd, { pid: ownOrchestratorPid() });
+  const selectionProblems = perTeam
+    ? perTeam.map(({ team, selection }) => {
+        const problem = rosterSelectionProblem(cwd, selection);
+        return problem && `team ${teamArgName(team)}: ${problem}`;
+      })
+    : [rosterSelectionProblem(cwd, sessionRosterSelection(cwd, { pid: ownOrchestratorPid() }))];
+  const selectionProblem = selectionProblems.filter(Boolean).join(" ");
+  if (selectionProblem) rows.push({ name: "roster-selection", status: "red", detail: selectionProblem });
   return { cwd, rows, red: rows.filter((r) => r.status === "red").map((r) => r.name) };
 }
 
@@ -713,6 +1414,11 @@ if (opts.help === true || cmd === undefined) printUsage(cmd);
 /** `--team <name>` (spec 0011 §5.1), validated once with the same validator 0010's alias uses. */
 function resolveTeamArg() {
   if (typeof opts.team !== "string") return null;
+  // `--team @default` names team.json explicitly: no owned-team fallback, no refusal for several.
+  if (opts.team === DEFAULT_TEAM_ARG) {
+    teamDefaultExplicit = true;
+    return null;
+  }
   const v = validateTeamAlias(opts.team);
   if (!v.ok) {
     if (TEAM_CREATING_VERBS.has(cmd)) {
@@ -729,7 +1435,7 @@ function resolveTeamArg() {
 const TEMPLATE_VERBS = new Set(["init", "add", "edit", "remove", "show"]);
 if (TEMPLATE_VERBS.has(cmd) && opts.team !== undefined) fail(`${cmd}: \`--team\` names a live team; to edit a named roster use \`--roster <r>\``);
 
-/** `--roster <r>`: the `rosters.<r>` block a template verb or `create` uses; absent means the default `roster` block. */
+/** `--roster <r>` as given, validated; null when absent. */
 function resolveRosterArg() {
   if (opts.roster === undefined) return null;
   if (typeof opts.roster !== "string") fail("--roster needs a value: --roster <name>");
@@ -737,13 +1443,29 @@ function resolveRosterArg() {
   if (!v.ok) fail(`--roster: ${v.why}`);
   return opts.roster;
 }
-const rosterArg = resolveRosterArg();
+const rosterFlag = resolveRosterArg();
+/** Which roster block a template verb or `create` uses: `--roster`, else `AH_ROSTER`, else
+    `activeRoster`, else the default block. `create --from` builds from a history entry and ignores
+    it. Every other verb acts on a live team and its recorded roster, and keeps reading only the flag. */
+const selection =
+  (TEMPLATE_VERBS.has(cmd) || cmd === "create") && !(cmd === "create" && typeof opts.from === "string") ? rosterSelection(cwd, { flag: rosterFlag }) : null;
+/** The `rosters.<r>` key the command uses; null means the default `roster` block. */
+const rosterArg = selection ? selection.key : rosterFlag;
+
+/** Refuses a selection that names a roster no level defines; `init` is how one gets made. */
+function refuseMissingSelection() {
+  if (!selection || cmd === "init") return;
+  const problem = rosterSelectionProblem(cwd, selection);
+  if (problem) fail(`${cmd}: ${problem}`);
+}
 
 // `create --from` without an explicit --team defaults the team scope to the entry's own stored
 // alias (spec 0015 §7.2) — the `create` case reassigns both before anything else reads them.
 // Declared before it is resolved: validating it can read the role registry, which reads teamArg.
 let registryCache = null;
 let teamArg = null;
+/** `--team @default` was given: the default team, named as explicitly as any other `--team`. */
+let teamDefaultExplicit = false;
 /** An ad hoc member about to be spawned, so the name check counts it among the new team's members. */
 let adHocForNameCheck = null;
 teamArg = resolveTeamArg();
@@ -768,7 +1490,7 @@ let teamFileDefaulted = false;
 let teamFileUnnamable = null;
 let teamFileUnreadable = null;
 function resolveTeamFileScope() {
-  if (teamArg) {
+  if (teamArg || teamDefaultExplicit) {
     teamFile = teamArg;
     teamFileDefaulted = false;
     return;
@@ -777,11 +1499,15 @@ function resolveTeamFileScope() {
   // `spawn-one` carries no --team, and must join the team its orchestrator made, not start another.
   if (OWNED_TEAM_VERBS.has(cmd)) {
     const owned = ownedLiveTeams(hierarchyDir(cwd));
-    if (owned.length > 1) {
-      fail(`${cmd}: this session owns ${owned.length} live teams (${owned.map((n) => (n === null ? "the default team (team.json)" : `"${n}"`)).join(", ")}) — pass --team <name> to say which`);
+    // A verb that names a member takes its team from the name, among the teams this session owns.
+    const member = owned.length > 1 ? namedMember() : null;
+    const holders = teamsWithMember(hierarchyDir(cwd), owned, member);
+    if (owned.length > 1 && holders.length !== 1) {
+      const why = member ? `; "${member}" is a member of ${holders.length ? "more than one of them" : "none of them"}` : "";
+      fail(`${cmd}: this session owns ${owned.length} live teams (${teamListText(owned)}) — pass --team <name> to say which${why}`);
     }
-    if (owned.length === 1) {
-      teamFile = owned[0];
+    if (owned.length >= 1) {
+      teamFile = owned.length > 1 ? holders[0] : owned[0];
       teamFileDefaulted = false;
       repoBasename = teamPrefix(cwd, teamFile);
       return;
@@ -794,15 +1520,18 @@ function resolveTeamFileScope() {
   teamFileUnreadable = scope.unreadable || null;
 }
 
-/** The live teams this invocation's own pid owns — every team file here, the legacy one included.
-    Empty when no pid resolves: a plain user shell owns nothing. */
+/** The live teams this invocation owns — every team file here, the legacy one included. Empty when
+    no pid resolves: a plain user shell owns nothing. */
 function ownedLiveTeams(dir) {
-  const myPid = ownOrchestratorPid();
-  if (!Number.isInteger(myPid)) return [];
-  return [null, ...listTeamNames(dir)].filter((name) => {
-    const t = readTeam(dir, name);
-    return teamOwnedBy(t, invokerIdentity());
-  });
+  return ownedTeams(dir, invokerIdentity());
+}
+
+/** The existing member a team verb names, if any: the positional of dismiss, untrack, move, deliver
+    and answer, or spawn-one's and spawn-ad-hoc's --member. */
+function namedMember() {
+  if (["dismiss", "untrack", "move", "deliver", "answer"].includes(cmd)) return typeof opts._[0] === "string" ? opts._[0] : null;
+  if (cmd === "spawn-one" || cmd === "spawn-ad-hoc") return typeof opts.member === "string" ? opts.member : null;
+  return null;
 }
 
 /** Where the name a create would use came from: the user's --team (or a history entry's), a legacy
@@ -1204,10 +1933,12 @@ function showNameNote(block) {
   return problem ? { team_name_note: `members are shown under the default team name "${repoBasename}", which a team cannot use (${problem.why}) — create will ask for a name` } : {};
 }
 
-/** `role set`'s assumed prefix: the invoking session's own live team, else the default team's. */
-function roleSetPrefix() {
+/** `role set`'s assumed prefixes: one per live team the invoking session owns when it owns more
+    than one (`team` names it, for the messages), else its own team's or the default team's. */
+function roleSetPrefixes() {
   const owned = ownedLiveTeams(hierarchyDir(cwd));
-  return owned.length ? teamPrefix(cwd, owned[0]) : teamPrefix(cwd, null);
+  if (owned.length > 1) return owned.map((team) => ({ team: teamArgName(team), prefix: teamPrefix(cwd, team) }));
+  return [{ team: null, prefix: owned.length ? teamPrefix(cwd, owned[0]) : teamPrefix(cwd, null) }];
 }
 resolveTeamFileScope();
 
@@ -1217,8 +1948,14 @@ function levelArg() {
   return typeof bare === "string" && ROSTER_LEVELS.includes(bare) ? bare : null;
 }
 
+/** Why `level` isn't a level, or null when it is one. */
+function levelError(level) {
+  return ROSTER_LEVELS.includes(level) ? null : `--level must be one of ${ROSTER_LEVELS.join(", ")}, got ${JSON.stringify(level)}`;
+}
+
 function requireLevel(explicit) {
-  if (!ROSTER_LEVELS.includes(explicit)) fail(`--level must be one of ${ROSTER_LEVELS.join(", ")}, got ${JSON.stringify(explicit)}`);
+  const error = levelError(explicit);
+  if (error) fail(error);
   return explicit;
 }
 
@@ -1233,9 +1970,19 @@ function requireLevel(explicit) {
 // Overridden by an explicit `add --route`.
 const AUTO_INIT_ROUTE = "peer";
 
-function targetLevel({ allowMissing = false, key = rosterArg } = {}) {
+function targetLevel(options = {}) {
+  const target = resolveTargetLevel(options);
+  if (target.error) fail(target.error);
+  return target;
+}
+
+/** targetLevel's answer without exiting: `{level, wasDefaulted, teamKey}`, or `{error}`. */
+function resolveTargetLevel({ allowMissing = false, key = rosterArg } = {}) {
   const explicit = levelArg();
-  if (explicit) return { level: requireLevel(explicit), wasDefaulted: false, teamKey: key };
+  if (explicit) {
+    const error = levelError(explicit);
+    return error ? { error } : { level: explicit, wasDefaulted: false, teamKey: key };
+  }
   const resolved = resolveRoster(cwd, key, repoBasename, registry());
   if (resolved) return { level: resolved.level, wasDefaulted: true, teamKey: key };
   // Spec 0038 §1.1: with nothing resolving anywhere, `add` (only) may bootstrap at the same
@@ -1245,9 +1992,9 @@ function targetLevel({ allowMissing = false, key = rosterArg } = {}) {
     if (findGitRoot(cwd)) return { level: "repo", wasDefaulted: true, teamKey: key };
     // Spec 0038 §1.1: no git root → no auto-create; a bare `add` outside any repo must not write
     // the user-wide file as a side effect. The escape is explicit.
-    fail(`no roster resolves at any level and ${cwd} is not inside a git repo — re-run with --level global to create the user-wide roster (~/.claude/agent-hierarchy.json), or cd into a repo`);
+    return { error: `no roster resolves at any level and ${cwd} is not inside a git repo — re-run with --level global to create the user-wide roster (~/.claude/agent-hierarchy.json), or cd into a repo` };
   }
-  fail("no roster resolves at any level — run `roster.mjs init` first");
+  return { error: "no roster resolves at any level — run `roster.mjs init` first" };
 }
 
 /** Spec 0038 §1.1 "one writer": the roster block `init` creates, shared with `add`'s auto-init so
@@ -1284,17 +2031,28 @@ function containerLabel(teamKey) {
     write that persists the cleaned file can list them under `migrated`. */
 const droppedAtRead = new Map();
 
-function readLevelFile(path) {
-  if (!existsSync(path)) return { version: CONFIG_VERSION };
+/** A level file's data as `{ data, problem }`. `problem` says why a file that exists can't be used
+    (it isn't valid JSON, or isn't a JSON object), and `data` is then the missing-file default. */
+function loadLevelFile(path) {
+  if (!existsSync(path)) return { data: { version: CONFIG_VERSION }, problem: null };
+  let data;
   try {
-    const data = JSON.parse(readFileSync(path, "utf8"));
-    if (!data || typeof data !== "object" || Array.isArray(data)) return { version: CONFIG_VERSION };
-    const dropped = dropNonObjectMembers(data);
-    if (dropped.length) droppedAtRead.set(path, dropped);
-    return data;
-  } catch {
-    return { version: CONFIG_VERSION };
+    data = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    return { data: { version: CONFIG_VERSION }, problem: `is not valid JSON (${e.message})` };
   }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return { data: { version: CONFIG_VERSION }, problem: "is not a JSON object" };
+  const dropped = dropNonObjectMembers(data);
+  if (dropped.length) droppedAtRead.set(path, dropped);
+  return { data, problem: null };
+}
+
+/** A level file's data, for a verb that will write it back. Refuses a file that exists but can't be
+    used, so a hand-edited file with a typo is never overwritten. */
+function readLevelFile(path) {
+  const { data, problem } = loadLevelFile(path);
+  if (problem) fail(`${path} ${problem} — fix or delete it, then re-run; nothing was written`);
+  return data;
 }
 
 /**
@@ -1519,11 +2277,13 @@ function untrackMember(dir, team, target, name) {
     store: `team ${JSON.stringify(team.team_id)}`,
   };
   if (opts["also-config"] === true) {
-    const result = removeConfigMember(target.name, templateKey);
+    const result = removeConfigMember(target.name, templateKey, { sideEffect: true });
     if (!result.removed) {
-      process.stderr.write(
-        `roster.mjs: ah: untracked ${target.name} from team ${team.team_id}, but no roster member named ${target.name} exists at level "${result.level}" — the config was not changed.\n`
-      );
+      if (!result.unusable) {
+        process.stderr.write(
+          `roster.mjs: ah: untracked ${target.name} from team ${team.team_id}, but no roster member named ${target.name} exists at level "${result.level}" — the config was not changed.\n`
+        );
+      }
       dismissOut.config = { removed: false, level: result.level, reason: result.reason };
     } else {
       // §3.5.1: ordinal shift. `result.before`/`result.after` are the config's
@@ -1592,10 +2352,29 @@ function teamTemplateKey(dir) {
   return resolved ? resolved.teamKey : key;
 }
 
-function removeConfigMember(name, key = rosterArg) {
-  const { level, wasDefaulted, teamKey } = targetLevel({ key });
+/** `sideEffect`: the caller has already done its main work, so nothing here may end the run. Whatever
+    keeps the member from being removed — no level resolving, a level file that can't be used, a
+    failed write — gets a warning and `{ removed: false, unusable: true, reason }` instead, and the
+    file is left as it is. */
+function removeConfigMember(name, key = rosterArg, { sideEffect = false } = {}) {
+  const notRemoved = (where, reason) => {
+    process.stderr.write(`roster.mjs: warning — ${name} was not removed from the config: ${reason}\n`);
+    return { ...where, removed: false, unusable: true, reason };
+  };
+  const target = sideEffect ? resolveTargetLevel({ key }) : targetLevel({ key });
+  if (target.error) {
+    // Resolution skips a level file that can't be used, and `init` would refuse it, so name it.
+    const unusable = levelArg() ? [] : [...new Set(Object.values(rosterLevelCandidates(cwd)).flat())].flatMap((p) => {
+      const { problem } = loadLevelFile(p);
+      return problem ? [`${p} ${problem}`] : [];
+    });
+    return notRemoved({ level: null, path: null, wasDefaulted: false }, unusable.length ? `no roster resolves at any level (${unusable.join("; ")})` : target.error);
+  }
+  const { level, wasDefaulted, teamKey } = target;
   const path = rosterLevelPaths(cwd)[level];
-  const data = readLevelFile(path);
+  const loaded = sideEffect ? loadLevelFile(path) : { data: readLevelFile(path), problem: null };
+  if (loaded.problem) return notRemoved({ level, path, wasDefaulted }, `${path} ${loaded.problem}`);
+  const { data } = loaded;
   const container = rosterContainer(data, teamKey);
   if (!container || !Array.isArray(container.members)) {
     return { level, path, wasDefaulted, removed: false, reason: `no ${containerLabel(teamKey)} at level "${level}" (${path}) — run \`roster.mjs init\` first` };
@@ -1608,7 +2387,12 @@ function removeConfigMember(name, key = rosterArg) {
   // no-matches per §3.2's guard, but only `remove --team X --all` may erase the block).
   container.members.splice(idx, 1);
   const after = namedMembers(container.members);
-  writeLevelFile(path, data);
+  try {
+    writeLevelFile(path, data);
+  } catch (err) {
+    if (!sideEffect) throw err;
+    return notRemoved({ level, path, wasDefaulted }, `${path} could not be written (${err.message})`);
+  }
   return { level, path, wasDefaulted, removed: true, idx, before, after, container: containerLabel(teamKey) };
 }
 
@@ -1955,7 +2739,7 @@ function spawnShape(member, transport, agent = null) {
 function registry() {
   if (!registryCache) {
     try {
-      registryCache = resolveConfig(cwd, { team: teamArg });
+      registryCache = resolveConfig(cwd, teamDefaultExplicit ? { defaultTeam: true } : { team: teamArg });
     } catch {
       registryCache = { roles: {}, sources: {}, excludedRoles: [], warnings: [], cwd };
     }
@@ -1970,6 +2754,8 @@ function registry() {
  * custom role is refused; a failing built-in override falls back to the shipped `ah:<role>`.
  */
 function spawnValidation(member) {
+  const packRefusal = packSpawnRefusal(member);
+  if (packRefusal) return { refuse: packRefusal, findings: [] };
   if (resolveKind(member) !== KIND_DEFAULT) return null;
   const reg = registry();
   const entry = reg.roles && reg.roles[member.role];
@@ -1983,6 +2769,31 @@ function spawnValidation(member) {
   }
   if (failed) return { refuse: `role ${member.role}: agent ${entry.agent} fails the ${entry.class} contract, so ${member.name} was not launched:\n${formatFindings(result.findings)}`, findings: result.findings };
   return { agent: entry.agent, findings: result.findings, notice: null };
+}
+
+/**
+ * Why a member whose role is adopted from a pack (a built-in overridden by one included) must not
+ * launch, or null. Never under `bypassPermissions`: the session's permission mode is the only
+ * boundary on what a granted tool does. And while a pipeline run is live here, `spawn-one` and
+ * `spawn-ad-hoc` never start one as a reviewer or designer: those are the run's checks, and a pack
+ * must not supply both the code and its check.
+ */
+function packSpawnRefusal(member) {
+  const reg = registry();
+  const entry = reg.roles && reg.roles[member.role];
+  if (!entry || !entry.from) return null;
+  // An unset mode passes no --permission-mode, so the peer would take the user's settings default,
+  // which can be bypass.
+  const unset = member.autoMode === undefined || member.autoMode === null || member.autoMode === "";
+  if (member.autoMode === "bypassPermissions" || unset) {
+    const why = unset ? "has no auto-mode, so it would run in the default mode of the user's settings, which can be bypassPermissions" : "has auto-mode bypassPermissions";
+    return `role ${member.role} is adopted from a pack (${entry.from}) and a pack role never runs with permission checks off, but ${member.name} ${why} — it was not launched. Give it a mode with \`roster.mjs edit --member ${member.name} --auto-mode <mode>\` (auto is the hands-off one)${cmd === "spawn-ad-hoc" ? ", or pass --auto-mode auto" : ""}.`;
+  }
+  const slot = roleClass(member.role, reg);
+  if ((cmd === "spawn-one" || cmd === "spawn-ad-hoc") && (slot === "review" || slot === "design") && pipelineRunLive(cwd)) {
+    return `role ${member.role} is adopted from a pack (${entry.from}) and is ${slot}-class, and a pipeline run is live in this checkout — its reviewer and designer are always first-party, so ${member.name} was not launched. Use the built-in ${roleLabel(classBuiltin(slot), reg)} for the run.`;
+  }
+  return null;
 }
 
 /** `spawnShape` behind the spawn-seam revalidation; findings and any fallback notice ride on `validation`. */
@@ -2585,10 +3396,11 @@ function refuseLiveDefaultTeam(dir, existing) {
   );
 }
 
-/** Who runs this command, for deciding which team it owns: its pid, and its session id when
-    `--session` supplies one. */
+/** Who runs this command, for deciding which team it owns: its pid while that process is alive
+    (a dead one proves nothing), and its session id when `--session` supplies one. */
 function invokerIdentity() {
-  return { pid: ownOrchestratorPid(), sessionId: typeof opts.session === "string" ? opts.session : null };
+  const pid = ownOrchestratorPid();
+  return { pid: Number.isInteger(pid) && pidAlive(pid) ? pid : null, sessionId: typeof opts.session === "string" ? opts.session : null };
 }
 
 /** The pid this session claims as its own, resolved exactly as the commit path resolves it
@@ -2737,7 +3549,9 @@ function resolveMembersPlan(dir) {
   });
   const layout = createLayout();
   const named = namedRosterKeys(cwd);
-  const result = { level: resolved.level, path: resolved.path, transport, layout, layout_plan: layoutPlan(layout.mode, transport, plan), members: plan, ...(named.length ? { named_rosters: named } : {}), ...renamedField(planned) };
+  // Present only when something is selected, so a plan with nothing selected reads exactly as before.
+  const selected = selection.source === "default" ? {} : { selection: selectionView(selection) };
+  const result = { level: resolved.level, path: resolved.path, ...selected, transport, layout, layout_plan: layoutPlan(layout.mode, transport, plan), members: plan, ...(named.length ? { named_rosters: named } : {}), ...renamedField(planned) };
   return withSkipped(result, skipped.map(skippedEntry));
 }
 
@@ -3696,7 +4510,7 @@ async function createSpawn(dir, withWarnings) {
     `name` == readdirSync's entry basename == the value listTeamNames(dir) returns. Never
     writes. Shared by `teams` and `reap` (spec 0033 §3.2) so the two commands cannot drift
     apart about what a team is. */
-function describeTeamRow(dir, name, myPid) {
+function describeTeamRow(dir, name, invoker) {
   const t = readTeam(dir, name);
   if (!t) return null;
   const pid = t.orchestrator && t.orchestrator.pid;
@@ -3707,14 +4521,14 @@ function describeTeamRow(dir, name, myPid) {
     orchestrator_pid: pid ?? null,
     pid_alive: pidAlive(pid),
     orphaned: teamIsOrphaned(t), // pid null/unresolvable/dead — spec 0033 §3.1
-    own: Number.isInteger(myPid) && pid === myPid,
+    own: teamOwnedBy(t, invoker),
     created: t.created,
   };
 }
 
 /** Every team in this hierarchy dir — default team first, then every named team (spec 0033 §3.2). */
-function allTeamRows(dir, myPid) {
-  return [describeTeamRow(dir, null, myPid), ...listTeamNames(dir).map((name) => describeTeamRow(dir, name, myPid))].filter(Boolean);
+function allTeamRows(dir, invoker) {
+  return [describeTeamRow(dir, null, invoker), ...listTeamNames(dir).map((name) => describeTeamRow(dir, name, invoker))].filter(Boolean);
 }
 
 // ---------------------------------------------------------------- streams
@@ -4384,13 +5198,14 @@ function refuseRosterEditWhileOwningTeam(command) {
 
 try {
   refuseRosterEditWhileOwningTeam(cmd);
+  refuseMissingSelection();
   switch (cmd) {
     case "show": {
       const explicit = levelArg();
       if (explicit) {
         const level = requireLevel(explicit);
         const path = rosterLevelPaths(cwd)[level];
-        const data = readLevelFile(path);
+        const { data } = loadLevelFile(path);
         const container = rosterContainer(data, rosterArg);
         const resolved = resolveRoster(cwd, rosterArg, repoBasename, registry());
         const shown = container && Array.isArray(container.members) ? { route: container.route, members: namedMembers(container.members) } : null;
@@ -4401,15 +5216,17 @@ try {
           roster: shown,
           shadowed: resolved && resolved.level !== level ? `shadowed by ${resolved.level}` : null,
           ...showNameNote(shown),
+          selection: selectionView(selection),
         });
       } else {
         const resolved = resolveRoster(cwd, rosterArg, repoBasename, registry());
         out(
           resolved
-            ? { ...resolved, ...showNameNote(resolved) }
+            ? { ...resolved, ...showNameNote(resolved), selection: selectionView(selection) }
             : {
                 roster: null,
                 hint: "no roster configured — spawn ad hoc with: roster.mjs spawn-ad-hoc <role> [--kind K] [--route pane|peer] --cwd <abs cwd>",
+                selection: selectionView(selection),
               }
         );
       }
@@ -4417,6 +5234,7 @@ try {
     }
 
     case "init": {
+      if (rosterFlag === DEFAULT_ROSTER) fail("init --roster default: `default` means the unnamed `roster` block, so it can't be a roster name — run init without --roster for the default block, or pick another name");
       const level = requireLevel(levelArg() || fail("init needs --level global|repo|repo-user (or the level as the first word)"));
       const route = opts.route;
       if (!ROSTER_ROUTE_VALUES.includes(route)) fail(`--route must be "peer" or "subagent", got ${JSON.stringify(route)}`);
@@ -4703,7 +5521,7 @@ try {
       // Spec 0015 §7.2: --from without an explicit --team targets the entry's own alias (or the
       // default team when the alias is null) — an explicit --team still wins. Must happen before
       // anything below reads teamArg/repoBasename (naming, file target, history upsert alias).
-      if (typeof opts.from === "string" && !teamArg) {
+      if (typeof opts.from === "string" && !teamArg && !teamDefaultExplicit) {
         const entry = resolveHistoryEntry(dir);
         teamArg = entry.alias || null;
         repoBasename = teamPrefix(cwd, teamArg);
@@ -4717,7 +5535,11 @@ try {
       if (rosterArg) {
         const named = resolveRoster(cwd, rosterArg, repoBasename, registry());
         if (!named || named.teamKey !== rosterArg) {
-          fail(`create --roster ${rosterArg}: no rosters.${rosterArg} block with members at any level — nothing was launched or written. Define it with \`roster.mjs init --roster ${rosterArg}\` and \`roster.mjs add --roster ${rosterArg} --role <R>\``);
+          const selected =
+            selection.source === "flag"
+              ? `--roster ${rosterArg}`
+              : `(roster ${rosterArg}, selected by ${selection.source === "env" ? "AH_ROSTER" : `activeRoster at ${selection.level} in ${selection.path}`})`;
+          fail(`create ${selected}: no rosters.${rosterArg} block with members at any level — nothing was launched or written. Define it with \`roster.mjs init --roster ${rosterArg}\` and \`roster.mjs add --roster ${rosterArg} --role <R>\``);
         }
       }
       // --team once also picked `rosters.<team>`; it now names only the team, so a block that would
@@ -5115,7 +5937,7 @@ try {
           const templateKey = opts["also-config"] === true ? teamTemplateKey(dir) : null;
           if (writeTeamRows(dir, team, team.members.filter((m) => m.name !== name))) dismissClose.team_removed = true;
           dismissClose.untracked = true;
-          if (opts["also-config"] === true) dismissClose.config = removeConfigMember(target.name, templateKey);
+          if (opts["also-config"] === true) dismissClose.config = removeConfigMember(target.name, templateKey, { sideEffect: true });
         }
         out(dismissClose);
         break;
@@ -5903,8 +6725,7 @@ try {
       // Spec 0011 §5.4: read-only inventory of every team file in this hierarchy dir — otherwise a
       // stale or a sibling orchestrator's team is invisible. Never writes.
       const dir = hierarchyDir(cwd);
-      const myPid = typeof opts["orchestrator-pid"] === "string" ? Number(opts["orchestrator-pid"]) : Number(process.env.CLAUDE_PID);
-      const rows = allTeamRows(dir, myPid);
+      const rows = allTeamRows(dir, invokerIdentity());
       // Spec 0036 §3.6 (F4 fix): a misplaced row is attributed to a specific member ONLY when its
       // own `team` matches this team's identity AND its role names exactly one peer member of
       // THIS team — role alone is not unique across DIFFERENT teams, and §3.5's action on a wrong
@@ -5983,16 +6804,19 @@ try {
       // Spec 0044 §1.6: the pane this session sits in is authoritative — the orchestrator wrote it
       // into the member row — so ask that before falling back to the role scan, which under §1.1's
       // concurrent teams is ambiguous far more often than it used to be.
-      const resolved = attributeSessionTeam(dir, existing.role, {
-        explicitTeam: teamArg,
-        paneId: sessionPaneId(existing),
-        homes: [dir, mainHierarchyDir(cwd)],
-      });
+      const defaultTeam = teamDefaultExplicit ? readTeam(dir, null) : null;
+      const resolved = teamDefaultExplicit
+        ? defaultTeam && { teamName: null, team: defaultTeam }
+        : attributeSessionTeam(dir, existing.role, {
+            explicitTeam: teamArg,
+            paneId: sessionPaneId(existing),
+            homes: [dir, mainHierarchyDir(cwd)],
+          });
       // G8: an EXPLICIT --team that resolves to nothing is a typo, not a legitimate absence —
       // 0032 §3.4b's same precedent (add --team X refuses a nonexistent container) rather than
       // silently reporting misplaced:false forever. An omitted --team still skips silently
       // (§3.2 point 3), unaffected.
-      if (teamArg && !resolved) fail(`checkin: no such team "${teamArg}"`);
+      if ((teamArg || teamDefaultExplicit) && !resolved) fail(`checkin: no such team "${teamArgName(teamArg)}"`);
       const team = resolved && resolved.team;
       const expectedRoot = (team && team.expected_root) || null;
       const observed = realCwd(cwd);
@@ -6043,7 +6867,7 @@ try {
       // (`env`), or the member row holding its pane (`pane`). A rejected AH_TEAM_FILE is never
       // followed; it is reported beside the real outcome, so a bad launch is diagnosable without
       // hiding what the pane lookup found.
-      const env = teamArg ? null : envTeamFile([dir, mainHierarchyDir(cwd)]);
+      const env = teamArg || teamDefaultExplicit ? null : envTeamFile([dir, mainHierarchyDir(cwd)]);
       const envInvalid = env && env.invalid ? { env_team_invalid: { value: env.value, kind: env.kind, why: env.invalid } } : {};
       const empty = (reason) => ({ member: null, team: null, team_file: null, orchestrator: null, last_observed_brief, reason, answered_by: null, ...envInvalid });
       const describe = (home, teamName, team, member, answeredBy) => {
@@ -6084,7 +6908,7 @@ try {
       // by an orchestrator in the main checkout — so that dir is searched too.
       const records = [dir, mainHierarchyDir(cwd)]
         .filter(Boolean)
-        .flatMap((home) => (teamArg ? [teamArg] : [null, ...listTeamNames(home)]).map((teamName) => ({ home, teamName, team: readTeam(home, teamName) })))
+        .flatMap((home) => (teamArg || teamDefaultExplicit ? [teamArg] : [null, ...listTeamNames(home)]).map((teamName) => ({ home, teamName, team: readTeam(home, teamName) })))
         .filter((r) => r.team);
       if (records.length === 0) {
         out(empty("no-team"));
@@ -6162,13 +6986,40 @@ try {
     case "role": {
       for (const key of Object.keys(opts)) {
         if (key === "_") continue;
-        if (!ROLE_FLAGS.has(key)) fail(`role: unrecognized flag --${key} (use --class, --agent, --label, --description, --routes, --model, --dispatch, --level, --scaffold, --dry-run, --json, --team, --cwd)`);
+        if (!ROLE_FLAGS.has(key)) fail(`role: unrecognized flag --${key} (use --class, --agent, --label, --description, --routes, --model, --dispatch, --level, --scaffold, --from, --pin, --dry-run, --json, --team, --cwd)`);
       }
       const sub = opts._[0];
       if (sub === "list") roleList();
       else if (sub === "set") out(roleSet(opts._[1]));
       else if (sub === "remove") out(roleRemove(opts._[1]));
-      else fail("usage: roster.mjs role list [--json] | role set <name> [--class C] [--agent A] [--label L] [--description D] [--routes R] [--model M] [--dispatch peer|model] [--level L] [--scaffold repo|user] [--dry-run] | role remove <name> [--level L]  (all with --cwd <abs cwd>)");
+      else if (sub === "trust") out(roleTrust(opts._[1]));
+      else fail("usage: roster.mjs role list [--json] | role set <name> [--class C] [--agent A] [--label L] [--description D] [--routes R] [--model M] [--dispatch peer|model] [--level L] [--scaffold repo|user] [--dry-run] | role set <name> --from <plugin>@<marketplace>:<role> [--label L] [--description D] [--routes R] [--model M] [--dispatch …] [--level L] (--dry-run | --pin sha256:…) | role trust <name> [--level L] (--dry-run | --pin sha256:…) | role remove <name> [--level L]  (all with --cwd <abs cwd>)");
+      break;
+    }
+
+    case "pack": {
+      const allowed = new Set(["json", "path", "cwd"]);
+      for (const key of Object.keys(opts)) {
+        if (key !== "_" && !allowed.has(key)) fail(`pack: unrecognized flag --${key} (use --json, --path, --cwd)`);
+      }
+      const sub = opts._[0];
+      if (sub === "list") packList();
+      else if (sub === "show") packShow(opts._[1]);
+      else fail("usage: roster.mjs pack list [--json] | pack show <plugin>[@<marketplace>] [--json] | pack show --path <dir> [--json]  (all with --cwd <abs cwd>)");
+      break;
+    }
+
+    case "roster": {
+      const sub = opts._[0];
+      const allowed = ROSTER_SUB_FLAGS[sub];
+      if (!allowed) fail("usage: roster.mjs roster list [--json] | roster copy <src> <dst> [--level L] [--dry-run] | roster delete <name> [--level L] [--dry-run] | roster use <name>|default [--level L] | roster use --clear [--level L]  (all with --cwd <abs cwd>)");
+      for (const key of Object.keys(opts)) {
+        if (key !== "_" && !allowed.has(key)) fail(`roster ${sub}: unrecognized flag --${key} (use ${[...allowed].map((k) => `--${k}`).join(", ")})`);
+      }
+      if (sub === "list") rosterList();
+      else if (sub === "copy") rosterCopy(opts._[1], opts._[2]);
+      else if (sub === "delete") rosterDelete(opts._[1]);
+      else rosterUse(opts._[1]);
       break;
     }
 
@@ -6180,7 +7031,7 @@ try {
     }
 
     default:
-      fail(`usage: roster.mjs show|init|add|edit|remove|create|next-split|layout-splits|disband|resync|move|spawn-one|spawn-ad-hoc|adopt|untrack|teams|reap|history|checkin|whoami|doctor [--commit] [--level global|repo|repo-user] [--team <name>] [--cwd <path>]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
+      fail(`usage: roster.mjs show|init|add|edit|remove|roster|role|pack|create|next-split|layout-splits|disband|resync|move|spawn-one|spawn-ad-hoc|adopt|untrack|teams|reap|history|checkin|whoami|doctor [--commit] [--level global|repo|repo-user] [--team <name>] [--cwd <path>]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
   }
 } catch (err) {
   fail(err && err.message ? err.message : String(err));

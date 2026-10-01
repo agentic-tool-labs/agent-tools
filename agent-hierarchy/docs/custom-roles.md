@@ -224,6 +224,213 @@ once and answer its question.
   layout is not offered or sent (it fails closed): the brief comes back
   `blocked` with `harness-prompt` and no options, and you answer in the pane.
 
+## 6. Role packs
+
+A role pack is how you share roles with someone else. It is an ordinary
+Claude Code plugin that also has an `ah-roles.json` at its root. Claude Code
+installs, updates and removes it; ah finds it and lets you adopt its roles
+one at a time. Roles only you use can stay where they are, in
+`~/.claude/agents/` or a repo's `.claude/agents/`.
+
+### The format
+
+```json
+{
+  "version": 1,
+  "roles": {
+    "godot-implementor": {
+      "class": "implement",
+      "agent": "godot-implementor",
+      "label": "Godot Implementor",
+      "description": "Builds Godot 4 features in GDScript",
+      "routes": "Godot scenes, GDScript and shaders",
+      "model": "opus"
+    }
+  }
+}
+```
+
+- `version` must be 1, or the whole pack is unreadable.
+- Each role takes the custom-role fields: `class` (required), `agent`,
+  `label`, `description`, `routes`, `model` and `dispatch`. They follow the
+  same rules as your own rows, and built-in names are refused. `peer` isn't
+  allowed, because it is a local setting. Unknown keys are warned about and
+  ignored.
+- `agent` names a file in the plugin, `agents/<agent>.md`, and defaults to the
+  role's name. It can't point at another plugin's agent or at a path.
+- No hidden text: control characters other than newline and tab, invisible
+  formatting characters (bidirectional controls, zero-width characters),
+  Unicode tag characters, variation selectors, the line and paragraph
+  separators, and invisible filler characters are refused, in the fields and
+  in the agent file; the finding names the character, its line and column.
+  That refuses an emoji written with a variation selector (⚠️, say): write
+  the plain character instead. The agent file must be valid UTF-8.
+- A pack agent's frontmatter may hold only `name`, `description`, `model`,
+  `tools`, `disallowedTools`, `color`, `effort` and `maxTurns`, each once, as a
+  plain unquoted key. `tools` is required, and every tool entry is a plain
+  name (no quotes, `[…]` list, or `Tool(scope)` form). A value continues onto
+  more lines only as `- item` lines under an empty `tools` or
+  `disallowedTools`, all at the first item's indentation, or as a `|` or `>`
+  block under `description`, whose lines are indented at least as far as its
+  first. A value holding `: `, or starting with a YAML indicator such as `@`,
+  `!`, `[` or `- `, must be quoted, and a quoted value can't hold an escape
+  (`\` or `''`). A value or tool entry that YAML reads as null or a boolean
+  (`null`, `~`, `true`, `false`, `yes`, `no`, `on`, `off`, `y`, `n`, in any
+  case) is refused: `tools: null` would mean every tool. `maxTurns` must be a
+  plain decimal integer. Outside the description's text the frontmatter is
+  printable ASCII: no tab, no other kind of space, no accented letter in a
+  name. The description may hold other characters, but not a space other
+  than the ordinary one, a private-use character, U+FFFE or U+FFFF. Tabs in the indentation, `#` comments, and anything else —
+  `permissionMode`, `hooks`, MCP server settings, `skills`, `memory`, a YAML
+  anchor — are errors. ah reads the file this strictly so that it sees exactly
+  what YAML would, tools included. Your own agent files aren't held to this.
+- No other agent file in the plugin may take the role's agent name, because
+  Claude Code registers a plugin agent under its frontmatter `name`, not its
+  file name. Every `.md` under `agents/` (at any depth) and under the paths in
+  `plugin.json`'s `agents` is checked. One that declares the role's agent
+  name, or declares none and is named `<agent>.md` (either ignoring case), or
+  whose name ah can't be
+  sure of (a quoted key with an escape, a YAML tag, anchor, alias or merge
+  key, more than one `name`), makes the role unavailable (`pack-invalid`), and
+  `pack show` marks it as claiming the role. An `agents` path outside the
+  plugin, or an `agents` value that isn't a path or a list of paths, does the
+  same for every role. Only these files' names are read; they aren't held to
+  the rules above.
+
+### Writing a pack
+
+A pack is a plugin directory with this shape:
+
+    my-pack/
+      .claude-plugin/plugin.json    # name, version, description (ah doesn't require it)
+      ah-roles.json                 # the roles, as above
+      agents/godot-implementor.md   # one file per role: agents/<agent>.md
+
+ah finds a pack through `~/.claude/plugins/installed_plugins.json`, so a pack is whatever
+Claude Code has installed that holds an `ah-roles.json`; a plugin directory that isn't installed
+can be checked, not adopted (`roster.mjs pack show --path <dir>`). The agent ref at run time is
+`<plugin>:<agent>`, with the plugin name from the install record.
+
+An agent file that passes:
+
+```markdown
+---
+name: godot-implementor
+description: Builds Godot 4 features in GDScript
+model: opus
+tools: Read, Grep, Glob, Edit, Write, Bash
+---
+You build Godot 4 features …
+```
+
+- `name` is the agent's name, equal to `agent` in the manifest (the class contract checks it).
+- `tools` is required and is a plain list (`Read, Grep` on one line, or `- item` lines). There is
+  no `*`, no `Bash(git:*)` scope, and no quoting. Leaving it out would give the agent every
+  tool, MCP tools included, so it is an error. A review-class agent can't hold `Edit`, `Write`
+  or `NotebookEdit`.
+- `permissionMode`, `hooks`, MCP server settings, `skills`, `memory` and every other
+  frontmatter key Claude Code knows are refused in a pack agent. Put what you need in the prompt body.
+- Check it before you publish: `roster.mjs pack show --path <dir>` runs the manifest, the class
+  contract and the frontmatter rules for every role and prints each finding with the line.
+
+Every change to any file in the plugin, yours or a version bump, makes every adopted role
+`pack-changed` for the people who have it, so they have to look at the change and trust it
+again. Keep packs small, and keep hooks and MCP servers out of them: users see everything the
+plugin carries before they install it, under "also in this plugin". What each `pack-…` reason
+means, and what the user does about it, is in
+[troubleshooting.md](./troubleshooting.md#role-packs).
+
+### Installing, adopting and trusting
+
+`/ah:agent-role install <source>` takes a git URL, `owner/repo` or a local
+directory. It shows you the pack's roles and everything else the plugin
+carries before anything is installed, installs it, checks that what got
+installed is what you reviewed, and offers its roles.
+
+Nothing from a pack routes work, dispatches or spawns until you adopt it:
+
+    roster.mjs role set <name> --from <plugin>@<marketplace>:<role> --dry-run
+
+The dry run prints the pack's fields exactly as they will reach your
+sessions, the agent's tools with the risky ones flagged, what else the plugin
+carries, and a pin. You commit with that pin (`--pin sha256:…`), and approve
+it in Claude Code's own prompt. The row keeps only `from`, `pin` and your own
+fields; everything else is read from the pack each time. You pick the local
+name, so two packs can offer the same one. A built-in's name replaces that
+built-in's agent, if the pack role has the built-in's class.
+
+The pin covers the whole plugin, not just the agent file: its hooks,
+scripts and skills too. If anything in the plugin changes, even after a
+plain `claude plugin update`, every role adopted from it becomes unavailable
+(`pack-changed`) until you look at the change:
+
+    roster.mjs role trust <name> --dry-run
+
+shows the field changes, a diff of the agent file, and every file added,
+removed or changed since you trusted it. Commit it with the pin it prints.
+ah keeps a copy of what you trusted in `~/.claude/agent-hierarchy/trusted/`,
+and a role is available only when this machine has one. So a repo-level row
+committed by someone else stays unavailable (`pack-untrusted-here`) until you
+trust it yourself.
+
+`/ah:agent-role update <plugin>` and `uninstall <plugin>` drive Claude
+Code's own plugin commands and walk you through re-trusting or removing the
+adopted roles. `roster.mjs pack list` and `pack show` inspect packs at any
+time.
+
+### Pipeline runs
+
+`/ah:pipeline` never merges: it pushes branches and opens draft PRs, and a
+person merges them, relying on the Reviewer's verdict. So a pack role can
+implement work in an unattended run (its dry run says so), but it never fills
+the reviewer or designer slot there: those stay first-party, and while a run
+is live the spawn verbs refuse a pack reviewer or designer. If the built-in
+Reviewer or Architect itself is overridden by a pack role, the run halts
+before it starts.
+
+ah never launches or dispatches a pack role with permission checks off. The
+spawn verbs refuse a pack role's member whose auto mode is
+`bypassPermissions`, or unset (it would take your settings' default mode,
+which can be bypass); give it one with `roster.mjs edit --member <name>
+--auto-mode auto`. And a session in bypass mode can't dispatch a pack role's
+agent as a subagent. What remains: you can switch a running pane into bypass
+yourself, or launch `claude --agent <plugin>:<agent>` in bypass outside ah;
+and every agent in an installed plugin is a subagent type in every session,
+adopted or not, which is Claude Code's side.
+
+### What this does and doesn't protect
+
+- Installing a plugin is Claude Code's trust decision. Once installed, its
+  agents are available in every session and its hooks and MCP servers run in
+  every session, whatever ah does. That's why ah shows all of it before
+  install, and why packs that carry only roles are best.
+- Nothing runs in the hierarchy until you adopt it, one role at a time.
+- The pin is a tripwire, not a gate: it makes a changed role unavailable
+  until you review it, but it can't stop the plugin's own hooks or MCP
+  servers from running the new content. It covers the plugin's files as they
+  sit on disk, and nothing the role reaches while it runs: not the network
+  (for a role with Bash or WebFetch), not other files, and not a `.git`
+  directory inside the plugin, which the pin skips because a fetch rewrites
+  it; a role could read other versions out of it. `pack show` lists a `.git`
+  directory, so you see it before install.
+- Adopting and trusting need the exact pin, and your approval in your own
+  session; role, peer and subagent sessions and pipeline runs are refused.
+  A command that isn't one plain ah command is treated as a trust commit
+  when the gate can read the words, and `roster.mjs` itself refuses a commit
+  from a team member or during a pipeline run, unless the command clears
+  `AH_TEAM_FILE` or runs from outside the checkout. What remains: any
+  session in a mode that runs commands without asking could hide the words
+  from the gate — a top-level session, a subagent, a team member that also
+  clears `AH_TEAM_FILE`, a pipeline run that also leaves the checkout — and
+  a session with Bash could still edit the config or the stored copies by
+  hand.
+- Tool limits are role discipline, not a sandbox: a reviewer with Bash can
+  still write files. The real boundary is the session's permission mode,
+  which is why a pack role never runs with permission checks off.
+- The fields that reach every session's context keep the one-line,
+  160-character, no-backtick limits, and you see them verbatim before you
+  trust them.
+
 ## Where to go next
 
 - [cli-tools.md](./cli-tools.md) — every verb and flag.

@@ -1,0 +1,42 @@
+0 {
+  "close": [
+    {
+      "role": "reviewer",
+      "name": "foo-reviewer",
+      "route": "peer",
+      "transport": "terminal",
+      "command": null
+    },
+    {
+      "role": "architect",
+      "name": "foo-architect",
+      "route": "peer",
+      "transport": "terminal",
+      "command": null
+    },
+    {
+      "role": "implementor",
+      "name": "foo-coder",
+      "route": "pane",
+      "transport": "terminal",
+      "transport_id": "p-foo",
+      "command": null
+    }
+  ],
+  "close_token": "1a131e948a0a43a1",
+  "next": "node <PLUGIN>/hooks/roster.mjs disband --close --confirm --plan-token 1a131e948a0a43a1 --cwd <SANDBOX>/myrepo",
+  "sources": {
+    "team": {
+      "file": "<SANDBOX>/hier/teams/foo.json",
+      "members": 3
+    },
+    "peers": {
+      "live": 1
+    },
+    "herdr": {
+      "ok": false,
+      "reason": "team transport is not herdr",
+      "prefix": "foo"
+    }
+  }
+}

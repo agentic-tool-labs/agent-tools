@@ -1,0 +1,6 @@
+0 {
+  "team": "foo",
+  "transport": "terminal",
+  "streams": [],
+  "degraded": "no-tabs"
+}

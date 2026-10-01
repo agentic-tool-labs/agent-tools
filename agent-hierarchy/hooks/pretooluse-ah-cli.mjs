@@ -27,7 +27,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { logHookError, readHookInput } from "./lib-config.mjs";
-import { isCloseCommand, parseAhCommand, scriptUnderRoot } from "./lib-ah-cli.mjs";
+import { isCloseCommand, isTrustCommit, parseAhCommand, scriptUnderRoot } from "./lib-ah-cli.mjs";
 
 const OWN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -38,6 +38,8 @@ try {
   const parsed = parseAhCommand(toolInput.command);
   if (!parsed) process.exit(0);
   if (isCloseCommand(parsed)) process.exit(0);
+  // A role-pack trust commit gets the roster skill gate's `ask` (or `deny`) alone.
+  if (isTrustCommit(parsed)) process.exit(0);
   if (!scriptUnderRoot(parsed.scriptPath, OWN_ROOT)) process.exit(0);
 
   process.stdout.write(

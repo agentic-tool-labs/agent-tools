@@ -4,7 +4,7 @@
  * gate both read targets through here, so the scope rule and the command matcher exist once.
  */
 
-import { hierarchyDir, KIND_DEFAULT, peerName, resolvedPeerTargets, resolveKind, teamPrefix } from "./lib-config.mjs";
+import { hierarchyDir, KIND_DEFAULT, ownedTeamConfigs, peerName, resolvedPeerTargets, resolveKind, teamPrefix } from "./lib-config.mjs";
 import { isGatedPeerTarget } from "./lib-gate.mjs";
 import { stripRef } from "./lib-peer.mjs";
 import { listTeamNames, readTeam, teamMemberByName } from "./lib-roster.mjs";
@@ -74,33 +74,42 @@ export function herdrInputCalls(command) {
   return Object.entries(HERDR_INPUT_VERBS).flatMap(([group, verbs]) => herdrCalls(command, group, verbs));
 }
 
+/** Per resolved config, its owned teams' configs: a gate asks about every word of one command. */
+const ownedConfigsCache = new WeakMap();
+
 /**
  * The hierarchy role a peer or agent name stands for, among `roles`, as `{role, kind, member}`, or
  * null. A name is a role's when it is `<prefix>-<role>` or `<prefix>-<role>-<n>` on a gated prefix
  * (which needs no team file: `create --spawn` launches members before `--commit` records them), one
  * of the role's configured peer targets, or the recorded name of a member in scope, or the pane id
  * such a member is recorded in (`transport_id`), since Herdr's input verbs also take a pane id. The
- * scope is the session's own team when it resolves one, else the default team and every named team,
- * and the gated prefixes follow it. `kind` is the recorded member's, else that of the role's first
- * non-claude roster row, else claude.
+ * scope is every team the session owns when it owns more than one, else its own team when it
+ * resolves one, else the default team and every named team, and the gated prefixes follow it.
+ * `kind` is the recorded member's, else that of the role's first non-claude roster row in scope,
+ * else claude.
  */
 export function gateTarget(toRaw, { resolved, cwd, roles }) {
   if (typeof toRaw !== "string" || !toRaw.trim()) return null;
   const to = stripRef(toRaw.trim());
   const dir = hierarchyDir(cwd);
   const repoBasename = teamPrefix(cwd, resolved.team);
+  if (!ownedConfigsCache.has(resolved)) ownedConfigsCache.set(resolved, ownedTeamConfigs(resolved));
+  const owned = ownedConfigsCache.get(resolved);
   // A session that could not resolve its own team cannot compute the one correct prefix, so when
   // named teams exist every team's prefix is tested rather than only the default one.
-  const teamNames = resolved.team === null ? listTeamNames(dir) : [];
-  const gatedPrefixes = teamNames.length > 0 ? [repoBasename, ...teamNames.map((team) => teamPrefix(cwd, team))] : [repoBasename];
+  const teamNames = !owned && resolved.team === null ? listTeamNames(dir) : [];
+  const gatedPrefixes = owned
+    ? owned.map(({ team }) => teamPrefix(cwd, team))
+    : teamNames.length > 0 ? [repoBasename, ...teamNames.map((team) => teamPrefix(cwd, team))] : [repoBasename];
+  const targetPrefixes = owned ? gatedPrefixes : [repoBasename];
   const suffixed = (name) => to.startsWith(`${name}-`) && /^\d+$/.test(to.slice(name.length + 1));
   const byName =
     roles.find(
       (r) =>
         gatedPrefixes.some((prefix) => isGatedPeerTarget(toRaw, peerName(prefix, r)) || suffixed(peerName(prefix, r))) ||
-        resolvedPeerTargets(r, resolved.roles[r], repoBasename).some((name) => isGatedPeerTarget(toRaw, name))
+        targetPrefixes.some((prefix) => resolvedPeerTargets(r, resolved.roles[r], prefix).some((name) => isGatedPeerTarget(toRaw, name)))
     ) || null;
-  const teams = resolved.team !== null ? [resolved.team] : [null, ...teamNames];
+  const teams = owned ? owned.map(({ team }) => team) : resolved.team !== null ? [resolved.team] : [null, ...teamNames];
   const byPane = (team) => {
     const t = readTeam(dir, team);
     return t && Array.isArray(t.members) ? t.members.find((m) => m && typeof m === "object" && m.transport_id === to) || null : null;
@@ -109,7 +118,8 @@ export function gateTarget(toRaw, { resolved, cwd, roles }) {
   const role = byName || (member ? member.role : null);
   if (!role) return null;
   if (member && member.role === role) return { role, kind: resolveKind(member), member };
-  const rows = resolved.roster && Array.isArray(resolved.roster.members) ? resolved.roster.members : [];
+  const rosterRows = (r) => (r.roster && Array.isArray(r.roster.members) ? r.roster.members : []);
+  const rows = owned ? owned.flatMap((o) => rosterRows(o.resolved)) : rosterRows(resolved);
   const foreign = rows.find((m) => m && m.role === role && resolveKind(m) !== KIND_DEFAULT);
   return { role, kind: foreign ? resolveKind(foreign) : KIND_DEFAULT, member: null };
 }
