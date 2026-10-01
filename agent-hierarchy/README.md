@@ -376,7 +376,7 @@ under [docs/specs/](./docs/specs/). Good places to start:
 - **0.107.0** role packs: roles shipped in a plugin, adopted one at a time behind a pin.
 - **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
 - **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
-- **0.109.0** `/pipeline` decides safe questions for you and parks dangerous ones: [Decisions made for you](#decisions-made-for-you). Plan runs get a default branch.
+- **0.109.0** `/pipeline` decides safe questions for you and parks dangerous ones: [Decisions made for you](#decisions-made-for-you). Plan runs get a default branch. Issue runs can merge a PR for you, one approving click each, if you opt in: [Merging](#merging-only-if-you-opt-in).
 
 The installed version is in `.claude-plugin/plugin.json`. Each feature below
 is complete enough to use; the linked page has the detail.
@@ -454,7 +454,8 @@ After the first notice (branch, route, permission mode, secret scanner, and who
 decides questions for you) it only interrupts you when something needs a
 person: a round cap, a real blocker, an Ultra-Advisor escalation, a red build,
 a secret-scan finding, a halted push or a question parked for you (see
-[Decisions made for you](#decisions-made-for-you)). **It never merges.** Issue runs push an `ah/issue-<N>` branch per
+[Decisions made for you](#decisions-made-for-you)). **It never merges unless you opt in** (see
+[Merging](#merging-only-if-you-opt-in)). Issue runs push an `ah/issue-<N>` branch per
 issue (dependent issues stack on the branch they depend on) and open a draft
 PR that says `Refs #N` or `Closes #N`; you review and merge. Before every push
 it scans the patch for secrets, with gitleaks if installed, otherwise with the
@@ -538,14 +539,65 @@ runs also need `gh` installed and logged in to github.com, a GitHub `origin`,
 and a `.claude/ah-conventions.json` that sets `issues.trigger_label` (plus
 `trusted_actors` for an organisation's repo). The same file can switch on the
 push guard, which refuses force pushes, protected branches, other remotes and
-`--no-verify`. Most of the rules above, including never merging, draft PRs, the round caps
-and the secret scan, are the run's own instructions, not hook guarantees;
-only the push guard is enforced by a hook, and it matches command text, so
-`gh` misuse isn't covered. Run state lives in the gitignored `.claude/hierarchy/`; a stale
+`--no-verify`. Most of the rules above, including draft PRs, the round caps
+and the secret scan, are the run's own instructions, not hook guarantees.
+What a hook does enforce is the push guard and the merge rules in
+[Merging](#merging-only-if-you-opt-in); both match command text, so they are
+a speed bump, not a sandbox. Run state lives in the gitignored `.claude/hierarchy/`; a stale
 open run anchor there makes the next run halt. Everything the conventions file
 accepts is in [docs/pipeline-conventions.md](./docs/pipeline-conventions.md);
 the full run procedure is
 [skills/autonomous-pipeline/SKILL.md](./skills/autonomous-pipeline/SKILL.md).
+
+### Merging, only if you opt in
+
+By default a run never merges: a person does. You can let an issue run do the
+merging for you, with your approval on every merge.
+
+- **Opting in.** Pass `--auto-merge`, or say so in plain words ("with
+  auto-merge", "and merge them once I approve"). Otherwise the run asks once at
+  the start, with "No" as the default. The answer is for that run only; nothing
+  remembers it, and no config key turns it on. A plan run refuses it, because a
+  plan run opens no PR. The start notice says whether auto-merge is on.
+- **One click per merge.** At the end of the run, for each PR that is ready
+  (signed off, checks passed, nothing requesting changes, no unresolved review
+  threads, head unchanged), the run offers `gh pr merge <N>
+  --match-head-commit <sha>` in a permission prompt, and your click is the
+  approval. The merge is pinned to that exact commit, so a PR that changed
+  since the run looked is refused. Decline and nothing runs; a merge GitHub
+  refuses is reported with gh's own message and not retried. The prompt only
+  appears in permission mode `default`, `auto` or `acceptEdits`; under bypass
+  or don't-ask modes the merge is refused, because the prompt might never reach
+  you.
+- **Merging is never decided for you.** It isn't one of the questions in
+  [Decisions made for you](#decisions-made-for-you), and it isn't logged as a
+  decision. The final report lists **Merges performed under your
+  authorisation** and **Not merged**, each PR with the reason. Check that
+  report against GitHub: the log says a merge command ran, not that it merged.
+- **What the merge guard blocks.** While a run is open, a hook refuses `gh pr
+  merge` in any other form, `gh pr review --approve`, `gh pr ready` outside the
+  pinned form, `--auto`, `--disable-auto` and `--admin`, `gh api` calls that
+  merge, approve or write refs, and the GitHub tools that merge, approve or
+  mark a PR ready. A refusal halts the run. It never blocks `git` commands, and
+  it does nothing outside a run. Rule details:
+  [docs/cli-tools.md](./docs/cli-tools.md).
+
+**Honest limits.** The merge guard reads command text, so it stops a run that
+follows its instructions from merging by mistake, and nothing more. `curl`,
+scripts, `gh` aliases and extensions, and `xargs` or `find -exec` get past it,
+and pushes aren't covered by it at all. The real boundary is on GitHub:
+
+- **Pushes.** Branch protection or a ruleset on `main` that requires a pull
+  request, with no bypass for the run's token, stops direct pushes by any
+  route. The run uses your own token, so a bypass you have, it has: for classic
+  branch protection turn on "Do not allow bypassing the above settings", and for
+  a ruleset keep your own role off the bypass list. Every run's start notice
+  carries a read-only line, "Branch protection on `main`: on", "on, but …" with
+  the reason, "OFF", or "unknown", and the run goes ahead whatever it says.
+- **Merges.** GitHub can't tell your click from the run's call, because both
+  use your token. Merge approval is a hard wall only if the run uses a separate
+  bot account or GitHub App identity that can't merge without your approving
+  review. Setting that up is your call; without it, the prompt is a speed bump.
 
 ## Commands
 

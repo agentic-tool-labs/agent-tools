@@ -29,6 +29,23 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
 - **`msg.mjs decision add|list`.** Writes and reads the run's decision log
   (`.claude/hierarchy/pipeline/<run id>/decisions.jsonl`). Verbs and refusals:
   [cli-tools](./docs/cli-tools.md).
+- **Auto-merge, only if you opt in.** An issue run can merge its PRs at the end
+  of the run. Opt in per run with `--auto-merge` or in plain words, or answer
+  the start question (default No); plan runs refuse it. Every merge needs your
+  click on a permission prompt, pinned to the PR's head commit, and only in
+  permission mode `default`, `auto` or `acceptEdits`. Merging is never counted
+  as a decision made for you. The final report adds "Merges performed under
+  your authorisation" and "Not merged". See the README's
+  [Merging](./README.md#merging-only-if-you-opt-in).
+- **Merge guard.** While a run is open, a hook refuses `gh pr merge`
+  (any unpinned form, `--auto`, `--admin`), `gh pr review --approve`, `gh pr
+  ready` outside the pinned form, `gh api` merge, approve and ref-write calls,
+  and the GitHub tools that merge or approve. It never blocks `git` commands.
+  A speed bump, not a sandbox: GitHub branch protection is what stops pushes,
+  and a merge is a hard wall only with a separate bot or App identity.
+- **Branch-protection check.** Every run-start notice says whether `main` is
+  protected ("on", "on, but …", "OFF" or "unknown"). Read-only; it never
+  blocks the run.
 - **Run-start notice** now also says who decides for you and where the log is,
   and "guards: prose only (no conventions baseline)" when the repo has no
   committed `.claude/ah-conventions.json`.
@@ -51,11 +68,15 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
   unless the session's Ultra-Advisor setting is already `session` or `off`.
 - Decisions made for you are real: read the final report, and the PR bodies of
   issue runs, before merging.
+- `/pipeline` still never merges unless you opt in. The merge guard is new
+  and blocks `gh` merge forms during a run; if a run halts on an
+  `ah-push-guard` message, that is the guard.
+- Turn on branch protection that requires a PR, with no bypass for your token,
+  if you want pushes to `main` stopped by GitHub rather than by the run's rules.
 
 ### Not in this release
 
-`/pipeline` auto-merge (spec 0070) and sub-orchestrators (spec 0067) are not
-built. `/pipeline` still never merges.
+Sub-orchestrators (spec 0067) are not built.
 
 ## [0.108.5]
 
