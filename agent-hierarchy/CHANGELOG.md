@@ -14,9 +14,11 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
 - **Decisions on your behalf.** Once a `/pipeline` run has started, a question
   the plan doesn't answer is classified. A **safe** one (it stays on the run's
   branch, is reversible there, stays in the plan's scope and touches nothing
-  reserved) is decided by the strongest reasoner available: the Ultra-Advisor
-  if the session allows it, else the top member of the team, else a fresh
-  subagent on the Orchestrator's model. A **dangerous** one (destructive,
+  reserved) goes to the Ultra-Advisor if you allowed it at the start of the
+  run, else to the highest-tier member of the team, else to a fresh subagent
+  on the Orchestrator's model; never a model below the Orchestrator's tier,
+  never the Orchestrator's own context, and if none can take it the question
+  waits for you. A **dangerous** one (destructive,
   remote or merge, security and trust including role packs, cost, scope, or
   the run's own rules; anything unclear counts) is parked for you, and
   stops only its own item. At most 4 decisions per item and 20 per run.
@@ -37,8 +39,9 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
   `ah/pipeline-<plan-stem>`, created from where you are. If it already exists,
   locally or on `origin`, the run halts before any work and says to pass
   `--branch` or delete it. Before this, no default was defined.
-- **Acceptance criteria typed into the request** are saved to a gitignored
-  scratch file under `.claude/hierarchy/specs/` and the run goes ahead on it.
+- **Acceptance criteria** can be passed as a file path or typed into the
+  request; typed ones are saved to a gitignored scratch file under
+  `.claude/hierarchy/specs/` and the run goes ahead on it.
 - A question parked for you is now one of the things that notifies you
   mid-run.
 

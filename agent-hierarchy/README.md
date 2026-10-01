@@ -474,10 +474,11 @@ the run stops before doing any work and tells you to pass `--branch` or delete
 the old one; it never reuses a branch. It never pushes to `main` or a
 protected branch. A file and issue refs can't be mixed, and `--branch` doesn't
 apply to issue runs. A bare number is an issue; write `./12` for a file named
-`12`. If you type acceptance criteria into the request with no file, the run
-saves them, one per line, to a gitignored scratch file under
-`.claude/hierarchy/specs/` and runs on that, so the branch is named after it
-(for example `ah/pipeline-acs-20260930-2045`).
+`12`. Acceptance criteria work either way: pass a file path, or type the
+criteria into the request and the run saves them verbatim, one per line, to a
+gitignored scratch file under `.claude/hierarchy/specs/`, runs on that, and
+names the file in its start notice. The branch is named after the file (for
+example `ah/pipeline-acs-20260930-2045`).
 
 ### Decisions made for you
 
@@ -485,11 +486,13 @@ During a run, questions the plan doesn't answer used to wait for you. Now,
 once the run has started, a **safe** question is decided for you by the
 strongest reasoner available, and a **dangerous** one waits for you.
 
-- **Who decides.** The Ultra-Advisor, if the session allows it (the run asks
-  you once at the start unless you have already said); otherwise the top
-  member of your team; otherwise a fresh subagent on the Orchestrator's own
-  model. The Orchestrator never decides in its own context. The start notice
-  says which, and where the log is.
+- **Who decides.** A safe question goes to the Ultra-Advisor if you allowed it
+  at the start of the run (the run asks once, unless you have already said),
+  else to the highest-tier member of the team, else to a fresh subagent on the
+  Orchestrator's own model. It is never a model below the Orchestrator's tier,
+  and never the Orchestrator's own context. If none of those can take it, the
+  question waits for you. The start notice says which decider applies, and
+  where the log is.
 - **What counts as dangerous.** Anything destructive or hard to undo; anything
   remote or merge-related (pushes outside the run's own, merging, approving,
   tracker writes); security and trust, including role packs, permissions,
