@@ -375,6 +375,7 @@ under [docs/specs/](./docs/specs/). Good places to start:
 - **0.106.0** named rosters: several rosters side by side, pick one per repo, machine or session.
 - **0.107.0** role packs: roles shipped in a plugin, adopted one at a time behind a pin.
 - **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
+- **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
 
 The installed version is in `.claude-plugin/plugin.json`. Each feature below
 is complete enough to use; the linked page has the detail.
