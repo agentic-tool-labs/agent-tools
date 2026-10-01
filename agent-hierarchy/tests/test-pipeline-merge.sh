@@ -363,6 +363,7 @@ const send = (f) => {
 if (a[0] === "pr" && a[1] === "view") send(`view-${a[2]}.json`);
 else if (a[0] === "pr" && a[1] === "list") send(`list-${a[a.indexOf("--head") + 1].replace(/\//g, "_")}.json`);
 else if (a[0] === "api" && a[1] === "graphql") send(`threads-${a.find((x) => x.startsWith("number=")).slice(7)}.json`);
+else if (a[0] === "api" && a[1].endsWith("/protection")) send("protection.json");
 else if (a[0] === "api" && a[1].includes("/rules/branches/")) send("rules.json");
 else if (a[0] === "api" && a[1].includes("/branches/")) send("branch.json");
 else process.exit(1);
@@ -466,27 +467,39 @@ prot() { # [cwd]
   OUT=$(PATH="$SANDBOX/bin:$PATH" FAKE_GH_DIR="$FIX" node "$HOOK" protection --cwd "${1:-$REPO}" 2>&1); RC=$?
 }
 OFF_LINE="Branch protection on \`main\`: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section."
+WEAK_LINE() { echo "Branch protection on \`main\`: on, but $1 — a direct push can still land. See the README's /pipeline section."; }
+# <branch.json or -> <rules.json or -> <protection.json or ->: fixtures for the three reads; - makes that read fail.
+pfix() {
+  rm -f "$FIX/branch.json" "$FIX/rules.json" "$FIX/protection.json"
+  [ "$1" != - ] && printf '%s' "$1" > "$FIX/branch.json"
+  [ "$2" != - ] && printf '%s' "$2" > "$FIX/rules.json"
+  [ "$3" != - ] && printf '%s' "$3" > "$FIX/protection.json"
+  prot
+}
+PROT='{"name":"main","protected":true}'
+UNPROT='{"name":"main","protected":false}'
+PR_RULE='[{"type":"deletion"},{"type":"pull_request","parameters":{}}]'
 BEFORE=$(snap)
-printf '{"name":"main","protected":true}' > "$FIX/branch.json"
-rm -f "$FIX/rules.json"
-prot
-check "P1 a protected default branch → on" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on \`main\`: on." ]'
-printf '{"name":"main","protected":false}' > "$FIX/branch.json"
-printf '[{"type":"deletion"},{"type":"pull_request","parameters":{}}]' > "$FIX/rules.json"
-prot
+pfix "$UNPROT" "$PR_RULE" -
 check "P1 not protected, but a ruleset requires a pull request → on" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on \`main\`: on." ]'
-printf '[{"type":"deletion"}]' > "$FIX/rules.json"
-prot
+pfix "$PROT" "$PR_RULE" -
+check "P1 protected, a pull_request rule, the protection read failing → on (step 3 not needed)" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on \`main\`: on." ]'
+pfix "$UNPROT" '[{"type":"deletion"}]' -
 check "P1 no pull-request rule → the OFF line, exit 0" '[ "$RC" = 0 ] && [ "$OUT" = "$OFF_LINE" ]'
-printf '[]' > "$FIX/rules.json"
-prot
+pfix "$UNPROT" '[]' -
 check "P1 no rules at all → the OFF line" '[ "$RC" = 0 ] && [ "$OUT" = "$OFF_LINE" ]'
-rm -f "$FIX/rules.json"
-prot
-check "P1 gh failing on the rules → unknown, exit 0" '[ "$RC" = 0 ] && [[ "$OUT" == "Branch protection on \`main\`: unknown ("*")." ]]'
-rm -f "$FIX/branch.json"
-prot
-check "P1 gh failing on the branch → unknown, exit 0" '[ "$RC" = 0 ] && [[ "$OUT" == "Branch protection on \`main\`: unknown ("*")." ]]'
+pfix "$PROT" '[]' '{"required_pull_request_reviews":{"required_approving_review_count":1},"enforce_admins":{"enabled":true}}'
+check "P1 classic protection requiring a PR, admins enforced → on" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on \`main\`: on." ]'
+pfix "$PROT" '[]' '{"required_pull_request_reviews":{"required_approving_review_count":1},"enforce_admins":{"enabled":false}}'
+check "P1 ... with admins not enforced → the weak line, admins can bypass it" '[ "$RC" = 0 ] && [ "$OUT" = "$(WEAK_LINE "admins can bypass it, and the run uses your token")" ]'
+pfix "$PROT" '[]' '{"required_status_checks":{"strict":true,"contexts":["ci"]},"enforce_admins":{"enabled":true}}'
+check "P1 classic protection with only status checks → the weak line, no pull request required" '[ "$RC" = 0 ] && [ "$OUT" = "$(WEAK_LINE "it doesn'"'"'t require a pull request")" ]'
+pfix "$PROT" '[]' -
+check "P1 protected, no rules, the protection read failing → unknown, classic settings unreadable" '[ "$RC" = 0 ] && [[ "$OUT" == "Branch protection on \`main\`: unknown (classic protection'"'"'s settings aren'"'"'t readable: "*")." ]]'
+pfix "$UNPROT" - -
+check "P1 gh failing on the rules → unknown, exit 0" '[ "$RC" = 0 ] && [[ "$OUT" == "Branch protection on \`main\`: unknown ("*")." ]] && [[ "$OUT" != *"classic"* ]]'
+pfix - - -
+check "P1 gh failing on the branch → unknown, exit 0" '[ "$RC" = 0 ] && [[ "$OUT" == "Branch protection on \`main\`: unknown ("*")." ]] && [[ "$OUT" != *"classic"* ]]'
 prot "$SANDBOX/home"
 check "P1 outside a git repo → unknown, exit 0" '[ "$RC" = 0 ] && [ "$OUT" = "Branch protection on the default branch: unknown (not a git repository)." ]'
 AFTER=$(snap)
@@ -549,10 +562,12 @@ kanchor '(`PG-MERGE-ERROR`)'
 kanchor 'commands launched by `xargs` or `find -exec`, which the guard'"'"'s parser doesn'"'"'t unwrap'
 kanchor 'They are a speed bump, not a sandbox'
 kanchor 'MCP servers without `github` in their name'
-kanchor 'Pushes: branch protection or a ruleset on the default branch that requires a pull request, with no bypass for the run'"'"'s token (an admin bypass is for humans only)'
+kanchor 'Pushes: branch protection or a ruleset on the default branch that requires a pull request, with no bypass for the run'"'"'s token, stops direct pushes'
+kanchor 'classic branch protection exempts admins unless "Do not allow bypassing the above settings" is on, and a ruleset applies to the user unless their role is on its bypass list.'
 kanchor 'Merges: a hard wall only when the run uses its own bot or GitHub App identity that can'"'"'t merge without the user'"'"'s approving review'
 kanchor '`node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs protection --cwd <root>`'
 kanchor '"Branch protection on `<default>`: on.", or'
+kanchor '"Branch protection on `<default>`: on, but <reason> — a direct push can still land. See the README'"'"'s /pipeline section.", or'
 kanchor '"Branch protection on `<default>`: OFF — GitHub won'"'"'t stop a push or a merge to it. See the README'"'"'s /pipeline section.", or'
 kanchor '"Branch protection on `<default>`: unknown (<reason>).". The run goes on whatever it says.'
 for f in "$SKILL" "$PLUGIN/docs/cli-tools.md"; do

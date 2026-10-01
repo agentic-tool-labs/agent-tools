@@ -839,13 +839,24 @@ function protection(argv) {
     let rules;
     try {
       branch = gh(repo, ["api", `repos/{owner}/{repo}/branches/${def.branch}`]);
-      if (branch && branch.protected === true) say(`Branch protection on ${name}: on.`);
       rules = gh(repo, ["api", `repos/{owner}/{repo}/rules/branches/${def.branch}`]);
     } catch (err) {
       say(`Branch protection on ${name}: unknown (${brief(err)}).`);
     }
     if (Array.isArray(rules) && rules.some((r) => r && r.type === "pull_request")) say(`Branch protection on ${name}: on.`);
-    say(`Branch protection on ${name}: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section.`);
+    if (!branch || branch.protected !== true) say(`Branch protection on ${name}: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section.`);
+    // `protected` alone can mean only status checks or a force-push block, with admins exempt, so
+    // the classic rule's own settings decide whether a direct push from the user's token is refused.
+    let classic;
+    try {
+      classic = gh(repo, ["api", `repos/{owner}/{repo}/branches/${def.branch}/protection`]);
+    } catch (err) {
+      say(`Branch protection on ${name}: unknown (classic protection's settings aren't readable: ${brief(err)}).`);
+    }
+    const weak = (reason) => say(`Branch protection on ${name}: on, but ${reason} — a direct push can still land. See the README's /pipeline section.`);
+    if (!classic || !classic.required_pull_request_reviews) weak("it doesn't require a pull request");
+    if (!classic.enforce_admins || classic.enforce_admins.enabled !== true) weak("admins can bypass it, and the run uses your token");
+    say(`Branch protection on ${name}: on.`);
   } catch (err) {
     say(`Branch protection on ${name}: unknown (${brief(err)}).`);
   }

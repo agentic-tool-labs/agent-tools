@@ -118,8 +118,8 @@ Seven steps, in order:
    five run-start-notification facts. Finding out at the first push is
    finding out too late. Also run the branch-protection check, in every run:
    `node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs protection --cwd <root>`.
-   It is read-only, prints one line (on, OFF, or unknown), and never blocks;
-   keep the line for the run-start notification.
+   It is read-only, prints one line (on, "on, but …", OFF, or unknown),
+   and never blocks; keep the line for the run-start notification.
 6. **Write the run anchor** (§ Push regime's "run anchor" subsection) — the
    durable branch record. This step is what makes the per-push
    re-derivation possible; without it, the re-derive rule has nothing to
@@ -808,6 +808,7 @@ completes, in every run, plan and issues alike, naming all five:
 Every run-start notification also carries the branch-protection check's
 line (§ Bootstrap step 5), copied exactly, never paraphrased:
 "Branch protection on `<default>`: on.", or
+"Branch protection on `<default>`: on, but <reason> — a direct push can still land. See the README's /pipeline section.", or
 "Branch protection on `<default>`: OFF — GitHub won't stop a push or a merge to it. See the README's /pipeline section.", or
 "Branch protection on `<default>`: unknown (<reason>).". The run goes on
 whatever it says.
@@ -1017,10 +1018,13 @@ cover:
   without `github` in their name; and other ways to land on the default
   branch: pushes, Contents API commits, `merge-upstream`. The real boundary
   is on GitHub. Pushes: branch protection or a ruleset on the default
-  branch that requires a pull request, with no bypass for the run's token
-  (an admin bypass is for humans only), stops direct pushes, ref writes and
-  Contents API commits by any route; the run-start notification says
-  whether it is on. Merges: a hard wall only when the run uses its own bot
+  branch that requires a pull request, with no bypass for the run's token,
+  stops direct pushes, ref writes and Contents API commits by any route;
+  the run-start notification says whether it is on. The run uses the
+  user's own gh token, so a bypass the user has is one the run has too:
+  classic branch protection exempts admins unless "Do not allow bypassing
+  the above settings" is on, and a ruleset applies to the user unless
+  their role is on its bypass list. Merges: a hard wall only when the run uses its own bot
   or GitHub App identity that can't merge without the user's approving
   review; setting that up is the user's call;
 - tracker writes, which only prose governs.

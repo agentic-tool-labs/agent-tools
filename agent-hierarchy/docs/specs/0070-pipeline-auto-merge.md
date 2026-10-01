@@ -29,7 +29,8 @@ this build.
      can mint it.
    - One click per merge.
 3. **A branch-protection check** at run start. It warns in one line when
-   the default branch has no protection on GitHub, and never blocks (§3.3).
+   GitHub's protection on the default branch wouldn't stop a direct push,
+   and never blocks (§3.3).
 
 Merging stays dangerous (0068 §3, D2). A merge under this opt-in is not a
 decision. It is never classified, decided, or logged as `decided`.
@@ -82,9 +83,14 @@ The user's rulings:
   - `xargs` or `find -exec`.
 - **The real boundary is on GitHub:**
   - **Pushes:** a branch protection rule or ruleset on the default branch
-    that requires a pull request, with no bypass for the run's token. Admin
-    bypass, if any, is for humans only. That stops direct pushes, ref writes
-    and Contents API commits, by any route.
+    that requires a pull request, with no bypass for the run's token. That
+    stops direct pushes, ref writes and Contents API commits, by any route.
+    The run uses the user's own gh token, so a bypass the user has is one
+    the run has too:
+    - classic branch protection exempts admins unless "Do not allow
+      bypassing the above settings" is on;
+    - a ruleset applies to the user unless their role is on its bypass
+      list.
   - **Merges:** GitHub can't tell the user's click from the model's call,
     because both use the same token. Merge approval is a hard wall only
     when the run uses a separate identity (a bot account or a GitHub App
@@ -160,6 +166,10 @@ While a run is live, for an MCP tool whose server name (the `<server>` in
     never with the prefix. `docs/specs/` is outside T7's scan.
 - A matcher spelled to slip past the grep (`mcp_.*`) is rejected. It keeps
   the dependency and hides it from the test.
+- `tests/check-gate-name-agreement.mjs` has its own exemption for the same
+  entry, as built: it skips a hooks.json entry only when every hook in it
+  runs `pretooluse-mcp-guard.mjs`. That is accepted; T7 still pins the exact
+  matcher line, and only one.
 
 ### 2.4 When a run counts as live
 
@@ -255,20 +265,50 @@ A read-only check, run once at bootstrap for every run, issue or plan.
 - It lives in the push guard's CLI beside `check` and `merge-check`. If ah
   already has a `doctor` command, it can go there instead; your call.
 - It finds the default branch the same way `merge-check` does.
-- It reads two things:
-  - `gh api repos/{owner}/{repo}/branches/<default>`, for its `protected`
-    field;
-  - `gh api repos/{owner}/{repo}/rules/branches/<default>`, for the
-    rulesets that apply.
-- The answer is **on** when `protected` is true, or when an applying rule
-  has type `pull_request`. Otherwise it is **off**.
+- **What "on" must mean:** GitHub refuses a direct push to the default
+  branch from the run's token. `protected: true` alone doesn't show that.
+  Classic protection can be on with only status checks or a force-push
+  block, and it exempts admins by default. So "on" needs a pull-request
+  requirement that the user's token can't bypass, as far as the reads can
+  tell.
+- **It reads, in order:**
+  1. `gh api repos/{owner}/{repo}/branches/<default>`, for its `protected`
+     field;
+  2. `gh api repos/{owner}/{repo}/rules/branches/<default>`, for the
+     ruleset rules that apply;
+  3. only when step 2 found no `pull_request` rule and `protected` is
+     true: `gh api repos/{owner}/{repo}/branches/<default>/protection`, the
+     classic rule's settings. Two fields count:
+     - `required_pull_request_reviews`: present means a PR is required;
+     - `enforce_admins.enabled`: true means admins can't bypass it.
+
+     This endpoint needs admin access to the repo. The run uses the
+     user's token, which normally is an admin's on the user's own repos.
+- **The answer:**
+
+  | Reads show | Answer |
+  |---|---|
+  | step 1 or 2 failed | unknown |
+  | a `pull_request` rule (step 2) | on |
+  | `protected` false, no `pull_request` rule | OFF |
+  | step 3 failed, for any reason (403, 404, error) | unknown, reason "classic protection's settings aren't readable: <gh's first line>" |
+  | no `required_pull_request_reviews` | weak: "it doesn't require a pull request" |
+  | PR required, `enforce_admins.enabled` false | weak: "admins can bypass it, and the run uses your token" |
+  | PR required, `enforce_admins.enabled` true | on |
+
+  The first row that matches wins. Ruleset bypass lists are not read: a
+  ruleset is "on" as long as it applies. The README covers keeping the
+  user's role off its bypass list (§5).
 - It prints one line, and the skill copies it into the run-start
   notification:
   - on: "Branch protection on `<default>`: on."
+  - weak: "Branch protection on `<default>`: on, but <reason> — a direct
+    push can still land. See the README's /pipeline section."
   - off: "Branch protection on `<default>`: OFF — GitHub won't stop a push
     or a merge to it. See the README's /pipeline section."
-  - any failure (no gh, not authenticated, an API error, no GitHub remote):
-    "Branch protection on `<default>`: unknown (<reason>)."
+  - any failure (no gh, not authenticated, an API error, no GitHub remote,
+    step 3 unreadable): "Branch protection on `<default>`: unknown
+    (<reason>)."
 - It never blocks, never halts, never asks, and writes nothing. It always
   exits 0.
 
@@ -416,6 +456,8 @@ never from this line.
   is unchanged.
 - `agent-hierarchy/hooks/lib-config.mjs`: export `MCP_TOOL_PREFIX`.
 - `agent-hierarchy/tests/test-ah-cli.sh`: T7's second exemption (§2.3).
+- `agent-hierarchy/tests/check-gate-name-agreement.mjs`: its MCP-entry
+  exemption (§2.3), as built.
 - The §4.4 PostToolUse handler, in agent-hierarchy/hooks/.
 - `agent-hierarchy/hooks/lib-conventions.mjs`: `pr.merge_method`
   (`"merge"` | `"squash"` | `"rebase"`, default `"merge"`), validated, and
@@ -446,8 +488,10 @@ never from this line.
   check, and the rule codes. Remove `PG-RUN-PUSH` and `PG-GIT-MERGE`.
 - README `/pipeline` section (docs-writer, after the build):
   - recommend a ruleset or branch protection on the default branch that
-    requires a pull request, with no bypass for the run's token, and admin
-    bypass for humans only;
+    requires a pull request, with no bypass for the run's token. The run
+    uses the user's token, so: for classic protection, turn on "Do not
+    allow bypassing the above settings"; for a ruleset, keep the user's own
+    role off the bypass list (§2.1);
   - say that merge approval is a hard wall only with a separate bot or App
     identity for the run;
   - explain the run-start protection line.
@@ -582,14 +626,27 @@ push guard's existing test pattern.
   `git checkout main && git merge ah/issue-5 && git push`, `git pull` on
   main. In an opted-in repo, the push guard's own push rules give the same
   answers as before this spec. [keep PG-RUN-PUSH] [keep PG-GIT-MERGE]
-- **P1 Protection check.** With fixture `gh` output:
-  - `protected: true` → the "on" line;
+- **P1 Protection check.** With fixture `gh` output, one row each:
   - `protected: false` and a `pull_request` rule → "on";
+  - `protected: true`, a `pull_request` rule, and the protection read
+    failing → "on" (step 3 isn't needed);
   - `protected: false`, no rules → the "OFF" line;
-  - gh exiting non-zero → "unknown (<reason>)".
+  - `protected: true`, no rules, protection with
+    `required_pull_request_reviews` and `enforce_admins.enabled: true` →
+    "on";
+  - the same with `enforce_admins.enabled: false` → the weak line with
+    "admins can bypass it";
+  - `protected: true`, no rules, protection with only
+    `required_status_checks` → the weak line with "it doesn't require a
+    pull request";
+  - `protected: true`, no rules, the protection read exiting non-zero →
+    "unknown (classic protection's settings aren't readable…)";
+  - gh exiting non-zero on step 1 or 2 → "unknown (<reason>)".
 
   Every row exits 0 and writes no file. [block on off] [treat unknown as
-  on] [ignore rulesets]
+  on] [ignore rulesets] [treat `protected: true` as on] [ignore
+  `enforce_admins`] [treat a failed step 3 as on] [run step 3 when a
+  ruleset already said on, and let its failure win]
 - **C1 merge-check.** Each §4.3 reason in its own row, from fixture output.
   All good → `ok` with the exact `command`, and draft → the compound form.
   It never writes a file. [drop each precondition in turn]
@@ -615,7 +672,7 @@ push guard's existing test pattern.
   - `--auto-merge` and the plain-language line;
   - step 3b's question, with "No" first;
   - the plan-run refusal;
-  - the two run-start lines, verbatim, and the three protection lines;
+  - the two run-start lines, verbatim, and the four protection lines;
   - "head moved or merge refused";
   - "merged outside the run", and "never from this line";
   - `PG-MERGE-ERROR`, `PG-MCP-MERGE`;
@@ -665,6 +722,15 @@ Then run the full suite.
   access, and `GET repos/{o}/{r}/rules/branches/<b>` lists the ruleset
   rules that apply, with `type: "pull_request"` for a required PR. If
   either is wrong, the check says "unknown" and the run goes on.
+- `GET repos/{o}/{r}/branches/<b>/protection` returns
+  `required_pull_request_reviews` only when the classic rule requires a PR,
+  and `enforce_admins.enabled`; a token without admin access gets 403 or
+  404. If `protected` is true only because of a ruleset with no
+  `pull_request` rule, this read answers 404 and the check says "unknown":
+  an under-claim, which is the safe direction.
+- A ruleset applies to a repo owner or admin unless their role is on its
+  bypass list. Bypass lists aren't read, so a ruleset whose bypass list
+  holds the user's role still reads "on".
 - GitHub applies a ruleset or branch protection that requires a pull
   request to Contents API commits and ref writes, not only to pushes.
 - The `pull_requests` MCP toolset's merge tool has `merge` in its name.
@@ -693,6 +759,14 @@ Then run the full suite.
   merges while a run is open. That is the user's model.
 - **The protection check warns and never blocks:** it points the user at
   the real boundary without stopping a run.
+- **"on" means a direct push would be refused:** `protected: true` alone
+  overclaims, because classic protection can lack a PR requirement and
+  exempts admins by default. The check reads the classic rule's settings
+  (one more read, only when no ruleset already answers) rather than
+  printing a standing "check it requires a PR" caveat: the caveat would
+  show on every run, even for a correctly set-up repo, and still miss the
+  admin exemption. Ruleset bypass lists aren't read; that would be another
+  read per ruleset for an opt-in setting the README already warns about.
 - **GitHub MCP merge tools are covered:** it is cheap, and without it "only
   the pinned click merges" is false.
 - **The guard lives in the push guard:** one parser, one deny format, and
