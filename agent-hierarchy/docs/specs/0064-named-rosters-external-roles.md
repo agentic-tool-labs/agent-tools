@@ -179,11 +179,20 @@ A named roster stays a `rosters.<name>` block. There is one new top-level key.
   is really selected.
   - A global file holding only `activeRoster` (with or without the other
     preference-only keys) still counts as unconfigured.
-  - A repo or repo-user file whose only keys are `version` and `activeRoster`
-    also counts as unconfigured.
+  - A repo or repo-user file whose only key is `activeRoster` also counts as
+    unconfigured, as if the file were absent.
+  - Otherwise `activeRoster` has no effect on whether a repo or repo-user
+    file counts as configured: the file counts exactly as it would without
+    the key. So a file holding `version` and `activeRoster` counts as
+    configured, as a file holding only `version` does today. This is what
+    lets `roster use` and `roster use --clear` leave a file's meaning as it
+    was (§3.6). Counting `version` plus `activeRoster` as unconfigured would
+    break that: such a file can come from `use` on a missing file or from
+    `use` on a file holding only `version`, and nothing in it says which.
   - The `activeRoster` in such a file still applies to the selection (§3.2).
   - Nothing else changes about what counts as configured. A repo-level file
-    holding only `version` counts exactly as it does today.
+    holding only `version` counts exactly as it does today. `version` stays
+    optional: lib-config.mjs:1309 reads a missing one as 1.
   - `activeRoster` is a new key, so no existing file changes meaning.
 - **Writes.** `writeLevelFile` and `migrateStaleKeys` (roster.mjs:1310-1384)
   keep the key.
@@ -350,9 +359,19 @@ Document it in docs/cli-tools.md.
       or global);
     - with `--level repo-user`, it never warns, because only this user in
       this repo reads that file and they can see every level.
-  - `--clear` removes the key. If the file would then hold nothing but
-    `version`, it deletes the file, so a file that existed only to hold a
-    selection doesn't linger and make the setup read as configured (§3.1).
+  - Writing the key never changes whether the file counts as configured
+    (§3.1):
+    - a file `use` creates holds only `activeRoster`, with no `version`, so
+      it counts as absent;
+    - in a file that already exists, `use` sets only `activeRoster`, with one
+      exception: an existing file with no keys at all also gets `version`,
+      because an empty repo-level file counts as configured today and one
+      holding only `activeRoster` would not.
+  - `--clear` removes the key and nothing else. It deletes the file only when
+    no keys at all are left, because such a file held nothing but a selection
+    and reads as absent either way. A file still holding `version`, or
+    anything else, stays. So `use` then `--clear` removes a file `use`
+    created, and leaves a file that existed before meaning what it did.
   - It prints the resulting selection, worked out by the §3.2 rule.
 - **`show`** adds `selection` to its output.
 - **`create --plan`** carries `selection` only when a roster is selected
@@ -1305,11 +1324,29 @@ next run reports the stale anchor anyway.
   level:
   - `roster use default` keeps `resolveConfig().configured` false and
     SessionStart's injection byte-identical to before;
+  - the repo-user file it creates holds `activeRoster` and no `version`;
   - `roster use --clear` then leaves no repo-user file;
   - a repo-user file holding `version`, `activeRoster` and a roster block
     still counts as configured.
 
-  [treat the file as configured whenever it exists]
+  [treat the file as configured whenever it exists] [give the file `use`
+  creates a `version`]
+- **S17 A file that existed stays.** With no configuration at any other
+  level, for each of repo-user and repo (`--level repo`), starting from a
+  file holding only `{"version": 1}`:
+  - it counts as configured;
+  - `roster use default --level L` keeps it configured, and the file holds
+    `version` and `activeRoster`;
+  - `roster use --clear --level L` reports `cleared: true` and no
+    `file_removed`, leaves the file holding exactly `{"version": 1}`, and it
+    still counts as configured.
+
+  Starting from a repo-user file holding `{}`, `roster use default` leaves it
+  configured, holding `version` and `activeRoster`.
+
+  [delete the file whenever only `version` is left] [count a file holding
+  only `version` and `activeRoster` as unconfigured] [leave out `version`
+  when writing into an empty file]
 - **S16 Audience warning.** `roster use X --level repo` warns when X is
   defined only at repo-user or global, and not when X is defined at repo.
   `--level global` warns when X isn't defined at global. `--level repo-user`

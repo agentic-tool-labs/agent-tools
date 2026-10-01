@@ -338,6 +338,7 @@ cfg 'r.configured'
 check "S15 (baseline) nothing is configured" '[ $RC = 0 ] && [ "$OUT" = false ]'
 rm_ roster use default --cwd "$PROJ"
 check "S15 use default writes the repo-user file" '[ $RC = 0 ] && filejs "$REPO_USER_CFG" "d.activeRoster === \"default\""'
+check "S15 ... holding activeRoster and no version" 'filejs "$REPO_USER_CFG" "d.activeRoster === \"default\" && !(\"version\" in d)"'
 cfg 'r.configured'
 check "S15 ... which keeps resolveConfig unconfigured" '[ $RC = 0 ] && [ "$OUT" = false ]'
 inject
@@ -347,6 +348,35 @@ check "S15 use --clear then leaves no repo-user file" '[ $RC = 0 ] && [ "$(jget 
 mutate "$REPO_USER_CFG" 'd.version = 1; d.activeRoster = "default"; d.roster = {route: "peer", members: [{role: "architect"}]}'
 cfg 'r.configured'
 check "S15 a repo-user file that also holds a roster block is configured" '[ $RC = 0 ] && [ "$OUT" = true ]'
+
+# ---------------------------------------------------------------- S17 a file that existed stays
+for L in repo-user repo; do
+  if [ $L = repo ]; then F=$REPO_CFG; else F=$REPO_USER_CFG; fi
+  fresh
+  rm -f "$REPO_CFG"
+  mkdir -p "$(dirname "$F")"
+  echo '{"version":1}' > "$F"
+  cfg 'r.configured'
+  check "S17 ($L baseline) a file holding only version is configured" '[ $RC = 0 ] && [ "$OUT" = true ]'
+  rm_ roster use default --level $L --cwd "$PROJ"
+  check "S17 ($L) use default adds activeRoster beside version" '[ $RC = 0 ] && filejs "$F" "d.version === 1 && d.activeRoster === \"default\""'
+  cfg 'r.configured'
+  check "S17 ($L) ... and the file stays configured" '[ $RC = 0 ] && [ "$OUT" = true ]'
+  rm_ roster use --clear --level $L --cwd "$PROJ"
+  check "S17 ($L) use --clear keeps the file, holding exactly version" '[ $RC = 0 ] && [ "$(jget o.cleared)" = true ] && [ "$(jget "\"file_removed\" in o")" = false ] && filejs "$F" "JSON.stringify(d) === JSON.stringify({version: 1})"'
+  cfg 'r.configured'
+  check "S17 ($L) ... and it stays configured" '[ $RC = 0 ] && [ "$OUT" = true ]'
+done
+fresh
+rm -f "$REPO_CFG"
+mkdir -p "$(dirname "$REPO_USER_CFG")"
+echo '{}' > "$REPO_USER_CFG"
+cfg 'r.configured'
+check "S17 (baseline) an empty repo-user file is configured" '[ $RC = 0 ] && [ "$OUT" = true ]'
+rm_ roster use default --cwd "$PROJ"
+check "S17 use default into an empty file writes version and activeRoster" '[ $RC = 0 ] && filejs "$REPO_USER_CFG" "d.version === 1 && d.activeRoster === \"default\""'
+cfg 'r.configured'
+check "S17 ... and the file stays configured" '[ $RC = 0 ] && [ "$OUT" = true ]'
 
 # ---------------------------------------------------------------- S16 who can see the selected roster
 fresh

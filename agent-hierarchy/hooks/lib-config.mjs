@@ -1448,11 +1448,11 @@ export function resolveConfig(cwd, opts = {}) {
   // Least specific first: repo-user is the new highest-precedence layer. A global file holding only
   // the stored team layout is a create's side effect, not hierarchy config, so it configures nothing.
   // Choosing a roster never makes a setup look configured either: a repo or repo-user file holding
-  // only `activeRoster` (and `version`) configures nothing, though its selection still applies.
+  // only `activeRoster` configures nothing, though its selection still applies.
   const preferenceOnly = (layer) => {
     const keys = Object.keys(layer.data);
     if (layer.scope === "user") return keys.every((k) => PREFERENCE_ONLY_KEYS.has(k));
-    return keys.includes("activeRoster") && keys.every((k) => k === "version" || k === "activeRoster");
+    return keys.length === 1 && keys[0] === "activeRoster";
   };
   const layers = [user, project, repoUser].filter(Boolean).filter((layer) => !preferenceOnly(layer));
   warnings.push(...teamLayoutPreference().warnings);

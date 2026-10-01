@@ -1167,9 +1167,8 @@ function rosterUse(name) {
     if (had) {
       const data = readLevelFile(path);
       delete data.activeRoster;
-      // A file left holding only `version` existed for the selection alone; kept, it would make an
-      // unconfigured setup read as configured.
-      if (Object.keys(data).every((k) => k === "version")) {
+      // A file left with no keys held nothing but the selection, and reads as absent either way.
+      if (Object.keys(data).length === 0) {
         unlinkSync(path);
         fileRemoved = true;
       } else {
@@ -1192,7 +1191,12 @@ function rosterUse(name) {
       );
     }
   }
-  const data = readLevelFile(path);
+  // Writing the selection never changes whether the file counts as configured: a file created here
+  // holds only `activeRoster` and reads as absent, while an existing empty file, which counts as
+  // configured, also gets `version` so it still does.
+  const existed = existsSync(path);
+  const data = existed ? readLevelFile(path) : {};
+  if (existed && Object.keys(data).length === 0) data.version = CONFIG_VERSION;
   data.activeRoster = name;
   writeLevelFile(path, data);
   for (const w of warnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
