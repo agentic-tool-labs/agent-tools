@@ -16,7 +16,8 @@ while a `/pipeline` run is active.
 
 Full spec: `docs/specs/0030-autonomous-pipeline-skill.md`. Issue input:
 `docs/specs/0063-pipeline-issues-to-prs.md`. Decisions on the user's
-behalf: `docs/specs/0068-pipeline-auto-decide.md`. This document is
+behalf: `docs/specs/0068-pipeline-auto-decide.md`. Merge guard and
+auto-merge: `docs/specs/0070-pipeline-auto-merge.md`. This document is
 the operational surface; if they disagree, the spec is authoritative and
 this file has drifted — say so rather than silently picking one.
 
@@ -100,6 +101,15 @@ Seven steps, in order:
    - Allowed, but no Ultra-Advisor member is live or in the roster → in the
      same `AskUserQuestion` call, ask the agent-team ladder's step-2
      question (spawn one, on fable or opus, or don't).
+
+   **Step 3b, auto-merge** (issue runs only; § Merge on your approval).
+   With `--auto-merge` or its plain-language form (§ Invocation) the answer
+   is yes: don't ask. Otherwise one `AskUserQuestion`, header "Auto-merge",
+   which can share step 3a's call: "May this run merge a ready PR once you
+   approve that merge in a permission prompt?", with "No" first, as the
+   default, then "Yes, for this run". Plan runs never ask it. The answer is
+   for this run only: it goes in the anchor (step 5a) and nowhere else, and
+   the next run asks again.
 4. **Create the team** — `roster.mjs create` plan → confirm → commit exactly as
    [`skills/agent-team/SKILL.md` § Create](../agent-team/SKILL.md#create)
    describes — do not re-derive that contract here.
@@ -270,7 +280,10 @@ lists are examples, not limits):
   dismissing or abandoning in-flight work.
 - **D2 Remote and merge:** any push outside § Push regime, the
   degraded-mode approval included; merging, approving, readying or
-  retargeting a PR; tracker writes; posting anywhere outside the repo.
+  retargeting a PR; tracker writes; posting anywhere outside the repo. A
+  merge done under the user's own per-run merge authorisation (§ Merge on
+  your approval) is not a decision: the plan answers it, so it is never
+  classified, decided, or logged as a `decided` line.
 - **D3 Security and trust:** permissions and settings, CLAUDE.md, hooks,
   agent definitions; role-pack adoption, trust and pins; credentials and
   secrets, auth logic, network egress; CI config and protected paths
@@ -792,7 +805,9 @@ run being genuinely blocked; a Ultra-Advisor escalation reaching the
 Orchestrator; a liveness nudge-budget exhaustion (§ Liveness); a red build
 that halts the run; entering degraded push mode; a secret-scan finding;
 **a push halt from the run-anchor check** (§ Push regime); **a decision
-parked for the user**, with its item, reason and question. Nothing else — no running commentary, no per-step progress. Suppressing
+parked for the user**, with its item, reason and question; **"Merge
+approvals are waiting for you in the session"**, once, before the first
+merge prompt (§ Merge on your approval). Nothing else — no running commentary, no per-step progress. Suppressing
 that is the point of running this way. Every notification goes through the
 Orchestrator; nothing here offers a second path to the user.
 
@@ -848,8 +863,14 @@ Read it only through the CLIs, never the file itself. Intake's output gives
   a bare integer is an issue unless written `./N`.
 - `/pipeline --labelled` → an issue run over every open issue carrying the
   trigger label.
+- `--auto-merge` on an issue run, or plain language with the same meaning
+  ("auto-merge approved for this run", "with auto-merge", "and merge them
+  once I approve") → auto-merge yes for this run, with no question (§ Merge
+  on your approval). A misread sentence costs little: every merge still
+  needs the user's click.
 - Refuse with one line: a path mixed with issue refs; `--branch` with issue
-  input.
+  input; `--auto-merge` on a plan run: "auto-merge needs an issue run — plan
+  runs open no PR".
 
 ### Bootstrap for issue runs
 
@@ -879,7 +900,11 @@ else as written there.
    secret-scan: gitleaks | model
    conventions-blob: <git rev-parse origin/<default>:.claude/ah-conventions.json, after step 4a's fetch>
    intake: --labelled | <the refs as the user gave them, space-separated>
+   merge-opt-in: yes | no
+   merge-method: merge | squash | rebase
    ```
+   `merge-opt-in` is step 3b's answer; `merge-method` is
+   `settings.pr.merge_method`.
    `<tag>` below is the `run-tag`.
 5. **Step 5b — intake**, in your own Bash (it prints only a compact
    verdict, so no GitHub worker is needed):
@@ -906,8 +931,14 @@ else as written there.
    item record per ordered item.
 8. **Step 6:** already done at 5a.
 9. **Step 7 — the run-start notification:** § Notification's five facts,
-   plus the source (`issues`), the eligible and ineligible counts, and
-   `push-mode` with any unmet conditions by name.
+   plus the source (`issues`), the eligible and ineligible counts,
+   `push-mode` with any unmet conditions by name, and one of these lines,
+   filled in and copied exactly:
+   - `merge-opt-in: yes`: "Auto-merge APPROVED for this run: at the end of
+     the run the orchestrator asks you to approve each ready PR's merge in a
+     permission prompt — one click per merge, pinned to the PR's head
+     commit."
+   - `merge-opt-in: no`: "Auto-merge: off — a person merges."
 
 ### Push mode for issue runs
 
@@ -959,7 +990,10 @@ cover:
   secrets;
 - an adversarial model evading the guard, which matches command text only
   (known gaps: `docs/pipeline-conventions.md`, "What it cannot stop");
-- `gh` misuse, which the guard does not inspect;
+- merging, approving or readying a PR around the guard's merge rules
+  (§ Merge on your approval), which match command text only: `curl` and
+  other API clients, `hub`, `gh` aliases and extensions, and any other
+  evasion of command-text matching;
 - tracker writes, which only prose governs.
 
 The user chose unattended as the default over making degraded mode the
@@ -1077,14 +1111,15 @@ step 5b.
 
 For an issue with an item record, the first that applies:
 1. an open `<tag>-i<N>-x` → that exception;
-2. a PR exists with head `ah/issue-<N>` (lookup, § PR creation) →
+2. a PR with head `ah/issue-<N>` in state MERGED → `merged` (terminal);
+3. a PR exists with head `ah/issue-<N>` (lookup, § PR creation) →
    `pr-open`;
-3. `<tag>-i<N>-ok` has a sign-off response → `signed-off`;
-4. the branch exists → `in-progress`;
-5. otherwise → `pending`.
+4. `<tag>-i<N>-ok` has a sign-off response → `signed-off`;
+5. the branch exists → `in-progress`;
+6. otherwise → `pending`.
 
 The current item is the first in `order` that is not terminal. Terminal
-means an exception, `pr-open`, `local-only`, or (degraded mode)
+means an exception, `merged`, `pr-open`, `local-only`, or (degraded mode)
 `signed-off`.
 
 **`on_item_done` after compaction.** For every issue whose status is final
@@ -1208,7 +1243,10 @@ unavailable, run `gh pr list --head`, `gh pr create` and
       A decision on the item after the PR exists updates the body through
       the same worker order.
    7. The footer: "Opened by an ah /pipeline run (anchor `<id>`). The run
-      never merges; a person merges."
+      never merges; a person merges." With `merge-opt-in: yes`, instead:
+      "Opened by an ah /pipeline run (anchor `<id>`). This run may merge it
+      at the end of the run, but only after you approve that merge in a
+      permission prompt; otherwise a person merges."
 4. **Reviewers:** if `settings.pr.reviewers` is non-empty, request them
    **after** the PR exists, as a separate order, so a bad login never
    costs the PR. The order to the worker: "request reviewers `<comma
@@ -1216,7 +1254,7 @@ unavailable, run `gh pr list --head`, `gh pr create` and
    `gh pr edit <n> --add-reviewer <comma list>`. On failure the summary
    notes it; the status stays `pr-open`, and it is never retried.
 5. **Never** merge, approve, enable auto-merge, or edit a PR the run didn't
-   open.
+   open — except § Merge on your approval.
 
 ### on_item_done
 
@@ -1310,6 +1348,45 @@ Once every item is terminal:
    only if its base was pushed; otherwise it becomes `blocked-by`. Items
    not approved → `rejected-by-user`.
 
+### Merge on your approval
+
+Only in a run with `merge-opt-in: yes` (step 3b). Merging stays the user's:
+it is never classified, decided, or logged as `decided` (§ Decisions on the
+user's behalf). The push guard denies every other way the run could merge,
+approve, ready or auto-merge a PR, from the anchor's writing to its close;
+any such `ah-push-guard:*` deny halts the run (§ Per-item execution).
+
+**The merge point is once only, at the end of the run:** after § Degraded
+approval when there is one, and before the final message. Never mid-run: a
+permission prompt would stall a hands-off run. A halted run never reaches
+it, so nothing merges.
+
+1. Notify once: "Merge approvals are waiting for you in the session".
+2. For each `pr-open` item, in `order`, run
+   `node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-push-guard.mjs merge-check --pr <N> --cwd <root>`.
+   It is read-only and advisory: it decides what the run offers, and prints
+   `{ ok, pr, sha, method, reasons, command }`. Reasons: `no-run`, `off`,
+   `not-this-run`, `not-signed-off`, `exception`, `closed`, `head-moved`,
+   `stacked-base-open`, `base-not-default`, `not-mergeable:<status>`,
+   `no-checks`, `checks-pending`, `checks-failed`, `changes-requested`,
+   `unresolved-threads` (`docs/cli-tools.md`). No branches are deleted, so a
+   stacked dependent usually stays unmerged and is reported.
+3. Show one Markdown table in the session listing every candidate: PR,
+   item, sha, merge-check result. Each row carries `decision list
+   --summary`'s line and points at the PR body's "Decisions made on your
+   behalf". Failing rows are listed with their reasons and not attempted.
+4. For each passing PR, run exactly `command`, nothing else and nothing
+   added: `gh pr merge <N> --match-head-commit <sha> --<method>`, or for a
+   draft `gh pr ready <N> && gh pr merge <N> --match-head-commit <sha> --<method>`.
+   The push guard answers it with a permission prompt naming the PR, the
+   sha and the decision summary; the user's click is the approval, one
+   click per merge, pinned to the PR's head commit.
+
+A declined prompt runs nothing: report "you declined". A merge that exits
+non-zero (the head moved, checks, protection) is reported as "head moved or
+merge refused", with gh's own message verbatim. Neither is retried; the
+report gives the manual command for the user's own terminal.
+
 ### End of run
 
 **One final message**, through you. Per item: the issue; its terminal
@@ -1331,6 +1408,15 @@ status; the PR URL or branch; the reason code; stack relationships.
   `other-repo` line reads "#<N> of another repository: not processed".
 - § Decisions on the user's behalf's report: "Decisions made on your
   behalf", then "Waiting for you".
+- **"Merges performed under your authorisation"**, opening with the
+  run-start auto-merge line, copied. Built from the log's `merge` lines and
+  `gh pr view` now, never from memory; per PR: the sha, the time, the
+  approval ("your click on the permission prompt"), and the merge commit,
+  or "ran but not merged: <state>".
+- **"Not merged"**: every other `pr-open` item, with its merge-check
+  reasons, or "you declined", or "head moved or merge refused" and gh's
+  message, and the manual command
+  `gh pr merge <N> --match-head-commit <sha> --<method>`.
 
 Then close the anchor, the `<tag>-verdicts` record, and every item,
 exception and `-done` record: write a response file for each with
@@ -1348,10 +1434,12 @@ interruption.
   files too. The one exception is the decision log (§ Decisions on the
   user's behalf): a log of what was decided can't be derived from slug
   counts.
-- No hook of its own. The only hook added since spec 0028 is the stateless
-  push guard, active for every session in an opted-in repo, enforcing push
-  rules this skill already states. Issue runs require it for unattended
-  mode; plan/spec runs need nothing beyond 0028.
+- No hook of its own. The only hooks added since spec 0028 are the push
+  guard, active for every session in an opted-in repo, enforcing push
+  rules this skill already states, and, while a run is open in any repo,
+  its merge rules (§ Merge on your approval); and the PostToolUse record
+  that logs each approved merge. Issue runs require the push guard for
+  unattended mode; plan/spec runs need nothing beyond 0028.
 - No change to `msg.mjs list`'s row shape, no new frontmatter key, and no
   change to the injected state block's cap or fields.
 - No reliance on the injected state block as a content channel — see

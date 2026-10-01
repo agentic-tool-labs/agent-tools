@@ -9,7 +9,8 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { ID_RE, listExchanges, openExchanges, PIPELINE_ANCHOR_SLUG } from "./lib-hier.mjs";
+import { mainHierarchyDir } from "./lib-config.mjs";
+import { hierarchyDir, ID_RE, listExchanges, openExchanges, PIPELINE_ANCHOR_SLUG, readMsgFile } from "./lib-hier.mjs";
 
 /** Decided lines allowed per item and per run. Parked and merge lines count toward neither. */
 export const DECISION_ITEM_CAP = 4;
@@ -165,4 +166,60 @@ export function appendDecision(path, runId, input) {
   const after = decisionSummary([...decisions, line], 0);
   const item = after.by_item[input.item];
   return { id: line.id, path, counts: { run: { decided: after.decided, parked: after.parked }, item: { decided: item.decided, parked: item.parked } } };
+}
+
+/** The `key: value` lines of a message file's constraints section (bullets and backticks allowed), first occurrence winning. */
+export function constraintLines(text) {
+  const out = {};
+  let inside = false;
+  for (const raw of String(text).split("\n")) {
+    if (/^## /.test(raw)) {
+      inside = /^## (\[\d+\] )?constraints\b/.test(raw);
+      continue;
+    }
+    if (!inside) continue;
+    const m = /^\s*(?:[-*]\s+)?`?([a-z][a-z0-9-]*):\s*(.*?)`?\s*$/.exec(raw);
+    if (m && !(m[1] in out)) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+/**
+ * The live run as a hook sees it from `cwd`: the one open run anchor in its hierarchy dir (from a
+ * worktree, the main checkout's too), whichever team wrote it, as `{ id, dir, constraints }`; null
+ * for none or several.
+ */
+export function liveRun(cwd) {
+  const dirs = [...new Set([hierarchyDir(cwd), mainHierarchyDir(cwd)].filter(Boolean))];
+  const anchors = dirs.flatMap((dir) => openExchanges(dir).filter((e) => e.slug === PIPELINE_ANCHOR_SLUG).map((e) => ({ e, dir })));
+  if (anchors.length !== 1) return null;
+  const { e, dir } = anchors[0];
+  const parsed = readMsgFile(e.request.path);
+  return { id: e.id, dir, constraints: constraintLines(parsed ? parsed.text : "") };
+}
+
+export const MERGE_METHODS = ["merge", "squash", "rebase"];
+
+/** The pinned merge command for a PR: `gh pr merge <N> --match-head-commit <sha> --<method>`, behind `gh pr ready <N> && ` for a draft. */
+export function mergeCommand(pr, sha, method, draft) {
+  return `${draft ? `gh pr ready ${pr} && ` : ""}gh pr merge ${pr} --match-head-commit ${sha} --${method}`;
+}
+
+/**
+ * `{ pr, sha, method, draft }` when `command` is exactly a pinned merge command (see mergeCommand),
+ * blanks between words aside; null for anything else, a wrapper, a short sha or an extra flag included.
+ */
+export function parseMergeForm(command) {
+  const merge = String.raw`gh[ \t]+pr[ \t]+merge[ \t]+([1-9][0-9]*)[ \t]+--match-head-commit[ \t]+([0-9a-f]{40})[ \t]+--(merge|squash|rebase)`;
+  const single = new RegExp(String.raw`^\s*${merge}\s*$`).exec(String(command));
+  if (single) return { pr: Number(single[1]), sha: single[2], method: single[3], draft: false };
+  const compound = new RegExp(String.raw`^\s*gh[ \t]+pr[ \t]+ready[ \t]+([1-9][0-9]*)[ \t]+&&[ \t]+${merge}\s*$`).exec(String(command));
+  if (compound && compound[1] === compound[2]) return { pr: Number(compound[2]), sha: compound[3], method: compound[4], draft: true };
+  return null;
+}
+
+/** Appends a `merge` line for a pinned merge command that ran: no id, and counted toward nothing. */
+export function appendMergeRecord(path, { pr, sha, method }) {
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, JSON.stringify({ kind: "merge", pr, sha, method, time: new Date().toISOString(), approval: "permission prompt" }) + "\n");
 }

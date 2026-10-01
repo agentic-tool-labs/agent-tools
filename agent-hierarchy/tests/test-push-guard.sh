@@ -330,7 +330,7 @@ expect_deny 60 PG-FORCE "pushd $OTHER; popd; git push -f origin feat"
 
 # ---- 61-67: check's settings — the committed file's team settings with defaults applied, else null
 BASE_CONV='{"version":1,"protected_paths":["docs/secret/**"],"protected_branches":["release/*"]}'
-BASE_SETTINGS='{"pr":{"draft":true,"issue_link":"refs","reviewers":[]},"ci_secrets":"none-on-branches","protected_paths":["docs/secret/**"],"protected_branches":["release/*"],"on_item_done":null}'
+BASE_SETTINGS='{"pr":{"draft":true,"issue_link":"refs","reviewers":[],"merge_method":"merge"},"ci_secrets":"none-on-branches","protected_paths":["docs/secret/**"],"protected_branches":["release/*"],"on_item_done":null}'
 set_main_conventions() { # <text> — origin/main's committed conventions become <text>; the clone fetches them
   git -C "$SANDBOX/adv" pull -q --ff-only origin main
   printf '%s' "$1" > "$SANDBOX/adv/.claude/ah-conventions.json"
@@ -352,11 +352,11 @@ check '61: check reports the committed settings with defaults' '[ $RC -eq 0 ] &&
 set_main_conventions '{"version":1,"issues":{"trigger_label":"go","trusted_actors":["a"]},"pr":{"draft":false,"issue_link":"closes","reviewers":["u1","org/t"]},"ci_secrets":"skip-ci","protected_paths":["x/**"],"protected_branches":[],"on_item_done":"team:sync"}'
 run_check "$CLONE" feat
 check '62: every declared setting is reported; version and issues are not' \
-  '[ $RC -eq 0 ] && settings_is '"'"'{"pr":{"draft":false,"issue_link":"closes","reviewers":["u1","org/t"]},"ci_secrets":"skip-ci","protected_paths":["x/**"],"protected_branches":[],"on_item_done":"team:sync"}'"'"' && out_ok '"'"'!("version" in o.settings) && !("issues" in o.settings)'"'"
+  '[ $RC -eq 0 ] && settings_is '"'"'{"pr":{"draft":false,"issue_link":"closes","reviewers":["u1","org/t"],"merge_method":"merge"},"ci_secrets":"skip-ci","protected_paths":["x/**"],"protected_branches":[],"on_item_done":"team:sync"}'"'"' && out_ok '"'"'!("version" in o.settings) && !("issues" in o.settings)'"'"
 set_main_conventions '{"version":1,"pr":{"draft":false}}'
 run_check "$CLONE" feat
 check '63: defaults apply per key' \
-  '[ $RC -eq 0 ] && settings_is '"'"'{"pr":{"draft":false,"issue_link":"refs","reviewers":[]},"ci_secrets":"none-on-branches","protected_paths":[],"protected_branches":[],"on_item_done":null}'"'"
+  '[ $RC -eq 0 ] && settings_is '"'"'{"pr":{"draft":false,"issue_link":"refs","reviewers":[],"merge_method":"merge"},"ci_secrets":"none-on-branches","protected_paths":[],"protected_branches":[],"on_item_done":null}'"'"
 set_main_conventions "$BASE_CONV"
 git -C "$CLONE" checkout -q --detach main
 run_check "$CLONE" HEAD

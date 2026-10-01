@@ -117,20 +117,18 @@ today.
 
 The run-start notification gets one of these lines, filled in and copied
 exactly:
-- yes, with §9 E1 positive: "Auto-merge APPROVED for this run: at the end
-  of the run the orchestrator asks you to approve each ready PR's merge in
-  a permission prompt — one click per merge, pinned to the PR's head
-  commit."
-- yes, with E1 negative (§9): "Auto-merge requested, but this session's
-  permission mode answers hook prompts itself, so the run can't ask you:
-  merges stay manual."
+- yes: "Auto-merge APPROVED for this run: at the end of the run the
+  orchestrator asks you to approve each ready PR's merge in a permission
+  prompt — one click per merge, pinned to the PR's head commit."
 - no: "Auto-merge: off — a person merges."
 
-**PR footer,** § PR creation body item 6, when `merge-opt-in: yes` and E1 is
-positive: "Opened by an ah /pipeline run (anchor `<id>`). This run may merge
-it at the end of the run, but only after you approve that merge in a
-permission prompt; otherwise a person merges." In every other case the
-footer stays as it is today.
+E1 was positive (§9), so the "merges stay manual" variant is not built.
+
+**PR footer,** § PR creation body item 6, when `merge-opt-in: yes`:
+"Opened by an ah /pipeline run (anchor `<id>`). This run may merge it at the
+end of the run, but only after you approve that merge in a permission
+prompt; otherwise a person merges." With `merge-opt-in: no` the footer stays
+as it is today.
 
 ## 4. The merge path
 
@@ -258,6 +256,10 @@ approval: "permission prompt" }`.
     enable auto-merge, or edit a PR the run didn't open — except § Merge on
     your approval";
   - new § Merge on your approval: §4.1 and §4.3;
+  - § Decisions on the user's behalf, D2: add 0068 §3's sentence, "A merge
+    done under the user's own per-run merge authorisation is not a
+    decision…". The 0068 build left it out because this spec wasn't built
+    yet;
   - § End of run: the report (§6);
   - status derivation: a PR in state MERGED → `merged` (terminal);
   - § Residual risk: §2's not-covered list;
@@ -286,12 +288,11 @@ The section opens with the run-start line, copied.
 
 | Case | Result |
 |---|---|
-| new commits after merge-check | GitHub refuses, through `--match-head-commit` (§9 E2 names the message) |
+| new commits after merge-check | GitHub refuses, through `--match-head-commit`. Any non-zero exit of the §4 command is reported as "head moved or merge refused", with gh's message verbatim (§9 E2) |
 | an auto-decided commit after the table | the same: the sha changed, so the approval is void, which is the right failure |
 | the user declines | nothing runs; reported "you declined" |
 | a subagent or peer issues the form | `PG-MERGE-ROLE` |
 | no opt-in | `PG-MERGE` for every form |
-| auto mode answers `ask` itself (E1 negative) | the hook denies the form instead (§9); the run-start line says merges stay manual |
 | the run halts | no end-of-run merge point, so nothing merges |
 
 ## 8. Tests
@@ -349,7 +350,8 @@ push guard's existing test pattern.
   - `--auto-merge` and the plain-language line;
   - step 3b's question, with "No" first;
   - the plan-run refusal;
-  - the three run-start lines, verbatim;
+  - the two run-start lines, verbatim;
+  - "head moved or merge refused";
   - the footer;
   - "Merge approvals are waiting for you in the session";
   - the end-of-run-only merge point;
@@ -395,12 +397,33 @@ Then run the full suite.
   if there is none, stop and report. No `--match-head-commit` → step 3b and
   the flag refuse with "gh too old for pinned merges".
 
+**Outcomes** (Claude Code 2.1.286, gh 2.96.0, 2026-09-30):
+- **E1 positive.** In an interactive `claude --permission-mode auto`
+  session, a PreToolUse hook's `ask` for a Bash command reached the human:
+  "Hook PreToolUse:Bash requires confirmation for this command … Do you want
+  to proceed? 1. Yes 2. No". §3-§4 are built as written. The payload carries
+  `permission_mode` ("auto").
+- **E2 skipped** (the user's choice: no throwaway PR). Any non-zero exit of
+  the §4 command is reported as "head moved or merge refused", with gh's own
+  message verbatim.
+- **E3 positive.** Plain top-level: no `agent_id`, no `agent_type`.
+  Top-level `--agent ah:orchestrator`: `agent_type: "ah:orchestrator"`, no
+  `agent_id`. Top-level `--agent ah:implementor`: `agent_type:
+  "ah:implementor"`, no `agent_id`. A general-purpose subagent: `agent_id`
+  and `agent_type: "general-purpose"`. §4.2 stands.
+- **E4 positive.** `gh pr view --json` returns all eight fields; `gh pr
+  merge --help` lists `--match-head-commit`; GraphQL
+  `reviewThreads(first: 100) { totalCount nodes { isResolved } }` answers.
+
 ## 10. Assumptions not verified
 
 - GitHub reports `mergeStateStatus` DRAFT for drafts, and `gh pr ready`
   doesn't change the head sha.
 - A PostToolUse Bash event fires only after the command ran, so a declined
   prompt writes no `merge` line.
+- The run's Orchestrator session is interactive, as E1 tested. In a
+  non-interactive session (`claude -p`) nobody can answer an `ask`; that
+  wasn't tested and is not supported for auto-merge.
 
 ## 11. Open questions for the user (defaults taken)
 
