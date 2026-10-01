@@ -95,6 +95,10 @@ To inspect the roster run `node <AH_ROOT>/hooks/roster.mjs show --cwd <abs cwd>`
 `.claude/agent-hierarchy.json` directly — it misses the worktree/main-checkout and global fallback
 resolution that `show` implements.
 
+Write verbs refuse (exit 2) a level file that exists but isn't a JSON object, an empty file
+included, and leave it untouched — fix or delete it, then re-run; read verbs ignore such a file,
+as before.
+
 ## After an update, mid-session
 
 `/reload-plugins` fires no SessionStart, so nothing re-announces the root at update time — but the

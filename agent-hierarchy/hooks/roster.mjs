@@ -2015,17 +2015,28 @@ function containerLabel(teamKey) {
     write that persists the cleaned file can list them under `migrated`. */
 const droppedAtRead = new Map();
 
-function readLevelFile(path) {
-  if (!existsSync(path)) return { version: CONFIG_VERSION };
+/** A level file's data as `{ data, problem }`. `problem` says why a file that exists can't be used
+    (it isn't valid JSON, or isn't a JSON object), and `data` is then the missing-file default. */
+function loadLevelFile(path) {
+  if (!existsSync(path)) return { data: { version: CONFIG_VERSION }, problem: null };
+  let data;
   try {
-    const data = JSON.parse(readFileSync(path, "utf8"));
-    if (!data || typeof data !== "object" || Array.isArray(data)) return { version: CONFIG_VERSION };
-    const dropped = dropNonObjectMembers(data);
-    if (dropped.length) droppedAtRead.set(path, dropped);
-    return data;
-  } catch {
-    return { version: CONFIG_VERSION };
+    data = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    return { data: { version: CONFIG_VERSION }, problem: `is not valid JSON (${e.message})` };
   }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return { data: { version: CONFIG_VERSION }, problem: "is not a JSON object" };
+  const dropped = dropNonObjectMembers(data);
+  if (dropped.length) droppedAtRead.set(path, dropped);
+  return { data, problem: null };
+}
+
+/** A level file's data, for a verb that will write it back. Refuses a file that exists but can't be
+    used, so a hand-edited file with a typo is never overwritten. */
+function readLevelFile(path) {
+  const { data, problem } = loadLevelFile(path);
+  if (problem) fail(`${path} ${problem} — fix or delete it, then re-run; nothing was written`);
+  return data;
 }
 
 /**
@@ -2250,11 +2261,13 @@ function untrackMember(dir, team, target, name) {
     store: `team ${JSON.stringify(team.team_id)}`,
   };
   if (opts["also-config"] === true) {
-    const result = removeConfigMember(target.name, templateKey);
+    const result = removeConfigMember(target.name, templateKey, { sideEffect: true });
     if (!result.removed) {
-      process.stderr.write(
-        `roster.mjs: ah: untracked ${target.name} from team ${team.team_id}, but no roster member named ${target.name} exists at level "${result.level}" — the config was not changed.\n`
-      );
+      if (!result.unusable) {
+        process.stderr.write(
+          `roster.mjs: ah: untracked ${target.name} from team ${team.team_id}, but no roster member named ${target.name} exists at level "${result.level}" — the config was not changed.\n`
+        );
+      }
       dismissOut.config = { removed: false, level: result.level, reason: result.reason };
     } else {
       // §3.5.1: ordinal shift. `result.before`/`result.after` are the config's
@@ -2323,10 +2336,18 @@ function teamTemplateKey(dir) {
   return resolved ? resolved.teamKey : key;
 }
 
-function removeConfigMember(name, key = rosterArg) {
+/** `sideEffect`: the caller has already done its main work, so a level file that can't be used gets
+    a warning and `{ removed: false, unusable: true }` instead of a refusal; the file is left as it is. */
+function removeConfigMember(name, key = rosterArg, { sideEffect = false } = {}) {
   const { level, wasDefaulted, teamKey } = targetLevel({ key });
   const path = rosterLevelPaths(cwd)[level];
-  const data = readLevelFile(path);
+  const loaded = sideEffect ? loadLevelFile(path) : { data: readLevelFile(path), problem: null };
+  if (loaded.problem) {
+    const reason = `${path} ${loaded.problem}`;
+    process.stderr.write(`roster.mjs: warning — ${reason}; ${name} was not removed from it — fix or delete it, then remove the member there\n`);
+    return { level, path, wasDefaulted, removed: false, unusable: true, reason };
+  }
+  const { data } = loaded;
   const container = rosterContainer(data, teamKey);
   if (!container || !Array.isArray(container.members)) {
     return { level, path, wasDefaulted, removed: false, reason: `no ${containerLabel(teamKey)} at level "${level}" (${path}) — run \`roster.mjs init\` first` };
@@ -5152,7 +5173,7 @@ try {
       if (explicit) {
         const level = requireLevel(explicit);
         const path = rosterLevelPaths(cwd)[level];
-        const data = readLevelFile(path);
+        const { data } = loadLevelFile(path);
         const container = rosterContainer(data, rosterArg);
         const resolved = resolveRoster(cwd, rosterArg, repoBasename, registry());
         const shown = container && Array.isArray(container.members) ? { route: container.route, members: namedMembers(container.members) } : null;
@@ -5884,7 +5905,7 @@ try {
           const templateKey = opts["also-config"] === true ? teamTemplateKey(dir) : null;
           if (writeTeamRows(dir, team, team.members.filter((m) => m.name !== name))) dismissClose.team_removed = true;
           dismissClose.untracked = true;
-          if (opts["also-config"] === true) dismissClose.config = removeConfigMember(target.name, templateKey);
+          if (opts["also-config"] === true) dismissClose.config = removeConfigMember(target.name, templateKey, { sideEffect: true });
         }
         out(dismissClose);
         break;
