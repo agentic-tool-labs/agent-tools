@@ -443,8 +443,10 @@ More:
 `/pipeline` (`/ah:pipeline` where the plugin name is needed) works through a
 list of items unattended. Each item goes through Architect, Implementor and
 Reviewer; the Reviewer takes item N while the Implementor starts N+1. An item
-gets at most 3 rounds. If it is still failing after the third, the run stops
-that item and tells you, rather than starting a fourth.
+gets at most 3 rework rounds. If it is still failing after the third, the run
+stops that item and tells you, rather than starting a fourth. Issue runs add
+caps of their own: at most 2 plan rounds per issue, and 3 per step and per
+gate.
 
 After the first notice (branch, route, permission mode, secret scanner) it
 only interrupts you when something needs a person: a round cap, a real
@@ -461,8 +463,9 @@ it scans the patch for secrets, with gitleaks if installed, otherwise with the
     /pipeline #12 https://github.com/acme/app/issues/14   # refs may be #N or an issue URL
     /pipeline --labelled                             # every open issue carrying the trigger label
 
-A file and issue refs can't be mixed, and `--branch` doesn't apply to issue
-runs. A bare number is an issue; write `./12` for a file named `12`. For a
+Give a plan run `--branch`: the skill defines no default branch for one. It
+never pushes to `main` or a protected branch. A file and issue refs can't be
+mixed, and `--branch` doesn't apply to issue runs. A bare number is an issue; write `./12` for a file named `12`. For a
 list of acceptance criteria, put it in a file and pass the path.
 
 **Who does the work.** The run builds its team itself with `roster.mjs
@@ -484,7 +487,10 @@ runs also need `gh` installed and logged in to github.com, a GitHub `origin`,
 and a `.claude/ah-conventions.json` that sets `issues.trigger_label` (plus
 `trusted_actors` for an organisation's repo). The same file can switch on the
 push guard, which refuses force pushes, protected branches, other remotes and
-`--no-verify`. Run state lives in the gitignored `.claude/hierarchy/`; a stale
+`--no-verify`. Most of the rules above, including never merging, draft PRs, the round caps
+and the secret scan, are the run's own instructions, not hook guarantees;
+only the push guard is enforced by a hook, and it matches command text, so
+`gh` misuse isn't covered. Run state lives in the gitignored `.claude/hierarchy/`; a stale
 open run anchor there makes the next run halt. Everything the conventions file
 accepts is in [docs/pipeline-conventions.md](./docs/pipeline-conventions.md);
 the full run procedure is
