@@ -113,9 +113,7 @@ check "U2 init creates a missing repo-user file" '[ $RC = 0 ] && [ -f "$REPO_USE
 
 # ---------------------------------------------------------------- U3 side-effect writers
 # untrack --also-config: the team row goes, the unparsable config file stays as it was.
-fresh
-mkdir -p "$PROJ/.claude/hierarchy"
-cat > "$PROJ/.claude/hierarchy/team.json" <<'EOF'
+cat > "$SANDBOX/team.json" <<'EOF'
 { "version": 1, "team_id": "t3", "created": "2026-01-01T00:00:00Z", "roster_level": "repo",
   "transport": "terminal", "orchestrator": { "session_id": null, "pid": null },
   "members": [
@@ -123,6 +121,9 @@ cat > "$PROJ/.claude/hierarchy/team.json" <<'EOF'
     {"role": "implementor", "name": "myrepo-implementor-2", "route": "peer", "model": "sonnet"}
   ], "partial": false }
 EOF
+fresh
+mkdir -p "$PROJ/.claude/hierarchy"
+cp "$SANDBOX/team.json" "$PROJ/.claude/hierarchy/team.json"
 spoil "$REPO_CFG" trunc
 cp "$REPO_CFG" "$SANDBOX/before"
 rm_ untrack myrepo-implementor-2 --commit --keep-sessions --also-config --level repo --cwd "$PROJ"
@@ -132,22 +133,66 @@ check "U3 ... the config file's bytes are unchanged" 'cmp -s "$REPO_CFG" "$SANDB
 check "U3 ... stderr names the path" '[[ "$ERR" == *"$REPO_CFG"* ]]'
 check "U3 ... its output shows the member not removed, with the reason" '[ "$(jget o.config.removed)" = false ] && [[ "$(jget o.config.reason)" == "$REPO_CFG is not valid JSON ("* ]]'
 
-# dismiss --close --also-config: the pane closes and the row goes; the config file stays.
+# untrack with no --level, when the only file that could define the roster won't parse: no level
+# resolves, and that is reported, not fatal.
 fresh
+rm -f "$REPO_CFG"
+mkdir -p "$PROJ/.claude/hierarchy"
+cp "$SANDBOX/team.json" "$PROJ/.claude/hierarchy/team.json"
+spoil "$REPO_USER_CFG" trunc
+cp "$REPO_USER_CFG" "$SANDBOX/before"
+rm_ untrack myrepo-implementor-2 --commit --keep-sessions --also-config --cwd "$PROJ"
+check "U3 untrack with no level resolving completes" '[ $RC = 0 ]'
+check "U3 ... the team row is gone" '! grep -q "myrepo-implementor-2" "$PROJ/.claude/hierarchy/team.json"'
+check "U3 ... the config file's bytes are unchanged" 'cmp -s "$REPO_USER_CFG" "$SANDBOX/before"'
+check "U3 ... the warning gives the reason" '[[ "$ERR" == *"no roster resolves at any level"* ]]'
+check "U3 ... its output shows the member not removed, with the reason" '[ "$(jget o.config.removed)" = false ] && [[ "$(jget o.config.reason)" == "no roster resolves at any level"* ]]'
+
+# untrack when the config file can't be written: reported, not fatal.
+fresh
+mkdir -p "$PROJ/.claude/hierarchy"
+sed 's/myrepo-implementor-2/myrepo-architect/' "$SANDBOX/team.json" > "$PROJ/.claude/hierarchy/team.json"
+chmod 444 "$REPO_CFG"
+cp "$REPO_CFG" "$SANDBOX/before"
+rm_ untrack myrepo-architect --commit --keep-sessions --also-config --cwd "$PROJ"
+chmod 644 "$REPO_CFG"
+check "U3 untrack with an unwritable config file completes" '[ $RC = 0 ]'
+check "U3 ... the team row is gone" '! grep -q "myrepo-architect" "$PROJ/.claude/hierarchy/team.json"'
+check "U3 ... the config file's bytes are unchanged" 'cmp -s "$REPO_CFG" "$SANDBOX/before"'
+check "U3 ... its output shows the member not removed, with the reason" '[ "$(jget o.config.removed)" = false ] && [[ "$(jget o.config.reason)" == "$REPO_CFG could not be written ("* ]] && [[ "$ERR" == *"could not be written"* ]]'
+
+# dismiss --close --also-config: the pane closes and the row goes; the config file stays.
 NODE_DIR="$(dirname "$(command -v node)")"
-mkdir -p "$SANDBOX/closebin" "$PROJ/.claude/hierarchy/teams"
+mkdir -p "$SANDBOX/closebin"
 printf '#!/bin/sh\n[ "$1" = "kill-pane" ] && exit 0\nexit 1\n' > "$SANDBOX/closebin/tmux"; chmod +x "$SANDBOX/closebin/tmux"
-printf '{"version":1,"team_id":"T-hotfix","created":"2026-01-01T00:00:00Z","roster_level":"repo","transport":"tmux","orchestrator":{"session_id":null,"pid":%s},"members":[{"role":"implementor","name":"hotfix-implementor","route":"peer","transport_id":"%%9"},{"role":"reviewer","name":"hotfix-reviewer","route":"peer","transport_id":"%%8"}],"partial":false,"roster":"hotfix"}' $$ > "$PROJ/.claude/hierarchy/teams/hotfix.json"
+# <roster.mjs flags for the close> : dismisses hotfix-implementor through its plan's close token.
+dismiss_close() {
+  mkdir -p "$PROJ/.claude/hierarchy/teams"
+  printf '{"version":1,"team_id":"T-hotfix","created":"2026-01-01T00:00:00Z","roster_level":"repo","transport":"tmux","orchestrator":{"session_id":null,"pid":%s},"members":[{"role":"implementor","name":"hotfix-implementor","route":"peer","transport_id":"%%9"},{"role":"reviewer","name":"hotfix-reviewer","route":"peer","transport_id":"%%8"}],"partial":false,"roster":"hotfix"}' $$ > "$PROJ/.claude/hierarchy/teams/hotfix.json"
+  TOK=$(env -u HERDR_ENV PATH="$SANDBOX/closebin:$NODE_DIR" HOME="$FAKEHOME" node "$H/roster.mjs" dismiss hotfix-implementor --team hotfix --cwd "$PROJ" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).close_token||"")}catch{}})')
+  OUT=$(env -u HERDR_ENV PATH="$SANDBOX/closebin:$NODE_DIR" HOME="$FAKEHOME" node "$H/roster.mjs" dismiss hotfix-implementor --close --confirm --plan-token "$TOK" --also-config "$@" --team hotfix --cwd "$PROJ" 2>"$SANDBOX/err"); RC=$?
+  ERR=$(cat "$SANDBOX/err")
+}
+fresh
 spoil "$REPO_CFG" trunc
 cp "$REPO_CFG" "$SANDBOX/before"
-TOK=$(env -u HERDR_ENV PATH="$SANDBOX/closebin:$NODE_DIR" HOME="$FAKEHOME" node "$H/roster.mjs" dismiss hotfix-implementor --team hotfix --cwd "$PROJ" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).close_token||"")}catch{}})')
-OUT=$(env -u HERDR_ENV PATH="$SANDBOX/closebin:$NODE_DIR" HOME="$FAKEHOME" node "$H/roster.mjs" dismiss hotfix-implementor --close --confirm --plan-token "$TOK" --also-config --level repo --team hotfix --cwd "$PROJ" 2>"$SANDBOX/err"); RC=$?
-ERR=$(cat "$SANDBOX/err")
+dismiss_close --level repo
 check "U3 dismiss --close --also-config on an unparsable config file completes" '[ -n "$TOK" ] && [ $RC = 0 ] && [ "$(jget o.closed)" = true ]'
 check "U3 ... the team row is gone" '! grep -q "hotfix-implementor" "$PROJ/.claude/hierarchy/teams/hotfix.json"'
 check "U3 ... the config file's bytes are unchanged" 'cmp -s "$REPO_CFG" "$SANDBOX/before"'
 check "U3 ... stderr names the path" '[[ "$ERR" == *"$REPO_CFG"* ]]'
 check "U3 ... its output shows the member not removed, with the reason" '[ "$(jget o.config.removed)" = false ] && [[ "$(jget o.config.reason)" == "$REPO_CFG is not valid JSON ("* ]]'
+
+fresh
+rm -f "$REPO_CFG"
+spoil "$REPO_USER_CFG" trunc
+cp "$REPO_USER_CFG" "$SANDBOX/before"
+dismiss_close
+check "U3 dismiss with no level resolving completes" '[ -n "$TOK" ] && [ $RC = 0 ] && [ "$(jget o.closed)" = true ]'
+check "U3 ... the team row is gone" '! grep -q "hotfix-implementor" "$PROJ/.claude/hierarchy/teams/hotfix.json"'
+check "U3 ... the config file's bytes are unchanged" 'cmp -s "$REPO_USER_CFG" "$SANDBOX/before"'
+check "U3 ... the warning gives the reason" '[[ "$ERR" == *"no roster resolves at any level"* ]]'
+check "U3 ... its output shows the member not removed, with the reason" '[ "$(jget o.config.removed)" = false ] && [[ "$(jget o.config.reason)" == "no roster resolves at any level"* ]]'
 
 # ---------------------------------------------------------------- U4 reads unchanged
 fresh

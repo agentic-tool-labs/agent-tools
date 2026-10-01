@@ -1948,8 +1948,14 @@ function levelArg() {
   return typeof bare === "string" && ROSTER_LEVELS.includes(bare) ? bare : null;
 }
 
+/** Why `level` isn't a level, or null when it is one. */
+function levelError(level) {
+  return ROSTER_LEVELS.includes(level) ? null : `--level must be one of ${ROSTER_LEVELS.join(", ")}, got ${JSON.stringify(level)}`;
+}
+
 function requireLevel(explicit) {
-  if (!ROSTER_LEVELS.includes(explicit)) fail(`--level must be one of ${ROSTER_LEVELS.join(", ")}, got ${JSON.stringify(explicit)}`);
+  const error = levelError(explicit);
+  if (error) fail(error);
   return explicit;
 }
 
@@ -1964,9 +1970,19 @@ function requireLevel(explicit) {
 // Overridden by an explicit `add --route`.
 const AUTO_INIT_ROUTE = "peer";
 
-function targetLevel({ allowMissing = false, key = rosterArg } = {}) {
+function targetLevel(options = {}) {
+  const target = resolveTargetLevel(options);
+  if (target.error) fail(target.error);
+  return target;
+}
+
+/** targetLevel's answer without exiting: `{level, wasDefaulted, teamKey}`, or `{error}`. */
+function resolveTargetLevel({ allowMissing = false, key = rosterArg } = {}) {
   const explicit = levelArg();
-  if (explicit) return { level: requireLevel(explicit), wasDefaulted: false, teamKey: key };
+  if (explicit) {
+    const error = levelError(explicit);
+    return error ? { error } : { level: explicit, wasDefaulted: false, teamKey: key };
+  }
   const resolved = resolveRoster(cwd, key, repoBasename, registry());
   if (resolved) return { level: resolved.level, wasDefaulted: true, teamKey: key };
   // Spec 0038 §1.1: with nothing resolving anywhere, `add` (only) may bootstrap at the same
@@ -1976,9 +1992,9 @@ function targetLevel({ allowMissing = false, key = rosterArg } = {}) {
     if (findGitRoot(cwd)) return { level: "repo", wasDefaulted: true, teamKey: key };
     // Spec 0038 §1.1: no git root → no auto-create; a bare `add` outside any repo must not write
     // the user-wide file as a side effect. The escape is explicit.
-    fail(`no roster resolves at any level and ${cwd} is not inside a git repo — re-run with --level global to create the user-wide roster (~/.claude/agent-hierarchy.json), or cd into a repo`);
+    return { error: `no roster resolves at any level and ${cwd} is not inside a git repo — re-run with --level global to create the user-wide roster (~/.claude/agent-hierarchy.json), or cd into a repo` };
   }
-  fail("no roster resolves at any level — run `roster.mjs init` first");
+  return { error: "no roster resolves at any level — run `roster.mjs init` first" };
 }
 
 /** Spec 0038 §1.1 "one writer": the roster block `init` creates, shared with `add`'s auto-init so
@@ -2336,17 +2352,21 @@ function teamTemplateKey(dir) {
   return resolved ? resolved.teamKey : key;
 }
 
-/** `sideEffect`: the caller has already done its main work, so a level file that can't be used gets
-    a warning and `{ removed: false, unusable: true }` instead of a refusal; the file is left as it is. */
+/** `sideEffect`: the caller has already done its main work, so nothing here may end the run. Whatever
+    keeps the member from being removed — no level resolving, a level file that can't be used, a
+    failed write — gets a warning and `{ removed: false, unusable: true, reason }` instead, and the
+    file is left as it is. */
 function removeConfigMember(name, key = rosterArg, { sideEffect = false } = {}) {
-  const { level, wasDefaulted, teamKey } = targetLevel({ key });
+  const notRemoved = (where, reason) => {
+    process.stderr.write(`roster.mjs: warning — ${name} was not removed from the config: ${reason}\n`);
+    return { ...where, removed: false, unusable: true, reason };
+  };
+  const target = sideEffect ? resolveTargetLevel({ key }) : targetLevel({ key });
+  if (target.error) return notRemoved({ level: null, path: null, wasDefaulted: false }, target.error);
+  const { level, wasDefaulted, teamKey } = target;
   const path = rosterLevelPaths(cwd)[level];
   const loaded = sideEffect ? loadLevelFile(path) : { data: readLevelFile(path), problem: null };
-  if (loaded.problem) {
-    const reason = `${path} ${loaded.problem}`;
-    process.stderr.write(`roster.mjs: warning — ${reason}; ${name} was not removed from it — fix or delete it, then remove the member there\n`);
-    return { level, path, wasDefaulted, removed: false, unusable: true, reason };
-  }
+  if (loaded.problem) return notRemoved({ level, path, wasDefaulted }, `${path} ${loaded.problem}`);
   const { data } = loaded;
   const container = rosterContainer(data, teamKey);
   if (!container || !Array.isArray(container.members)) {
@@ -2360,7 +2380,12 @@ function removeConfigMember(name, key = rosterArg, { sideEffect = false } = {}) 
   // no-matches per §3.2's guard, but only `remove --team X --all` may erase the block).
   container.members.splice(idx, 1);
   const after = namedMembers(container.members);
-  writeLevelFile(path, data);
+  try {
+    writeLevelFile(path, data);
+  } catch (err) {
+    if (!sideEffect) throw err;
+    return notRemoved({ level, path, wasDefaulted }, `${path} could not be written (${err.message})`);
+  }
   return { level, path, wasDefaulted, removed: true, idx, before, after, container: containerLabel(teamKey) };
 }
 

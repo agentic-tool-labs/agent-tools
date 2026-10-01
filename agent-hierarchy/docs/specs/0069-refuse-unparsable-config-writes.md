@@ -81,6 +81,15 @@ Instead, when the config file is unparsable, these verbs:
   reason;
 - exit as they would have with the member already absent from the config.
 
+- The same applies to **every** reason the config member can't be removed
+  after the main work, not only an unparsable file. That includes level
+  resolution failing: with no `--level`, `targetLevel` resolves through
+  lib-config, which skips an unparsable file, and it can fail with "no
+  roster resolves at any level". In the side-effect path, warn and return
+  `removed: false` with the reason. Never exit 2 once the pane has closed
+  or the team rows are written. (This case was found in the build. The
+  failure predates this spec, and it breaks the same rule.)
+
 `remove` is not in this group. The config edit is its whole job, so it
 refuses under §2.1.
 
