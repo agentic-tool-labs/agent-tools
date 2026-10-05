@@ -198,15 +198,23 @@ function mtimeMs(path) {
   }
 }
 
-function describeDispatches(exchanges, fmCache, teamKey, members, gates, nowMs) {
+/** Member-addressed exchanges that are open or reported within the window, any team: `{e, fm, reportedMs}`. */
+function dispatchCandidates(exchanges, fmCache, nowMs) {
   const out = [];
   for (const e of exchanges) {
     if (e.to === "orchestrator") continue;
     const reportedMs = e.open ? null : mtimeMs(e.response.path);
     if (!e.open && (reportedMs === null || reportedMs + REPORTED_WINDOW_MS <= nowMs)) continue;
-    const fm = requestFm(e, fmCache);
+    out.push({ e, fm: requestFm(e, fmCache), reportedMs });
+  }
+  return out;
+}
+
+function describeDispatches(candidates, origins, teamKey, members, gates, nowMs) {
+  const out = [];
+  for (const { e, fm, reportedMs } of candidates) {
     if ((fm.team || null) !== teamKey) continue;
-    const sentAt = dispatchOrigin(e.id, fm.created || null);
+    const sentAt = origins.get(e.id);
     const sentMs = Date.parse(sentAt);
     if (!Number.isFinite(sentMs)) continue;
     const eta = etaOf(fm.eta);
@@ -236,7 +244,7 @@ function describeDispatches(exchanges, fmCache, teamKey, members, gates, nowMs) 
 }
 
 function describePipeline(dir, exchanges, fmCache, teamKey) {
-  const anchor = openRunAnchor(dir, teamKey);
+  const anchor = openRunAnchor(dir, teamKey, exchanges);
   if (!anchor.id) return null;
   const anchorEx = exchanges.find((e) => e.id === anchor.id);
   const started = anchorEx ? requestFm(anchorEx, fmCache).created || null : null;
@@ -313,11 +321,17 @@ export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd)) 
     const exchanges = listExchanges(dir);
     const gates = readGates(dir);
     const fmCache = new Map();
+    let candidates = null;
+    let origins = null;
     for (const key of [null, ...listTeamNames(dir)]) {
       const t = readTeam(dir, key);
       if (!teamIsLive(t, null)) continue;
+      if (!candidates) {
+        candidates = dispatchCandidates(exchanges, fmCache, nowMs);
+        origins = dispatchOrigin(candidates.map(({ e, fm }) => ({ id: e.id, created: fm.created || null })));
+      }
       const members = describeMembers(dir, t, roster);
-      const dispatches = describeDispatches(exchanges, fmCache, key, members, gates, nowMs);
+      const dispatches = describeDispatches(candidates, origins, key, members, gates, nowMs);
       allMembers.push(...members);
       allDispatches.push(...dispatches);
       teams.push({

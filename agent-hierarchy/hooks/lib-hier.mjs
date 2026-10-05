@@ -434,9 +434,23 @@ export function listExchanges(dir) {
     .sort((a, b) => (a.id < b.id ? 1 : -1))
     .map((e) => {
       const to = e.request.meta.to;
-      const open = !e.response || (to !== "orchestrator" && reportStatus(e.response.path, e.id) === "no-report");
+      const open = !e.response || (to !== "orchestrator" && noReportYet(e.response.path, e.id));
       return { ...e, open, to, slug: e.request.meta.slug };
     });
+}
+
+/** A response over this many bytes holds a report: no skeleton is that long, so it is never read to tell. */
+const REPORT_BYTES = 4096;
+
+/** Whether a member's response holds no report yet, by `reportStatus` unless its size already says it does. */
+function noReportYet(path, id) {
+  // ponytail: a body over 4 KB made only of skeleton lines would read as a report; nobody writes 4 KB of `- none`.
+  try {
+    if (statSync(path).size > REPORT_BYTES) return false;
+  } catch {
+    // unreadable size: reportStatus decides
+  }
+  return reportStatus(path, id) === "no-report";
 }
 
 /**
@@ -515,9 +529,11 @@ export function listDownstreamDispatches(dir) {
  * `null` (§7.6 degradation), so it matches the default team. This is what
  * closes the `to_name: null` cross-team fan-out (spec 0011 §7.7): callers
  * that bucket peers by team must filter here BEFORE reading `to_name`.
+ * `exchanges`, when given, is `dir`'s `listExchanges` result already in hand,
+ * used instead of listing again.
  */
-export function openExchanges(dir, team) {
-  const list = listExchanges(dir).filter((e) => e.open);
+export function openExchanges(dir, team, exchanges = null) {
+  const list = (exchanges || listExchanges(dir)).filter((e) => e.open);
   if (team === undefined) return list;
   return list.filter((e) => {
     const parsed = readMsgFile(e.request.path);

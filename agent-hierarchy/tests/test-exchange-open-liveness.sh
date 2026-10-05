@@ -151,7 +151,7 @@ check "AC26: at T after the first row it blocks, and says sent 5m ago" 'is_block
 check "AC26: a second, later row did not delay that first check-in" '[ "$(nudges "$ID")" = 1 ]'
 dispatch_row 20260101-000000-a027 architect other-session "$(ago 900)"
 dispatch_row 20260101-000000-a027 architect o27 "$(ago 100)"
-origin() { HOME="$FAKEHOME" node --input-type=module -e "import { dispatchOrigin } from '$H/lib-peer.mjs'; console.log(String(dispatchOrigin(process.argv[1])));" "$1"; }
+origin() { HOME="$FAKEHOME" node --input-type=module -e "import { dispatchOrigin } from '$H/lib-peer.mjs'; console.log(String(dispatchOrigin([{ id: process.argv[1] }]).get(process.argv[1])));" "$1"; }
 EARLIEST=$(grep '"request_id":"20260101-000000-a027"' "$PENDING" | grep other-session | sed -E 's/.*"created":"([^"]+)".*/\1/')
 check "AC26: the origin is the earliest row's created, across sessions" '[ -n "$EARLIEST" ] && [ "$(origin 20260101-000000-a027)" = "$EARLIEST" ]'
 check "AC26: a request with no dispatch row has no origin" '[ "$(origin 20260101-000000-none)" = null ]'

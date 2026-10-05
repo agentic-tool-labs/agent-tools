@@ -60,15 +60,19 @@ function block(reason) {
  */
 function outstandingDispatches(dir, resolved, sessionId, now) {
   const myDispatches = new Map(dispatchRecordsFor(sessionId).map((r) => [r.request_id, r]));
-  const out = [];
+  const candidates = [];
   // A session that owns several live teams owes check-ins on each team's exchanges.
   const teams = resolved.ownedTeams && resolved.ownedTeams.length > 1 ? resolved.ownedTeams : [resolved.team];
   for (const e of teams.flatMap((team) => openExchanges(dir, team))) {
     if (!myDispatches.has(e.id)) continue; // no dispatch record from THIS session for this id (T14, T28)
     const parsed = readMsgFile(e.request.path);
     const fm = parsed && parsed.fm;
-    if (!fm || fm.from !== "orchestrator") continue;
-    const origin = Date.parse(dispatchOrigin(e.id, fm.created));
+    if (fm && fm.from === "orchestrator") candidates.push({ e, fm });
+  }
+  const origins = dispatchOrigin(candidates.map(({ e, fm }) => ({ id: e.id, created: fm.created })));
+  const out = [];
+  for (const { e, fm } of candidates) {
+    const origin = Date.parse(origins.get(e.id));
     if (!Number.isFinite(origin)) continue;
     const ageSec = Math.max(0, (now - origin) / 1000);
     const eta = etaOf(fm.eta);

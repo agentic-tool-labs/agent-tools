@@ -285,23 +285,28 @@ export function dispatchRecordsFor(sessionId) {
 }
 
 /**
- * A request's dispatch origin: the `created` of the earliest dispatch row for `requestId`, from any
- * session, or null when it has none. Every liveness clock starts here, not at the request file's
- * own `created`, so a request written early and sent later is not charged for its queue time; the
- * earliest row wins so that a re-send cannot reset the clock. When the request has rows but none
- * with a parseable `created`, `requestCreated` (the request file's `created`) is the origin, so a
+ * Each request's dispatch origin, for `requests` given as `{id, created}` (`created` being the
+ * request file's own): a Map from id to the `created` of the earliest dispatch row for that id,
+ * from any session, or null when it has none. The rows are read once per call. Every liveness clock
+ * starts here, not at the request file's `created`, so a request written early and sent later is not
+ * charged for its queue time; the earliest row wins so that a re-send cannot reset the clock. When a
+ * request has rows but none with a parseable `created`, its own `created` is the origin, so a
  * corrupt row cannot hide a dispatch.
  */
-export function dispatchOrigin(requestId, requestCreated = null) {
-  let origin = null;
-  let rows = 0;
-  for (const r of readPeerRecords()) {
-    if (!r || r.type !== "dispatch" || r.request_id !== requestId) continue;
-    rows++;
-    const t = Date.parse(r.created);
-    if (Number.isFinite(t) && (origin === null || t < Date.parse(origin))) origin = r.created;
+export function dispatchOrigin(requests) {
+  const seen = new Map();
+  for (const { id, created = null } of requests) seen.set(id, { created, rows: 0, origin: null });
+  if (seen.size) {
+    for (const r of readPeerRecords()) {
+      if (!r || r.type !== "dispatch") continue;
+      const s = seen.get(r.request_id);
+      if (!s) continue;
+      s.rows++;
+      const t = Date.parse(r.created);
+      if (Number.isFinite(t) && (s.origin === null || t < Date.parse(s.origin))) s.origin = r.created;
+    }
   }
-  return origin !== null ? origin : rows > 0 ? requestCreated : null;
+  return new Map([...seen].map(([id, s]) => [id, s.origin !== null ? s.origin : s.rows > 0 ? s.created : null]));
 }
 
 /**
