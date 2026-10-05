@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.2, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.3, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -83,7 +83,7 @@ mockup, it says so.
 
 | Repo / plugin | Kind | Files |
 |---|---|---|
-| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `skills/hierarchy/SKILL.md` (the on/off path refreshes status), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. **Not changed:** `hooks/msg.mjs`, `hooks/pretooluse-push-guard.mjs`. |
+| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-peer.mjs` (the dispatch-origin function, §3.1), `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `skills/hierarchy/SKILL.md` (the on/off path refreshes status), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. **Not changed:** `hooks/msg.mjs`, `hooks/pretooluse-push-guard.mjs`. |
 | `agent-tools/agent-hierarchy` (`ah`), P2b/P3 | new code | `agent-hierarchy/mod/`, plus `hooks`, `types` and `userConfig` keys in ah's plugin.json (§6.1). |
 | `claude-tui-line` | new items | §7 |
 
@@ -122,14 +122,29 @@ mockup, it says so.
   - The eta threshold table (stop-orchestrator-liveness.mjs:48), plus the
     check-in cadence (user decision Q4, which follows spec 0028 §5.7.2).
     Move both to one lib, as **one table of constants**:
-    - the first check-in falls due `T` after `created`;
+    - the first check-in falls due `T` after the dispatch's **origin**
+      (below);
     - the second falls due `T/2` after the first;
     - every later one falls due `T` after the previous one.
 
     The Stop hook applies that table relative to the nudges it actually
-    sent; §3.7.4 covers its one behaviour change. The status view applies
-    the same table to the ideal schedule, so `overdue_at = created + T` and
-    `stalled_at = created + 1.5T` (§4.2). Neither copies a number.
+    sent; §3.7.4 covers its behaviour changes. The status view applies the
+    same table to the ideal schedule, so `overdue_at = sent_at + T` and
+    `stalled_at = sent_at + 1.5T` (§4.2). Neither copies a number.
+  - **Dispatch origin (r3.3).** Every liveness and status clock starts at a
+    request's **origin**: the earliest `created` among the `type:"dispatch"`
+    rows for that request id, from any session. Those rows live in
+    `~/.claude/agent-hierarchy.peer-pending.jsonl` (lib-peer.mjs:249,
+    `{type, session_id, request_id, to, created}`); SendMessage writes one
+    per send (posttooluse-peer-resolve.mjs:62) and §3.7.3 adds one per
+    `deliver`. The request file's own `created` is never a clock origin: a
+    request written early and sent later (queued rework) would count its
+    queue time as work time. Earliest, not latest, so a re-send after a
+    nudge cannot reset the clock and hide a stall. A request with no
+    dispatch row has no origin and is not "out" (§4.2). One exported
+    function in `hooks/lib-peer.mjs` (which owns the rows) computes it,
+    given a request id; the Stop hook and lib-status both call it. Its name
+    is the Implementor's choice; AC 7 covers it.
   - stream-label's event→state table (`SELF_STATE`). Move it to a lib, and
     stream-label imports it.
   - **Placement (r3.1).** All three go into `hooks/lib-hier.mjs`, beside the
@@ -215,7 +230,9 @@ character.
       "to": "architect", "to_name": "agent-tools-architect" | null,
       "member": "agent-tools-architect" | null, "label": "architect",
       "eta": "large", "eta_ms": 1200000,
-      "created": "ISO", "checkins": 0,          // count of liveness-nudge gate rows for this request id
+      "created": "ISO",                          // request file's created; informational only
+      "sent_at": "ISO",                          // the dispatch origin (§3.1); every elapsed time is measured from it
+      "checkins": 0,                             // count of liveness-nudge gate rows for this request id
       "reported_at": "ISO" | null,              // response file mtime once reportStatus says a report is there
       "states": [ {"at": "ISO", "state": "working"},
                   {"at": "ISO", "state": "overdue"},
@@ -408,7 +425,7 @@ needs a test. Rows marked "unchanged" need one test proving it (§8 P1 AC 23).
   is nudged about it after `T`. That is acceptable: an open exchange is owed
   either way.
 
-**3.7.4 Stop-hook changes.** Exactly two.
+**3.7.4 Stop-hook changes.** Exactly three (the third added in r3.3).
 
 1. **Cadence.** The second nudge for a request is due `T/2` after the first,
    instead of `T` after it. All later nudges stay `T` after the previous
@@ -429,6 +446,13 @@ needs a test. Rows marked "unchanged" need one test proving it (§8 P1 AC 23).
    Before writing this line, the Implementor confirms by reading `deliver`
    that `--wait-only` sends nothing to the member. If it does send
    something, stop and report a spec gap.
+
+3. **Clock origin.** A dispatch's age, the "too young to flag" test and the
+   first check-in are measured from its origin (§3.1), not from the request
+   file's `created` (today `exchangeAgeSec`, lib-hier.mjs:558). So the
+   reason text's "sent {age} ago" becomes true. Which dispatches qualify is
+   unchanged: an open exchange with a dispatch row from **this** session.
+   If the Stop hook was `exchangeAgeSec`'s last caller, delete it.
 
 Everything else in the Stop hook stays as it is: its guards, how it records
 nudges, and its block decision.
@@ -525,8 +549,11 @@ it; otherwise its `name`.
 **Set.**
 
 - Every **member-addressed** request in the pool (filename `to` ≠
-  `orchestrator`, §3.7.1) that is open, plus every member-addressed request
-  reported within the last **10 min** (reported_at + 600 s > written_at).
+  `orchestrator`, §3.7.1) that **has a dispatch origin** (§3.1) and is
+  open, plus every such request reported within the last **10 min**
+  (reported_at + 600 s > written_at). r3.3: a request written but not yet
+  sent is not out. A subagent dispatch never gets a dispatch row, so it is
+  not shown either; that matches the Stop hook.
   r3: this replaces r2's `slug ≠ pipeline-run-anchor` clause. r2 would have
   shown every open run record (item, `-x`) as a dispatch that goes overdue
   and stalled; records are not member work.
@@ -538,7 +565,7 @@ it; otherwise its `name`.
   Orchestrator is gone and no consumer would show it. `msg.mjs list` still
   lists it.
 - Order: severity first (stalled, blocked, overdue, working, reported), then
-  oldest `created`.
+  oldest `sent_at`.
 - Cap the list at 50 per team, and put the remainder in
   `dispatches_truncated`.
 
@@ -556,10 +583,10 @@ the single member whose `role == to`. Failing that, `null`.
 | 1 | reported | `[{written_at, reported}, {reported_at+600s, expired}]` |
 | 2 | member exists and `live === false` | `[{written_at, stalled, reason:"member-gone"}]` |
 | 3 | member's `activity == blocked` | `[{written_at, blocked}]` |
-| 4 | otherwise | `[{created, working}, {created+T, overdue}, {created+1.5T, stalled, reason:"no-report"}]` |
+| 4 | otherwise | `[{sent_at, working}, {sent_at+T, overdue}, {sent_at+1.5T, stalled, reason:"no-report"}]` |
 
 - Rule 4's cut points are the first and second check-ins of the shared
-  cadence table (§3.1), applied to `created`. That is spec 0028 §5.7.2
+  cadence table (§3.1), applied to `sent_at` (the origin). That is spec 0028 §5.7.2
   (user decision Q4).
 - They do not move when a real nudge comes late. Otherwise a late first
   nudge would flip a dispatch from `stalled` back to `overdue`.
@@ -681,7 +708,7 @@ Consumers never re-derive eta, stall, liveness, counts or the status text.
   `listExchanges`, and only for `-ok` (§3.7.2).
 - The open/closed state of every orchestrator-addressed exchange, which
   includes every pipeline run record and so every anchor-liveness answer.
-- The Stop-hook liveness nudge, except for the two changes in §3.7.4: its
+- The Stop-hook liveness nudge, except for the three changes in §3.7.4: its
   guards, its gate rows and its block decision stay as they are.
 - stream-label behaviour and output.
 - The peers.jsonl format: no new `status` values.
@@ -807,7 +834,8 @@ on a hot reload (E8). The module adds no cancel or guard.
    - The tone classes match the mockup.
 3. **Dispatches:**
    `{slug} → {label} | eta {eta} | {bar} {pct}% | {m:ss} | {state}`, where
-   `pct = min(100, elapsed/eta_ms)`. Recent `reported` rows stay until they
+   `elapsed = now − sent_at` and `pct = min(100, elapsed/eta_ms)`. Every
+   `{m:ss}` and `{over}` in §6.4 is measured from `sent_at`. Recent `reported` rows stay until they
    expire. When there are none: `None outstanding.`
 4. **Width fallback**, on `bodyColumns`:
    - below 60, drop the bar;
@@ -820,7 +848,7 @@ on a hot reload (E8). The module adds no cancel or guard.
 
 | Trigger (state at now) | Dedupe key | Text |
 |---|---|---|
-| dispatch `reported` | `reported:{id}` | `{label} reported · {slug} · {reported_at−created as 6m 40s}` |
+| dispatch `reported` | `reported:{id}` | `{label} reported · {slug} · {reported_at−sent_at as 6m 40s}` |
 | member `blocked` | `blocked:{name}:{activity_at}` | `{label} blocked · {blocked_note}` when it is set (pane members); else `{label} blocked · waiting for permission` when `blocked_by == "permission"` (Claude members, E3); else `{label} blocked · waiting on a prompt` |
 | dispatch `stalled` | `stalled:{id}` | `{label} stalled · {slug} · {checkin phrase from §6.4 \| {name} is gone}` |
 
@@ -1007,7 +1035,9 @@ commit whole (§3.7.8). The ACs each step must satisfy are in brackets.
 3. **Stop-hook liveness for pane work.** The cadence constant joins the
    shared table and the Stop hook moves to `T/2` for the second nudge;
    pane-member wording; the `deliver` dispatch row in
-   `pretooluse-ah-cli.mjs`. [AC 19, 20, 21; AC 7 for cadence; AC 14]
+   `pretooluse-ah-cli.mjs`; the dispatch-origin function in lib-peer and
+   the Stop hook's clock moved onto it (§3.1, §3.7.4 item 3).
+   [AC 19, 20, 21, 26; AC 7 for cadence and origin; AC 14]
 4. **Producer and verb.** `lib-status.mjs`, `roster.mjs status`,
    `tests/fixtures/status/`, `docs/status-file.md`, the `docs/cli-tools.md`
    row. No write triggers yet; tests stage activity files directly.
@@ -1032,8 +1062,10 @@ live pool.
 1. **Verb:** `roster.mjs status` prints a valid schema-1 doc and writes
    `status.json` atomically. With no `<hier>`, it writes nothing and exits 0.
    With `--plain`, it prints `ah · …` or an empty line.
-2. **Eta schedule:** one dispatch per eta size, evaluated at `created`,
-   `+T−1s`, `+T`, `+1.5T−1s` and `+1.5T`. Each gives the correct current
+2. **Eta schedule:** one dispatch per eta size, each with its request
+   `created` 10 min before its first dispatch row, evaluated at `sent_at`,
+   `+T−1s`, `+T`, `+1.5T−1s` and `+1.5T`. A second, later dispatch row for
+   the same id does not move `sent_at`. Each gives the correct current
    state and timeline counts. A late `liveness-nudge` row does not move
    `stalled_at`.
 3. **Report present and dispatch set:**
@@ -1046,6 +1078,8 @@ live pool.
    - an open orchestrator-addressed request (e.g. an open `<tag>-i1`
      record) is **not** in `dispatches` and adds nothing to `out`;
    - an open member-addressed request whose team is not live is not in
+     `dispatches`;
+   - an open member-addressed request with no dispatch row is not in
      `dispatches`.
 4. **Member-driven rules:**
    - a gone member → `stalled` with `member-gone`;
@@ -1058,7 +1092,8 @@ live pool.
    output and exit code.
 7. **Single source:** a grep test proves each of these is defined exactly
    once in `hooks/`: the eta threshold table, the check-in cadence,
-   `reportStatus`, and the event→state table. The same test fails if
+   `reportStatus`, the event→state table, and the dispatch-origin function
+   (no other hook reads dispatch-row timestamps). The same test fails if
    `stream-label.mjs` has a static import from `./lib-hier.mjs` (§3.1
    r3.2). The existing liveness-hook tests still pass unchanged.
 8. **Activity hook:**
@@ -1121,8 +1156,8 @@ live pool.
     - `--wait-only` writes none;
     - past `T` with a stub response, Stop blocks, and that item's line uses
       the pane wording (no ListAgents or SendMessage).
-21. **Cadence:** the first nudge is at `T`. The second is due when
-    `now − ts1 ≥ T/2` and not before. The third is due when
+21. **Cadence:** the first nudge is at `T` after the origin. The second is
+    due when `now − ts1 ≥ T/2` and not before. The third is due when
     `now − ts2 ≥ T`. A grep test shows the cadence numbers exist only in the
     shared lib.
 22. **Push guard** (`merge-check`, in `test-pipeline-merge.sh` or a new
@@ -1147,6 +1182,15 @@ live pool.
     contains "body `closed:" or "as the response body"; it states the
     `--to orchestrator --from orchestrator` record address once, with the
     literal request command.
+26. **Clock origin** (Stop hook; HOME redirected so the dispatch rows go
+    to a temp `~/.claude`): a request whose file `created` is 10 min before
+    this session's first dispatch row for it, eta small, still open:
+    - 1 min after the row: no block (it was blocked before r3.3);
+    - `T` after the row: block, and the reason says "sent 5m ago";
+    - a second dispatch row for the same id 2 min after the first does not
+      delay the first nudge;
+    - the origin function returns the earliest row's `created` across
+      sessions, and nothing for an id with no row.
 
 ### P2a: claude-tui-line items
 
@@ -1254,6 +1298,14 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
 
+r3.3 (live false nudge on a queued request): every liveness and status
+clock now starts at the dispatch **origin**, the earliest dispatch row for
+the request id (§3.1), instead of the request file's `created`. The Stop hook
+gains a third change (§3.7.4 item 3); the doc gains `sent_at`; unsent
+requests are not out (§4.2); §6.4/§6.5 measure from `sent_at`. P1 step 3
+gains the origin function and AC 26; step 4's AC 2 and 3 change; E1 includes
+the dispatch-row file.
+
 r3.2 (Reviewer spec-defect at P1 step 1): §3.1's "stream-label pays nothing
 extra" was false: a static lib-hier import costs every session about 6 ms per
 UserPromptSubmit/Stop/Notification. stream-label now imports lib-hier lazily
@@ -1296,7 +1348,7 @@ and E13 (P2b start).
 
 | # | Run or measure | Decides |
 |---|---|---|
-| E1 | **Open (P1 step 7).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). Report p50 and p95 for each. | Status write p95 ≤ 15 ms → ship as is. Over 15 ms → add write coalescing (skip a write if the last one was under 1 s ago, plus one trailing write), and amend the spec. `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
+| E1 | **Open (P1 step 7).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). r3.3: also copy `~/.claude/agent-hierarchy.peer-pending.jsonl` to `$T/home/.claude/` and run with `HOME=$T/home`, because the status write now reads dispatch rows from that global, append-only file; report its size. Report p50 and p95 for each. | Status write p95 ≤ 15 ms → ship as is. Over 15 ms → add write coalescing (skip a write if the last one was under 1 s ago, plus one trailing write), and amend the spec. `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
 | E2 | **Done: async honoured; sync = 32–36 ms per call; async killed at `-p` exit.** Does Claude Code 2.1.289 honour `"async": true` on a command hook in a plugin's hooks.json? Measure the added wall-clock per tool call for PostToolUse(`*`) with and without it. | Async works → register it async. It does not → measure sync cost; over 50 ms per call → escalate Q5 to the user with the number. |
 | E3 | **Done: fires ~6–8 s late; `message` is a constant → `note: null`.** In an `--agent` peer session under a test team in a temp git repo, trigger a permission prompt. Does Notification(`permission_prompt`) fire, and what does its `message` field contain? | Fires → design holds, and `blocked_note` = message. Does not fire → Claude-peer blocked detection has no event source; return to the Architect. |
 | E4 | **Done: yes (idle ≤ 1 s; busy at next tool boundary).** Does UserPromptSubmit fire in a peer when a cross-session `SendMessage` brief arrives? | Yes → `working` is immediate. No → the first PostToolUse sets it, and docs/status-file.md says so. No design change. |
