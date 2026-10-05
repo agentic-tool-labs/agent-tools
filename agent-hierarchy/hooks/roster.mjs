@@ -5121,11 +5121,11 @@ function paneMemberOrFail(dir, name, verb) {
   const members = Array.isArray(team.members) ? team.members.filter((m) => m && typeof m === "object") : [];
   const member = members.find((m) => m.name === name);
   if (!member) {
-    const pane = members.filter((m) => resolveKind(m) !== KIND_DEFAULT && m.route === "pane").map((m) => m.name);
+    const pane = members.filter(isPaneMember).map((m) => m.name);
     fail(`${verb}: ${teamPath(dir, teamFile)} has no member named ${JSON.stringify(name)} — its pane members are: ${pane.join(", ") || "(none)"}`);
   }
   if (resolveKind(member) === KIND_DEFAULT) fail(`${verb}: ${name} is a Claude session — SendMessage it`);
-  if (member.route !== "pane") fail(`${verb}: ${name} (kind ${resolveKind(member)}) is recorded with route ${JSON.stringify(member.route)}, not "pane"`);
+  if (!isPaneMember(member)) fail(`${verb}: ${name} (kind ${resolveKind(member)}) is recorded with route ${JSON.stringify(member.route)}, not "pane"`);
   return member;
 }
 
