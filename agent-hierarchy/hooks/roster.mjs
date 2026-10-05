@@ -164,7 +164,7 @@ import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expan
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
-import { clearActivity, computeStatus, plainStatus, readActivityRecord, recordActivity, saveStatus } from "./lib-status.mjs";
+import { clearActivity, computeStatus, plainStatus, recordActivity, saveStatus } from "./lib-status.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
@@ -3814,27 +3814,23 @@ function promptNote(member, p) {
 const PANE_ACTIVITY = { working: "working", idle: "idle", done: "idle", blocked: "blocked", agent_not_found: "unknown" };
 
 /**
- * A pane member's activity record as `deliver` learns its state from Herdr: `see` writes it when
- * the state changes from what the record holds, and `final` writes the last state seen once more
- * as the run ends.
+ * A pane member's activity record as `deliver` learns its state from Herdr: `see` records each
+ * observation, and `final` records the last one again as the run ends. `recordActivity` writes only
+ * a state the record does not already hold, so neither ever refreshes the time a state began.
  */
 function paneActivityObserver(dir, member) {
   const subject = `pane-${member.name}`;
-  let written = readActivityRecord(dir, subject);
   let latest = null;
-  const write = (rec) => {
-    if (recordActivity(dir, subject, rec)) written = rec;
-  };
   return {
     see(agentStatus, p = null) {
       const activity = PANE_ACTIVITY[agentStatus];
       if (!activity) return;
       const blocked = activity === "blocked";
       latest = { activity, blocked_by: blocked ? (p && p.blocked_by) || null : null, note: blocked ? promptNote(member, p) : null };
-      if (!written || written.activity !== latest.activity || (written.blocked_by || null) !== latest.blocked_by) write(latest);
+      recordActivity(dir, subject, latest);
     },
     final() {
-      if (latest && latest !== written) write(latest);
+      if (latest) recordActivity(dir, subject, latest);
     },
   };
 }
@@ -3991,9 +3987,10 @@ async function launchMember(member, transport) {
  * Per-member layout+launch+retry (spec 0009 §6.3 step 5): place `peerMembers.length` panes via the
  * transport, assign each member's `transport_id`, then launch+retry each with `launchMember`.
  * Mutates `peerMembers` in place (`transport_id`); returns launch results aligned to `peerMembers`.
- * Shared by `createSpawn` (spec 0005) and `spawn-one` (spec 0009 §6) — one implementation.
+ * Shared by `createSpawn` (spec 0005) and `spawn-one` (spec 0009 §6) — one implementation. Every
+ * `route: pane` member it launches is recorded idle in `dir`'s activity records.
  */
-async function layoutAndLaunch(allMembers, transport, mode, splitCwd, callerLabel, layoutOpts = {}) {
+async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, callerLabel, layoutOpts = {}) {
   // Spec 0043 §1.4/§4.3: a refused member has nothing shelled for it — and a pane IS something
   // shelled for it, so the refusal must land BEFORE the layout step, not inside launchMember.
   // Partitioned here rather than at each call site because this is the one seam `create --spawn`,
@@ -4041,6 +4038,9 @@ async function layoutAndLaunch(allMembers, transport, mode, splitCwd, callerLabe
   });
 
   const settled = await Promise.allSettled(peerMembers.map((m) => launchMember(m, transport)));
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled" && r.value.launch_status !== "failed" && peerMembers[i].route === "pane") recordActivity(dir, `pane-${peerMembers[i].name}`, { activity: "idle" });
+  });
   const launched = settled.map((r, i) => (r.status === "fulfilled" ? r.value : { ...peerMembers[i], launch_status: "failed", launch_result: null, retried: false, error: String(r.reason) }));
   // Results stay aligned to the caller's original array so an index-keyed caller still lines up.
   return allMembers.map((m) => (m.spawn && m.spawn.refuse ? { ...m, transport_id: null, launch_status: "failed", launch_result: { reason: "refused", ...(m.spawn.refusal || {}), detail: m.spawn.refuse }, retried: false, error: m.spawn.refuse } : launched[peerMembers.indexOf(m)]));
@@ -4504,7 +4504,7 @@ async function createSpawn(dir, withWarnings) {
   const tierBlocked = peerMembers.find(adviseTierBlocked);
   if (tierBlocked) refuseAdviseTier(tierBlocked);
 
-  const launched = await layoutAndLaunch(peerMembers, transport, layout.mode, cwd, "create --spawn");
+  const launched = await layoutAndLaunch(dir, peerMembers, transport, layout.mode, cwd, "create --spawn");
   storeTeamLayout(layout);
   const launchByName = new Map(peerMembers.map((m, i) => [m.name, launched[i]]));
 
@@ -5023,7 +5023,7 @@ async function spawnOneCore(role, callerLabel, adHocMember = null) {
     : [];
 
   const anchor = stream && transport === "herdr" ? streamAnchor(dir, stream, team) : null;
-  const [launched] = await layoutAndLaunch([planEntry], transport, mode, cwd, callerLabel, { seedPanes, anchor });
+  const [launched] = await layoutAndLaunch(dir, [planEntry], transport, mode, cwd, callerLabel, { seedPanes, anchor });
   if (launched.launch_status === "failed") {
     // Spec 0043 §1.4/§1.9: the orphaned-pane id, its close command and the args-blame diagnostic
     // live in `launch_result`. `fail()` prints one line, so they have to be folded into it —
@@ -5081,7 +5081,6 @@ async function spawnOneCore(role, callerLabel, adHocMember = null) {
   if (idx === -1) outTeam.members.push(newRecord);
   else outTeam.members[idx] = newRecord;
   writeTeam(dir, outTeam, teamFile);
-  if (newRecord.route === "pane") recordActivity(dir, `pane-${newRecord.name}`, { activity: "idle" });
   const outMember = launched.label ? { ...newRecord, label: launched.label } : newRecord;
   // Spec 0035 §2.4: report where this peer actually launched, not just that it launched.
   const spawnOut = { spawned: true, member: outMember, team_id: outTeam.team_id, roster_level: outTeam.roster_level, launch_cwd: planEntry.spawn.launch_cwd, ...validation, ...renamedField(renamedNow) };

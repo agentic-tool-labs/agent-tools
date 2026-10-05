@@ -67,19 +67,17 @@ function activityFile(subject) {
   return typeof subject === "string" && subject && subject !== "." && subject !== ".." && !/[/\\]/.test(subject) ? `${subject}.json` : null;
 }
 
-/** A subject's activity record `{activity, at, blocked_by, note}`, or null. */
-export function readActivityRecord(dir, subject) {
-  const file = activityFile(subject);
-  return file && dir ? readActivity(dir, file) : null;
-}
-
 /**
  * Write a subject's activity record atomically and refresh the status file. Only the subject's own
- * events write its record. Writes nothing without the hierarchy dir. Never throws; true when written.
+ * events write its record. A record already holding this `activity`, `blocked_by` and `note` is left
+ * alone, so its `at` stays the moment that state began. Writes nothing without the hierarchy dir.
+ * Never throws; true when written.
  */
 export function recordActivity(dir, subject, { activity, blocked_by = null, note = null }) {
   const file = activityFile(subject);
   if (!file || !dir || !existsSync(dir)) return false;
+  const current = readActivity(dir, file);
+  if (current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note) return false;
   try {
     const activityDir = join(dir, "activity");
     mkdirSync(activityDir, { recursive: true });

@@ -568,6 +568,7 @@ rm -rf "$HIER"; reset_state
 printf '{"version":1,"enabled":true,"roles":{},"roster":{"route":"pane","members":[{"role":"architect","kind":"codex","route":"pane","model":"gpt-6-astra"}]}}\n' > "$CFG"
 r "HERDR_ENV=1" create --spawn
 check "K3 Part 1: create --spawn writes the same instructions as spawn-one" '[ "$RC" -eq 0 ] && cmp -s "$SANDBOX/arch-spawn-one.md" "$HIER/instructions/myrepo-architect.md"'
+check "AC9: create --spawn records a pane member idle" '[ "$(activity_of myrepo-architect a.activity)" = idle ]'
 check "K3 Part 1: spawnShape and launchMember both generate through standingInstructions(member), the only caller of the adapter" '[ "$(grep -c "standingInstructions(member)" "$H/roster.mjs")" -eq 3 ] && [ "$(grep -c "harnessAdapter(" "$H/roster.mjs")" -eq 2 ]'
 
 # a kind with no mapping, every class it can launch: generic action limits, Part 1's exec text, the unavailable paragraph
@@ -686,6 +687,13 @@ check "AC9: deliver records the pane member blocked, with blocked_by and the pro
 check "K4/K13: blocked — the trust dialog on screen, though Herdr says idle and ready; nothing sent, no pane closed" '[ "$(jo o.status)" = blocked ] && [ "$(jo o.blocked_by)" = trust-dialog ] && [ "$(calls prompt)" -eq 0 ] && [ "$(calls pane-close)" -eq 0 ] && [ ! -f "$RESP" ]'
 check "K17: a blocked from the check before sending has sent: false, and its next step is the same command" '[ "$(jo o.sent)" = false ] && jo o.message | grep -q "re-run this same command in the background: node .*deliver myrepo-architect --req"'
 check "K13: ...with the screen verbatim and its options" 'jo o.screen | grep -q "Do you trust the contents" && [ "$(jo "o.options.map(x=>x.id).join()")" = trust,distrust ]'
+AT1=$(activity_of myrepo-architect a.at)
+hs "{agents:{\"myrepo-architect\":{gets:[$IDLE],visible:\"@trust\"}}}"
+r "" deliver myrepo-architect --req "$REQ"
+check "AC9: a second deliver that sees the same blocked prompt leaves the record's at unchanged" '[ "$(jo o.blocked_by)" = trust-dialog ] && [ "$(activity_of myrepo-architect a.at)" = "$AT1" ]'
+hs "{agents:{\"myrepo-architect\":{gets:[$IDLE],visible:\"@login\"}}}"
+r "" deliver myrepo-architect --req "$REQ"
+check "AC9: one that sees a different prompt rewrites it" '[ "$(jo o.blocked_by)" = login ] && [ "$(activity_of myrepo-architect a.blocked_by)" = login ] && [ "$(activity_of myrepo-architect a.at)" != "$AT1" ]'
 
 setup_deliver
 hs '{agents:{}}'

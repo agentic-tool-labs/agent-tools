@@ -16,7 +16,7 @@
 import { hierarchyDir, isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
 import { SELF_STATE } from "./lib-hier.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
-import { readActivityRecord, recordActivity, statusChanged } from "./lib-status.mjs";
+import { recordActivity, statusChanged } from "./lib-status.mjs";
 
 try {
   const input = await readHookInput();
@@ -27,12 +27,9 @@ try {
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     let recorded = false;
     if (sessionId && readSessionRole(sessionId)) {
-      if (event === "PostToolUse") {
-        const current = readActivityRecord(dir, sessionId);
-        if (!current || current.activity !== "working") recorded = recordActivity(dir, sessionId, { activity: "working" });
-      } else if (SELF_STATE[event]) {
-        recorded = recordActivity(dir, sessionId, { activity: SELF_STATE[event], blocked_by: event === "Notification" ? "permission" : null });
-      }
+      // PostToolUse means working again; recordActivity leaves a record already in that state alone.
+      const activity = event === "PostToolUse" ? "working" : SELF_STATE[event];
+      if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null });
     }
     if (!recorded && (event === "UserPromptSubmit" || event === "Stop")) statusChanged(dir);
   }
