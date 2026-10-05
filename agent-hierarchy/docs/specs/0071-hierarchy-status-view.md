@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.13. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.15. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -988,6 +988,17 @@ agent-hierarchy/
   "default": true}`. Suggested description: show the hierarchy line
   (`⚠ ah: …`) above the prompt, and turn it off when claude-tui-line's
   `ah` item already shows it.
+- r3.14: a `--plugin-dir` load makes the engine write two files into the
+  plugin: `agent-hierarchy/tsconfig.json` (`{"extends":
+  "./.claude-plugin/types/tsconfig.json"}`) and
+  `agent-hierarchy/.claude-plugin/types/` (the client's API types).
+  - Both are client-version-specific output, so they are git-ignored and
+    never committed. Rewriting them on each client would churn the repo.
+  - The rules go in a new `agent-hierarchy/.gitignore`, anchored to the
+    plugin root: `/tsconfig.json` and `/.claude-plugin/types/`. They
+    travel with the plugin, and they cannot match
+    `mod/types/index.d.ts`, the authored `types` contract, which stays
+    tracked. No bare `types/` pattern.
 - r3.11: mod code is built and tested only in the worktree, through
   `claude plugin test` and `--plugin-dir`. It is never copied into
   `~/.claude/dev-mods/`, because that hot-loads it into the user's live
@@ -1014,7 +1025,10 @@ The rest of §6 calls the mod's folder `<mod>` = `agent-hierarchy/mod`.
 1. Start at `$.session.cwd()` and walk up to the first directory that
    contains a `.git` entry (file or dir).
 2. The file is `<that dir>/.claude/hierarchy/status.json`.
-3. Resolve the path again when `cwd` changes.
+3. Resolve the path again when `cwd` changes. r3.15: each tick reads
+   `$.session.cwd()` and re-walks only when it differs. There is no
+   `classic.CwdChanged` hook, because classic events are not on the
+   allow-list (§6.3).
 4. With no `.git` anywhere up the tree, there is no file.
 
 r3.12: this is exactly the rule `ah`'s writer uses (`hierarchyDir` →
@@ -1036,7 +1050,7 @@ non-git fallback dir. claude-tui-line uses the same rule (§7.2).
 | `command.run` `{command:'hierarchy-pane'}` | `$.ui.open({id:'ah-status', title:'Hierarchy'})`, which places at any width. Clears the "closed by person" flag. Returns `{text}`. |
 | `ui.render` `{component:'Pane', requestId:'ah-status'}` | Draws §6.4 Pane at `e.props.bodyColumns`. |
 | `ui.render` `{component:'AbovePrompt'}` | Returns `next(e)` when `e.props.hasSurvey`, or when there is no band. Otherwise draws one line (§6.4). |
-| `ui.close` on `ah-status` with origin `person` | Sets "closed by person" in `$.state`. No auto-reopen this session. |
+| `ui.close` on `ah-status` with origin `person` | Sets "closed by person" in `$.state`. No auto-reopen this session. r3.15: `ui.close` is an op event, so the handler always returns `next(e)`. |
 
 **Auto-open:** at most once per session, when a visible doc is first seen in
 a non-member session that the person has not closed. Call `$.ui.open`
@@ -1046,6 +1060,76 @@ unasked: it seats at ≥144 columns and waits below that. The "opened" and
 **Read-only rule:** the module calls no `$.process`, no `$.fs.write`, no
 `$.session.send`, no `$.tool`, no `$.agent` and no `$.model`. A test asserts
 this (§6.6).
+
+**r3.15: the rule is now an allow-list, with nothing else permitted.**
+
+The six-noun deny-list missed most ways to act. A module acts in two ways,
+and both are closed:
+
+- through a `$` call;
+- through the value a hook returns. For example, `classic.PermissionRequest`
+  returning `{behavior:'allow'}` or `PreToolUse` returning `allow:true`
+  answers a prompt, and so does a `tool.check` decision. Hooking an op
+  event intercepts other plugins' calls.
+
+The source is the 2.1.289 types file:
+`/private/tmp/claude-501/bundled-skills/2.1.289/<hash>/plugin-authoring/types/claude-code.d.ts`.
+`$` is the first parameter of every hook (≈:4333, :4642), and each
+`$.<noun>.<method>` is also a hookable op event (:6522).
+
+1. **Allowed `$` calls.** No other `$` member may be called. Each entry
+   gives its line in the types file and who needs it:
+
+   | Call | Types | Needed by |
+   |---|---|---|
+   | `$.session.cwd()` | :2673 | §6.2 locating; it is read on every tick, so there is no cwd-change hook |
+   | `$.session.id()` | :2694 | the member-session rule |
+   | `$.fs.stat()`, `$.fs.read()`, `$.fs.exists()` | :3219, :3140, :3166 | §6.2–6.3 |
+   | `$.clock.every()`, `$.clock.now()` | :3362, :3331 | §6.3 |
+   | `$.state.get()`, `$.state.set()` | :3298, :3314 | flags and the toast seen-set, the module's own session state (§6.3, §6.5) |
+   | `$.ui.status()` | :2375 | P2b |
+   | `$.ui.toast()`, `$.ui.open()`, `$.ui.resolve()` | :2363, :2398, :2314 | P3 |
+   | `$.command.register()` | :2989 | P3 `/hierarchy-pane`; registers its own command and sends nothing |
+
+   Everything else is out. Notable exclusions:
+   - `session.authorize`, `.append`, `.send`, `.compact`;
+   - `prompt.*` writes, `turn.abort`, `tool.*`, `agent.*`, `model.*`;
+   - `mcp.*`, `http.fetch`, `process.*`, `env.set`;
+   - `config.set`, `command.run`, `telemetry.*`;
+   - `fs.write`;
+   - `store.*`, which is a persistent file under the user's config and
+     is not needed, because §6.5 uses `$.state`;
+   - `ui.ask`, `ui.copy`, `ui.log`, `audio.*`.
+
+   `process.run` is excluded even for a read-only argv such as
+   `herdr agent get`. The guard cannot check an argv, and the doc already
+   carries pane activity (§3.3).
+2. **Allowed hook registrations.** No classic event, no wildcard or
+   negated pattern, and no other op event may be registered.
+   - `session.start`: returns `next(e)`. Its return changes nothing
+     anyway (≈:11143).
+   - `ui.close`, an op event: notes the "closed by person" flag (§6.3)
+     and **always** returns `next(e)`. It never returns `{deny}` or
+     `{value}`.
+   - P3: `command.run`, for its own command only (`{ command:
+     'hierarchy-pane' }`). It returns `{text}` there. `command.run` is the
+     event the module answers; the `$.command.run` call stays banned.
+   - P3: `ui.render`, for its own `Pane` (`requestId: 'ah-status'`) and
+     `AbovePrompt` only. Anything else gets `next(e)`.
+   - Use matchers where the API offers them. A handler that sees other
+     events returns `next(e)` for them.
+3. **No indirection.**
+   - The `$` identifier appears only as a hook-handler parameter (`($, e,
+     next)`, `($: EngineInterface, …)`) or directly followed by
+     `.<noun>.<method>`.
+   - Banned: passing `$` as an argument, assigning or destructuring it,
+     `$[…]`, and stopping at `$.<noun>` without a method.
+   - `globalThis`, `eval`, `Function(`, `Reflect` and `Proxy` are banned
+     in module source.
+   - `view.ts` contains no `$` at all (it is pure, §6.1).
+   - `on` is used only as `on('<literal>', …)` calls on `register`'s
+     parameter.
+   - Template `${…}` is not a `$` identifier.
 
 **Timer and reload:** the engine drops the old environment's `every` timer
 on a hot reload (E8). The module adds no cancel or guard.
@@ -1217,6 +1301,40 @@ No real file is read in any mod test.
 **Read-only guard.** A test fails if the module source references
 `$.process`, `$.fs.write`, `$.session.send`, `$.tool`, `$.agent` or
 `$.model`. A grep-style test is fine.
+
+r3.15: this deny-list is replaced by §6.3's allow-list.
+
+- `tests/test-mod-readonly.sh` holds the **one** copy of the allowed
+  `$` calls and events. It scans all module source under `mod/`, except
+  `tests/` and `types/`, and fails on:
+  - any `$` call that is not in the list;
+  - any `$` occurrence that §6.3 item 3 bans;
+  - any `on(` registration whose first argument is not an allowed string
+    literal;
+  - any banned indirection token.
+- **Second net, dynamic:** `claude plugin validate agent-hierarchy` prints
+  the module's registered hooks (`hooks: …`), and the test asserts they
+  are a subset of the allowed events. If validate also prints a `calls:`
+  set, assert that it is a subset of the allowed calls too.
+- **Planted cases**, in a scratch copy, never committed. Each one must
+  fail the guard:
+  - the reviewer's eight: `$.session.authorize()`, `$.session.append()`,
+    `$.prompt.fill()`, `$.turn.abort()`, `$.mcp.call()`,
+    `$.command.run()`, `$.config.set()`, `$.http.fetch()`;
+  - `$.store.set()`, `$.ui.copy()`, `$.process.run(['herdr','agent','get'])`;
+  - the aliases `const { session } = $`, `const s = $.session`,
+    `$['session']` and `f($)`;
+  - `globalThis`;
+  - the registrations `on('classic.PermissionRequest', …)`, `on('*', …)`,
+    `on('tool.check', …)`, `on('fs.write', …)`, and `on(name, …)` with a
+    non-literal name.
+
+  The allowed forms must pass: `$.fs.read(p)`, `$.ui.status(t)`,
+  `($, e, next) =>`, `` `${x}` ``, and the existing `tests/` exclusion.
+- **Behaviour (P3, in register tests):**
+  - a `command.run` for another command passes through unanswered;
+  - a `ui.render` for another component passes through;
+  - `ui.close` always returns what `next` returned.
 
 **Toggle.** With `status_entry` off, the entry stays cleared.
 
@@ -1618,6 +1736,19 @@ Every commit passes the full `ah` bash suite and
      this spec.
 
    [AC 12, 4]
+
+1b. **Ignore engine-generated files (r3.14).** Add the new
+   `agent-hierarchy/.gitignore` with the two anchored rules from §6.1. It
+   is its own commit, after step 1 and before step 3, so it is in place
+   before the user's AC 2(b) launch recreates the files. It is independent
+   of 1a. It touches nothing the run executes or loads. [AC 13, 4]
+
+1c. **Allow-list guard (r3.15).** Rewrite `tests/test-mod-readonly.sh`
+   from the six-noun deny-list to §6.3's allowed calls and events, the
+   indirection ban, the validate `hooks:` net, and the §6.6 planted cases.
+   Its own commit, after step 1 and before step 3, so step 3's code is
+   written against it. Tests only, so it touches nothing the run executes
+   or loads. [AC 7, 4]
 2. **Embedded fixtures and drift test.** Generate `mod/tests/fixtures.ts`,
    extend the fixture-regeneration command to cover it, and add the bash
    drift test with its one-time failure demonstration (§6.6 r3.11).
@@ -1698,7 +1829,12 @@ run. Step 5 stays at the end of P2b.
 6. `status_entry` set to `false` suppresses the entry; a missing value or
    `true` does not. This is a view.ts test, plus a register test if
    E14(a) allows one.
-7. The read-only guard passes.
+7. The read-only guard passes. r3.15, that means:
+   - every planted case in §6.6 fails it and every allowed form passes,
+     shown in a scratch copy;
+   - validate's `hooks:` set is a subset of the allowed events (and its
+     `calls:` set of the allowed calls, if printed);
+   - from step 3 on, the real module passes it.
 8. **After release, by the user:** update `ah` from the marketplace, so
    the copy is installed, not `--plugin-dir`, and use a logged-in session.
    Check that:
@@ -1732,6 +1868,13 @@ run. Step 5 stays at the end of P2b.
       wording.
     - A grep check: `isPaneMember` is defined once, in lib-config.mjs.
     - The §3.5 fixtures do not change.
+13. r3.14 (step 1b): after the AC 2(a) `--plugin-dir` run, with the two
+    generated files present:
+    - `git status --porcelain -- agent-hierarchy` shows nothing untracked;
+    - `git check-ignore` matches `agent-hierarchy/tsconfig.json` and a
+      file under `agent-hierarchy/.claude-plugin/types/`;
+    - `git check-ignore agent-hierarchy/mod/types/index.d.ts` does not
+      match, and `git ls-files` still lists it.
 
 ### P3: band, pane, toasts
 
@@ -1817,6 +1960,25 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.15 (Reviewer should-fix spec-defect at P2b step 1): the read-only
+guard was a six-noun deny-list. Against the 2.1.289 types, it missed most
+`$` writes and acts, and missed hook returns entirely. Hook returns are
+the real way a module answers a prompt: `classic.PermissionRequest`,
+`PreToolUse` `allow`, `tool.check`, and op-event interception.
+
+- §6.3 is now an allow-list of 14 `$` calls, each grounded in the types
+  file, and of 4 hook registrations. It also bans indirection.
+- §6.2 reads the cwd on every tick instead of hooking `CwdChanged`.
+- §6.6's guard has a dynamic net, validate's `hooks:` set, plus planted
+  cases.
+- New P2b step 1c; AC 7 is rewritten.
+
+r3.14 (Implementor FYI at P2b step 1): a `--plugin-dir` load writes
+`agent-hierarchy/tsconfig.json` and `agent-hierarchy/.claude-plugin/types/`.
+Both are ignored through a new plugin-local `.gitignore` with anchored
+rules (§6.1), carried by the new step 1b with AC 13. The authored
+`mod/types/index.d.ts` stays tracked.
 
 r3.13 (Reviewer spec-defect, from r3.12's NEEDS-CHECK): §4.1 and §3.2
 equated "pane member" with `route: pane`. A valid claude+pane member
