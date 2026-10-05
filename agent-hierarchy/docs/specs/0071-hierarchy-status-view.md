@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.15. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.16. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1104,20 +1104,32 @@ The source is the 2.1.289 types file:
    `process.run` is excluded even for a read-only argv such as
    `herdr agent get`. The guard cannot check an argv, and the doc already
    carries pane activity (§3.3).
-2. **Allowed hook registrations.** No classic event, no wildcard or
-   negated pattern, and no other op event may be registered.
-   - `session.start`: returns `next(e)`. Its return changes nothing
-     anyway (≈:11143).
-   - `ui.close`, an op event: notes the "closed by person" flag (§6.3)
-     and **always** returns `next(e)`. It never returns `{deny}` or
-     `{value}`.
-   - P3: `command.run`, for its own command only (`{ command:
-     'hierarchy-pane' }`). It returns `{text}` there. `command.run` is the
-     event the module answers; the `$.command.run` call stays banned.
-   - P3: `ui.render`, for its own `Pane` (`requestId: 'ah-status'`) and
-     `AbovePrompt` only. Anything else gets `next(e)`.
-   - Use matchers where the API offers them. A handler that sees other
-     events returns `next(e)` for them.
+2. **Allowed hook registrations, and what each may return.** No classic
+   event, no wildcard or negated pattern, and no other op event may be
+   registered. r3.16: a return value can act as surely as a `$` call, so
+   each registration also fixes its matcher (the second argument to `on`,
+   :6470) and its return. "Exactly" means the object literal as written,
+   no other keys:
+
+   | Registration | Matcher | May return | Never returns | Types |
+   |---|---|---|---|---|
+   | `session.start` | none | `next(e)` | its own value | `SessionStartResult` :11145; its own value is ignored anyway (:11143) |
+   | `ui.close` (op event) | none | `next(e)`, after noting the "closed by person" flag (§6.3) | `{deny}`, `{value}` | `ValueOrDeny` :13925; `OpValueOf['ui.close']` is `void` (:6927) |
+   | P3 `command.run` | exactly `{ command: 'hierarchy-pane' }` | `{ text }` and no other key | `context`, `exitCode`, or a value from `next` | `CommandRunResult` :1755 |
+   | P3 `ui.render` | exactly `{ component: 'Pane', requestId: 'ah-status' }`, or exactly `{ component: 'AbovePrompt' }` | `next(e)`, or a tree whose every node is `Box` or `Text` | any other element type; any node with a `press`, `client` or `raster` key | `RenderElement` :8851 |
+
+   - `command.run`'s `context` is the send: each entry is "one hidden
+     user message recorded after the output row" (:1762). `exitCode`
+     sets a headless run's exit status (:1771). Neither is needed.
+   - `command.run` is the event the module answers; the `$.command.run`
+     call stays banned. With the matcher, no other command reaches the
+     hook, so the module never answers another command.
+   - `ui.render` is held to `Box` and `Text`, because the other element
+     types take input (`Button`, `Input`, `Select`, pressable
+     `Markdown`), open things (`Link`) or run plugin code (`Client`,
+     `Raster`). The band and the Pane (§6.4) are lines of text. If P3
+     needs another element type, that is a spec question, not an
+     Implementor call.
 3. **No indirection.**
    - The `$` identifier appears only as a hook-handler parameter (`($, e,
      next)`, `($: EngineInterface, …)`) or directly followed by
@@ -1130,6 +1142,44 @@ The source is the 2.1.289 types file:
    - `on` is used only as `on('<literal>', …)` calls on `register`'s
      parameter.
    - Template `${…}` is not a `$` identifier.
+
+   r3.16: those rules held only for the name `$`, so renaming the
+   environment hid it from the lexer. The step-1c review found seven such
+   bypasses, and only validate caught them. The environment must now be
+   reachable under no other name:
+   - `register`'s first parameter is named `on`. Its second, if present,
+     is the userConfig `options` (§6.4).
+   - Every hook given to `on(…)` is an inline arrow or function literal,
+     never a name. Its first parameter is exactly `$`, or it declares no
+     parameters. A destructuring pattern there is banned.
+   - A function given as an argument to a `$` call (the `$.clock.every`
+     callback, for one) declares no parameters, so the engine cannot hand
+     it an environment under another name. The tick is therefore a
+     closure inside the `session.start` hook.
+   - `arguments` and `this` join the banned tokens.
+   - No `\u` escape anywhere in module source: not in identifiers,
+     strings, templates or regexes. Write the character itself, or `\x..`
+     (C0, DEL and C1 all fit, so §6.4's stripping regex needs no `\u`).
+     This closes `$` for `$`, `on` for `on`, and
+     `'tool.check'` as an event name. Event names and matchers are
+     compared as written.
+4. **Return values, statically** (r3.16). The lexer also enforces item
+   2's table where source shows it:
+   - `on('command.run', …)` and `on('ui.render', …)` carry one of the
+     exact matchers in item 2;
+   - `context`, `exitCode`, `press`, `client` and `raster` do not appear
+     as an identifier or property key;
+   - no JSX tag and no string literal names an element type other than
+     `Box` or `Text`. The guard holds the full list of `RenderElement`
+     type names (:8851), next to the other lists.
+5. **The guard's ceiling** (r3.16). The lexer is a regression net for
+   code written in the open. Every form named in items 1–4 and in §6.6's
+   planted cases must fail the lexer on its own, without validate, so it
+   holds even if validate's analysis loosens in a later client.
+   Deliberate obfuscation past that is out of the lexer's reach, for
+   example a computed key such as `['con' + 'text']`. Validate's
+   `hooks:`/`calls:` subsets, the behaviour tests (§6.6, which check
+   returns at run time) and review cover it.
 
 **Timer and reload:** the engine drops the old environment's `every` timer
 on a hot reload (E8). The module adds no cancel or guard.
@@ -1331,10 +1381,50 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
 
   The allowed forms must pass: `$.fs.read(p)`, `$.ui.status(t)`,
   `($, e, next) =>`, `` `${x}` ``, and the existing `tests/` exclusion.
-- **Behaviour (P3, in register tests):**
-  - a `command.run` for another command passes through unanswered;
-  - a `ui.render` for another component passes through;
-  - `ui.close` always returns what `next` returned.
+- **r3.16 planted cases** (§6.3 items 3–4). Each must fail the **lexer
+  layer alone**, and the run shows that per case. Validate is not
+  counted for these. The same goes for the r3.15 cases above:
+  - the step-1c review's bypasses:
+    - `(env, e, next) => env.session.authorize()`;
+    - `({ session }, e, next) => session.authorize()`;
+    - a helper `(x) => x.prompt.fill()` called with a renamed hook
+      parameter;
+    - `register = r => { r('tool.check', …) }`;
+    - `(env.session as any)[k]()`;
+    - `env['session']['append']()`;
+    - `const s = env.session; s.authorize()`;
+    - `$.session.authorize()`;
+    - `on('tool.check', …)`;
+  - `on('tool.check', …)`;
+  - a named hook: `on('session.start', h)`;
+  - `$.clock.every(2000, (env) => env.prompt.fill())`;
+  - a `function ($, e, next) { arguments[0].prompt.fill() }` hook, and
+    a hook that uses `this`;
+  - `on('command.run', ($, e, next) => ({ text: 'ok' }))`, with no
+    matcher;
+  - the matched `command.run` returning `{ text: 'ok', context: ['x'] }`,
+    and returning `{ text: 'ok', exitCode: 0 }`;
+  - `on('ui.render', ($, e, next) => next(e))`, with no matcher;
+  - the matched Pane `ui.render` returning a `<Link …>`, a `<Button …>`,
+    and an object literal with `type: 'Link'`.
+
+  r3.16 allowed forms must pass:
+  - `export const register: Register = (on, options) => …`;
+  - `on('command.run', { command: 'hierarchy-pane' }, ($, e, next) => ({ text: 'ok' }))`;
+  - `on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => <Box><Text>x</Text></Box>)`;
+  - `$.clock.every(2000, () => tick())`;
+  - `/[\x00-\x1f\x7f-\x9f]/g`.
+- **Behaviour (register tests).** These check returns at run time,
+  including forms the lexer cannot see (§6.3 item 5):
+  - step 3: `session.start` returns what `next` returned;
+  - P3: the own-command `command.run` answer has exactly the key set
+    `{text}`;
+  - P3: a `command.run` for another command is not answered;
+  - P3: for every fixture case, each tree the Pane and band `ui.render`
+    hooks return has only `Box` and `Text` nodes, and no node has a
+    `press`, `client` or `raster` key;
+  - P3: a `ui.render` for another component passes through;
+  - P3: `ui.close` always returns what `next` returned.
 
 **Toggle.** With `status_entry` off, the entry stays cleared.
 
@@ -1351,6 +1441,9 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
   plugin root, with `HOME` and `CLAUDE_CONFIG_DIR` pointed at a scratch
   dir, under a timeout. A test run then cannot touch the user's settings
   or `~/.claude/dev-mods/`.
+- r3.16: the bash suite needs the `claude` CLI on PATH. The guard's
+  validate net fails closed without it, which is correct. Step 4's
+  README says so.
 
 ## 7. claude-tui-line items (Phase 2a)
 
@@ -1749,6 +1842,19 @@ Every commit passes the full `ah` bash suite and
    Its own commit, after step 1 and before step 3, so step 3's code is
    written against it. Tests only, so it touches nothing the run executes
    or loads. [AC 7, 4]
+
+1d. **Guard hardening (r3.16).** Extend `tests/test-mod-readonly.sh`
+   with §6.3 items 3–4 as of r3.16:
+   - the parameter-name rules (`on`, `$`), inline hooks, and
+     parameterless callbacks to `$` calls;
+   - the `arguments`/`this` bans and the no-`\u` rule;
+   - the exact matchers for `command.run` and `ui.render`;
+   - the banned return keys and the element-name rule.
+
+   Add §6.6's r3.16 planted cases and allowed forms, and make the
+   planted-case run show each case, r3.15's included, failing the lexer
+   layer alone. Its own commit, after 1c and before step 3. Tests only.
+   The current skeleton must still pass. [AC 7, 4]
 2. **Embedded fixtures and drift test.** Generate `mod/tests/fixtures.ts`,
    extend the fixture-regeneration command to cover it, and add the bash
    drift test with its one-time failure demonstration (§6.6 r3.11).
@@ -1764,6 +1870,13 @@ Every commit passes the full `ah` bash suite and
    surfaces (the entry set, then cleared; the missing-file staging).
    Leave out the `hierarchy-pane` command, the band, the Pane, the
    toasts, auto-open, and tick steps 6–7: they are P3.
+
+   r3.16, from the guard:
+   - the tick is a closure inside the `session.start` hook;
+   - the `$.clock.every` callback takes no parameters;
+   - the control-character regex uses `\x` escapes;
+   - a register test shows `session.start` returns what `next` returned.
+
    [AC 5, 6, 7, 3, 4]
 4. **README** (Implementer for this step: `docs-writer`). In the `ah`
    README:
@@ -1773,7 +1886,9 @@ Every commit passes the full `ah` bash suite and
    - `status_entry`: on by default; turn it off with `/config` or
      `claude plugin configure`, at user scope only, because project and
      local settings cannot set it;
-   - the fresh-install "not yet set" line is informational.
+   - the fresh-install "not yet set" line is informational;
+   - r3.16: running the bash suite needs the `claude` CLI on PATH,
+     because the mod guard's validate net fails without it.
 
    r3.12: in the same commit, `docs/status-file.md` catches up with §4.4:
    - "Reading it": the exact byte cap, the malformed-shape rule, and the
@@ -1829,12 +1944,14 @@ run. Step 5 stays at the end of P2b.
 6. `status_entry` set to `false` suppresses the entry; a missing value or
    `true` does not. This is a view.ts test, plus a register test if
    E14(a) allows one.
-7. The read-only guard passes. r3.15, that means:
-   - every planted case in §6.6 fails it and every allowed form passes,
-     shown in a scratch copy;
+7. The read-only guard passes. As of r3.16, that means:
+   - every planted case in §6.6 fails the lexer layer on its own, and
+     fails the full guard; every allowed form passes. Shown in a scratch
+     copy;
    - validate's `hooks:` set is a subset of the allowed events (and its
      `calls:` set of the allowed calls, if printed);
-   - from step 3 on, the real module passes it.
+   - from step 3 on, the real module passes it, and the step-3 register
+     test shows `session.start` returns what `next` returned.
 8. **After release, by the user:** update `ah` from the marketplace, so
    the copy is installed, not `--plugin-dir`, and use a logged-in session.
    Check that:
@@ -1960,6 +2077,30 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.16 (two Reviewer should-fix spec-defects at P2b step 1c):
+
+- **Defect 1.** The lexer knew the environment only by the name `$`.
+  Renamed or destructured parameters, a helper, a renamed `register`
+  parameter and `\u` escapes got past it seven ways, and only validate
+  caught them.
+  - §6.3 item 3: `on` and `$` are required names; hooks are inline;
+    callbacks to `$` calls take no parameters; `arguments` and `this`
+    are banned; no `\u` anywhere.
+  - Planted cases must fail the lexer alone.
+- **Defect 2.** A `command.run` hook returning `context`, a hidden user
+  message to the model, passed both nets.
+  - Generalised: §6.3 item 2 is now a per-registration table of matcher
+    and allowed return, from the 2.1.289 result types.
+  - Item 4 adds the static return checks. Item 5 states the guard's
+    ceiling.
+  - §6.6 adds behaviour tests for returns.
+- **Steps.** New P2b step 1d (tests only, before step 3). Step 3 carries
+  the closure/`\x`/`session.start` points; step 4's README notes the
+  `claude`-on-PATH need; AC 7 is updated. P3 gets the return tests
+  through §6.6.
+- `session.start`'s own return is ignored by the engine (:11143), so the
+  review's c7 probe is harmless. It is held to `next(e)` anyway.
 
 r3.15 (Reviewer should-fix spec-defect at P2b step 1): the read-only
 guard was a six-noun deny-list. Against the 2.1.289 types, it missed most
