@@ -129,7 +129,7 @@ function checkInReason(items, cwd) {
     ...items.map((it) => {
       const line = `- ${it.role} "${it.to_name}", request ${it.id}, sent ${fmtAge(it.ageSec)} ago (${it.path})`;
       if (!it.pane) return line;
-      return `${line} — a pane member: check it with \`node "${ROSTER}" deliver ${it.pane} --req "${it.path}" --wait-only --timeout 10 --cwd "${cwd}"\` and act on its \`status\`: \`blocked\` → relay the prompt through AskUserQuestion and \`answer\`; \`not-live\` → surface it to the user; \`busy\` or \`timeout\` → it is still working.`;
+      return `${line} — a pane member: check it with \`node "${ROSTER}" deliver ${it.pane} --req "${it.path}" --wait-only --timeout 10 --cwd "${cwd}"\` and act on its \`status\`: \`blocked\` → relay the prompt through AskUserQuestion and \`answer\`; \`not-live\` → surface it to the user; \`busy\` or \`timeout\` → it is still working; \`no-report\` → the member is idle with no report: re-deliver the brief or ping it; \`not-sent\` → the brief never arrived: send it with \`deliver\`; any other status → act as the returned \`message\` says.`;
     }),
     ...(panes === items.length ? [] : [`For each${panes ? " of the others" : ""}: call ListAgents to confirm the peer session is still alive, then SendMessage it a short status query.`]),
     "If it answers, work continues — nothing more to do here. If it is gone or silent after checking, that is a fact you (the conduit) should surface to the user.",

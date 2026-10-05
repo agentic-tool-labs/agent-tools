@@ -109,6 +109,7 @@ age_rows "$ID" 301
 stop o20
 REASON=$(node -e 'try { process.stdout.write(JSON.parse(process.argv[1]).reason || "") } catch {}' "$OUT")
 check "AC20: past T with a stub response, Stop blocks with the pane wording, paths quoted" 'is_block && echo "$REASON" | grep -qF "node \"$H/roster.mjs\" deliver proj-architect --req \"$REQ\" --wait-only --timeout 10 --cwd \"$PROJ\"" && echo "$REASON" | grep -q "AskUserQuestion" && echo "$REASON" | grep -q "not-live"'
+check "AC20: the pane line maps no-report, not-sent and any other status" 'echo "$REASON" | grep -qF "\`no-report\` → the member is idle with no report: re-deliver the brief or ping it" && echo "$REASON" | grep -qF "\`not-sent\` → the brief never arrived: send it with \`deliver\`" && echo "$REASON" | grep -qF "any other status → act as the returned \`message\` says"'
 check "AC20: a pane-only check-in names neither ListAgents nor SendMessage" '! echo "$OUT" | grep -qE "ListAgents|SendMessage"'
 rm -f "$HD/team.json"
 
