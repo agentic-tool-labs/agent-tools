@@ -26,9 +26,9 @@ check() {
 ALLOWED_CALLS="session.cwd session.id fs.stat fs.read fs.exists clock.every clock.now state.get state.set ui.status ui.toast ui.open ui.resolve command.register"
 ALLOWED_EVENTS="session.start ui.close command.run ui.render"
 MATCHERS="command.run:command=hierarchy-pane ui.render:component=Pane,requestId=ah-status ui.render:component=AbovePrompt"
-RENDER_ELEMENTS="Box Text Button Input Select Link Code Markdown Client Svg Raster Image"
-DRAWABLE="Box Text"
-RETURN_KEYS="context exitCode press client raster"
+RENDER_ELEMENTS="Box Text engine Button Input Select Link Code Markdown Client Svg Raster Image"
+DRAWABLE="Box Text engine"
+RETURN_KEYS="context exitCode press client raster deny"
 BANNED_TOKENS="globalThis eval Reflect Proxy arguments this"
 
 # <mod dir>: every lexer violation in the module source under it, as file:line: reason; empty when clean.
@@ -326,6 +326,7 @@ import { fixtures } from './tests/fixtures.ts'
 on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => h(els.Link, { url: 'x' }, 'y'))
 on('session.start', async ($, e, next) => { const { Button } = $.ui.resolve(e); return next(e) })
 on('command.run', { command: 'hierarchy-pane' }, ($, e, next) => ({ text: 'ok', [`context`]: ['x'] }))
+on('ui.close', ($, e, next) => ({ deny: 'x' }))
 EOF
 
 # The import rule closes a helper kept outside the scan: mod/types/ is not scanned, so a value import from
