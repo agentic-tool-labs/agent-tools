@@ -327,8 +327,9 @@ A short notice pops up for three things:
 - a dispatch stalls: `reviewer stalled · review-step · 1 check-in unanswered`.
 
 Each event toasts once per session, and a reload of the plugin doesn't repeat
-it. What is already true when a session starts, or when the mod first loads
-mid-session, counts as seen and is not toasted. A member that blocks again
+it. Whatever is already there the first time a session has something to show
+counts as seen and is not toasted, so a new session, or a mod first loaded
+mid-session, doesn't replay old events. A member that blocks again
 later toasts again. A status file that is unreadable for a moment doesn't
 replay anything when it comes back.
 
