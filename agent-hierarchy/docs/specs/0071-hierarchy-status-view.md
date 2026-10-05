@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.8, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.9, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -279,6 +279,14 @@ character.
 **Content:** `{activity, at, blocked_by, note}`. Each file is written
 atomically, and only by its own subject's events (single writer).
 
+`at` (r3.9) is when the subject entered its current state: the first
+observation of that `activity`/`blocked_by`/`note`. An observation that
+matches the record never rewrites it, so `at` is never refreshed while the
+state holds. The same holds for Claude and pane members. Two things depend
+on this: the Pane's age reads as "blocked for 12m", and the toast dedupe
+key `blocked:{name}:{activity_at}` (§6.5) fires once per blocked episode
+rather than once per `deliver` run.
+
 **Claude members.** A new hook script, `hooks/activity.mjs`, records their
 activity. It is registered in `hooks/hooks.json` on these events:
 
@@ -315,8 +323,19 @@ then status.json:
   `idle|done`→idle, `blocked`→blocked (with `blocked_by`, and `note` = the
   first prompt line it already reads), and `agent_not_found`→`unknown`. At
   exit it writes its final observation.
+  - r3.9: `note` is the screen line holding the recognised prompt's heading,
+    which deliver already reads. An unrecognised prompt gets `note: null`.
+  - r3.9: "differs" means a different `activity`, `blocked_by` or `note`.
+    The exit write follows the same rule: it writes the last observation
+    only if the record does not already equal it, and never just to
+    refresh `at` (see `at` above). A run that observed nothing
+    (indeterminate, timeout) writes nothing.
 - `roster.mjs answer`: after a successful relay it records `working`.
-- `spawn-one` and `spawn-ad-hoc` of a pane member record `idle`.
+- `spawn-one` and `spawn-ad-hoc` of a pane member record `idle`. r3.9:
+  that means **every** path that spawns a `route: pane` member, including
+  `create --spawn`. Put the recording at the lowest spawn helper those paths
+  share, or in each path if they share none; a new spawn path must not be
+  able to miss it.
 - `dismiss` and `disband` remove that member's file.
 - `msg.mjs sweep` also deletes activity files older than its 7-day cutoff.
 
@@ -395,7 +414,7 @@ The cycle is safe under these conditions, and P1 must keep them:
   every lib-config-first process. Ratified fix: `MSG_ROLES` is defined in
   lib-config right after `ROLES` (same value), and lib-hier re-exports it,
   so importers are unchanged. Any new top-level cross read is caught by
-  the load-order test, which therefore covers all eight libs. One
+  the load-order test, which therefore covers all six libs it names. One
   consequence: r3.2's lazy lib-hier import in stream-label no longer
   avoids anything, since lib-config now pulls lib-hier in. It stays
   (harmless, and AC 7 still checks it), and E1 measures the real floor
@@ -1262,7 +1281,11 @@ live pool.
    - `deliver`, against a stubbed `herdr` on PATH as the existing deliver
      tests do, records `blocked` with `blocked_by`;
    - `answer` records `working`;
-   - spawn records `idle`; dismiss removes the record.
+   - spawn records `idle`; dismiss removes the record;
+   - (r3.9) a second `deliver` run that sees the same blocked prompt
+     leaves the record's `at` unchanged; one that sees a different prompt
+     rewrites it;
+   - (r3.9) `create --spawn` of a pane member records `idle`.
 10. **Sanitising:** control characters, including ESC sequences, in a slug
     or name are stripped, and lengths are capped.
 11. **Disabled:** a disabled config gives `enabled:false` and every timeline
@@ -1460,6 +1483,14 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.9 (step-6 interpretations): (a) the pane `note` is the recognised
+prompt's heading line, else null: confirmed. (b) Changed: `at` is when the
+current state began; an unchanged observation, including deliver's exit
+write, never rewrites the record, so blocked toasts fire once per episode,
+and a changed `note` counts as a change. (c) Changed: every pane-spawn path,
+including `create --spawn`, records `idle`. AC 9 gains two bullets.
+§3.4's "eight libs" is now "six".
 
 r3.8 (ratification at P1 step 5): lib-config joined the r3.7 cycle, and
 lib-hier's top-level `MSG_ROLES` read crashed every lib-config-first
