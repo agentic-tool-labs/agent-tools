@@ -3,11 +3,13 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.10, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
-stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
-file. E9 picked Branch A and E10 required the toggle, so P2b has no open
-gates left; it starts with two small API checks (E12, E13). P1 has one
-measurement left (E1) and the suite run of E11, both inside its own steps.
+Status: r3.11. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+has its step list. §10 records the user's decisions (Q1–Q6, the stub bug)
+and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
+E12 kept userConfig as §6.4 has it; E13 moved the mod's fixtures into an
+embedded module with a drift test (§6.6). P2b's first step is one
+read-only reference check (E14), and both of its outcomes are decided in
+advance.
 
 Repos:
 
@@ -84,7 +86,7 @@ mockup, it says so.
 | Repo / plugin | Kind | Files |
 |---|---|---|
 | `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-config.mjs` (r3.8: `MSG_ROLES` moves here beside `ROLES`, re-exported from lib-hier; nothing else), `hooks/lib-peer.mjs` (the dispatch-origin function, §3.1), `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `commands/hierarchy.md` (the `on`/`off`/`init` steps refresh status, §3.4 item 8), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. `hooks/pretooluse-push-guard.mjs` (one `merge-check` sign-off condition only, §3.7.9). **Not changed:** `hooks/msg.mjs`. |
-| `agent-tools/agent-hierarchy` (`ah`), P2b/P3 | new code | `agent-hierarchy/mod/`, plus `hooks`, `types` and `userConfig` keys in ah's plugin.json (§6.1). |
+| `agent-tools/agent-hierarchy` (`ah`), P2b/P3 | new code | `agent-hierarchy/mod/`, plus `hooks`, `types` and `userConfig` keys in ah's plugin.json (§6.1). r3.11: also the fixture-regeneration command and a drift test under `agent-hierarchy/tests/` (§6.6), the `ah` README, the CHANGELOG, and the root marketplace.json version. |
 | `claude-tui-line` | new items | §7 |
 
 ## 3. The status source (Phase 1)
@@ -909,11 +911,23 @@ agent-hierarchy/
   hooks/hooks.json             unchanged (command hooks; still loads on its own, E9)
   mod/hooks.json               { "modules": ["./register.tsx"] }
   mod/register.tsx             event wiring only (§6.3)
-  mod/view.ts                  pure: (doc, nowMs, sessionId, columns) → view model (§6.4–6.5);
-                               no $ calls, so it is testable directly
+  mod/view.ts                  pure: (doc, nowMs, sessionId, columns, status_entry option)
+                               → view model (§6.4–6.5); no $ calls, so it is testable directly
   mod/types/index.d.ts         PluginState contract for every $.state value the module uses
   mod/tests/*.test.ts          §6.6
+  mod/tests/fixtures.ts        generated: the §3.5 fixture files embedded (§6.6, E13)
+  mod/tests/vectors.ts         hand-written expected outputs per fixture case (§6.6)
 ```
+
+- r3.11 (E12): the `userConfig` entry has exactly the shape E12 validated:
+  `"status_entry": {"type": "boolean", "title": …, "description": …,
+  "default": true}`. Suggested description: show the hierarchy line
+  (`⚠ ah: …`) above the prompt, and turn it off when claude-tui-line's
+  `ah` item already shows it.
+- r3.11: mod code is built and tested only in the worktree, through
+  `claude plugin test` and `--plugin-dir`. It is never copied into
+  `~/.claude/dev-mods/`, because that hot-loads it into the user's live
+  sessions and prompts the user.
 
 - Use the string form `"hooks": "./mod/hooks.json"`. E9 showed it and the
   array form both work, and the debug log says the standard
@@ -947,7 +961,7 @@ non-git fallback dir. claude-tui-line uses the same rule (§7.2).
 | Event | Behaviour |
 |---|---|
 | `session.start` | Register command `hierarchy-pane`. Start `$.clock.every(2000, tick)` and run one tick at once. Return `next(e)`. |
-| tick | 1. `stat` the file. 2. Re-read and parse it only if `mtimeMs` changed. 3. Build the view model with `$.clock.now()`. 4. Update state only if the view model changed. 5. Call `$.ui.status(...)` (§6.4). 6. Raise the toasts (§6.5). 7. Auto-open the Pane (below). |
+| tick | 1. `stat` the file. 2. Re-read and parse it only if `mtimeMs` changed. r3.11: a file over 256 KB (§7.2's cap) is not read, and it, an unreadable file and unparseable text all count as no doc. 3. Build the view model with `$.clock.now()`. 4. Update state only if the view model changed. 5. Call `$.ui.status(...)` (§6.4). 6. Raise the toasts (§6.5). 7. Auto-open the Pane (below). |
 | `command.run` `{command:'hierarchy-pane'}` | `$.ui.open({id:'ah-status', title:'Hierarchy'})`, which places at any width. Clears the "closed by person" flag. Returns `{text}`. |
 | `ui.render` `{component:'Pane', requestId:'ah-status'}` | Draws §6.4 Pane at `e.props.bodyColumns`. |
 | `ui.render` `{component:'AbovePrompt'}` | Returns `next(e)` when `e.props.hasSurvey`, or when there is no band. Otherwise draws one line (§6.4). |
@@ -976,11 +990,32 @@ on a hot reload (E8). The module adds no cancel or guard.
   would print the label twice. The `⚠` glyph is the engine's and cannot be
   changed; it is noted in the README.
 - It is one line and survives any width. The engine cuts it.
+- r3.11: control characters (C0, DEL and C1) are stripped from every
+  string taken from the file before it is displayed. The producer strips
+  them too, but a hostile committed file can skip the producer (§12).
 - Toggle (user decision Q2; E10 showed both lines render): userConfig
   `status_entry` (boolean, default `true`) in ah's plugin.json. `false`
   keeps the entry cleared. A user who places claude-tui-line's `ah` item
-  turns this off to see the counts once. How a module reads a userConfig
-  value is E12.
+  turns this off to see the counts once.
+- r3.11, how the toggle is read (E12):
+  - The module reads the option from `register`'s second argument,
+    `options`, which arrives with defaults filled in. A change to it
+    reloads the plugin and runs `register` again. So the module keeps no
+    copy of it in `$.state`, and it does not poll.
+  - Only the value `false` turns the entry off. A missing `options` or a
+    missing key counts as on, which covers a test harness that passes no
+    options.
+  - The toggle is an input to view.ts (§6.1). The status-entry part of the
+    view model is empty when the toggle is off. That keeps the toggle
+    testable without the harness (§6.6). It does not affect the band, the
+    Pane or the toasts.
+  - Scope: a stored value counts only from user settings (`/config`,
+    `claude plugin configure`) or `--settings`. A project or local
+    settings file cannot set it, so the toggle is per user, not per
+    project.
+  - A fresh install prints one informational line ("1 userConfig option
+    not yet set …"); the default still applies. An upgrade prints nothing.
+    The README says both (§8 P2b step 4).
 
 **Band.** Shown only while the current entry has `out > 0` or `blocked > 0`.
 
@@ -1043,14 +1078,42 @@ on a hot reload (E8). The module adds no cancel or guard.
 **view.ts: shared vectors.** For each fixture in
 `agent-hierarchy/tests/fixtures/status/`, the vector file gives
 `(now, sessionId, columns) → statusText, band text and tone, pane rows,
-toast keys`. The tests read the fixtures in place, without a copy, if E13
-shows a test can import a JSON file from inside the plugin. If it cannot,
-`<mod>/tests/` gets a fixtures module that embeds the fixture JSON verbatim,
-and `ah`'s bash suite fails when that module and the fixture files differ.
+toast keys`.
+
+r3.11 (E13: `claude plugin test` loads only code files, so no test can
+import a `.json` file):
+
+- **`<mod>/tests/fixtures.ts`** is generated and never edited by hand.
+  - It exports one mapping from case name (the fixture's basename without
+    `.json`) to that file's exact text, byte for byte. Its cases are
+    exactly the `.json` files in the fixture directory.
+  - Its first line says it is generated and names the command that
+    regenerates it.
+  - The command that regenerates the §3.5 fixture files also regenerates
+    this module, so one command refreshes both. If no such command exists
+    yet, add one small generator under `agent-hierarchy/tests/` and use it
+    for both.
+- **Drift test.** A test in `ah`'s bash suite fails unless `fixtures.ts`
+  is byte-identical to a fresh generation from the committed fixture
+  files. This covers a changed case, an added case and a removed case. A
+  one-byte edit made in a temp copy, never committed, shows once that the
+  test can fail.
+- **`<mod>/tests/vectors.ts`** holds the expected outputs, keyed by case
+  name. It is TypeScript for the same reason. A test fails if a fixture
+  case has no vector, or if a vector names a case that does not exist. So
+  a new fixture case cannot go untested.
+- Tests parse `fixtures[case]` for view.ts. For register.tsx they answer
+  `fs.read` with the text and `fs.stat` with `size` = its UTF-8 byte
+  length.
+- P2b fills in `statusText` only. P3 adds the band, the pane rows and the
+  toast keys to the same file.
 
 **view.ts: edge cases.**
 
 - missing doc, `schema: 2`, expired doc, `visible: false`;
+- r3.11: unparseable text, a file over 256 KB, and a string holding an
+  ESC sequence, which displays with the control characters gone (these
+  use inline docs, not shared fixtures);
 - a member session;
 - `now` before the first `at`;
 - `at == now` picks that entry;
@@ -1086,8 +1149,19 @@ No real file is read in any mod test.
 
 **Toggle.** With `status_entry` off, the entry stays cleared.
 
-**Checks.** `claude plugin validate agent-hierarchy` and `tsc -p <mod>` are
-both clean.
+- r3.11: a view.ts test always covers this: off → empty entry; missing or
+  `true` → the entry.
+- Add a register.tsx test as well if E14(a) shows a test can pass
+  `options` to `register`.
+
+**Checks.** `claude plugin validate agent-hierarchy` is clean.
+
+- r3.11: `tsc -p <mod>` is replaced by E14(b). `ah` has no node
+  toolchain (no package.json, no `tsc`), and P2b adds none.
+- **How the tests run** (E13's command line): `claude plugin test` on the
+  plugin root, with `HOME` and `CLAUDE_CONFIG_DIR` pointed at a scratch
+  dir, under a timeout. A test run then cannot touch the user's settings
+  or `~/.claude/dev-mods/`.
 
 ## 7. claude-tui-line items (Phase 2a)
 
@@ -1429,26 +1503,113 @@ live pool.
 3. The version and release notes follow the §7.7 rules.
 4. E7: bench p95 with a 20 KB status file adds ≤ 1 ms.
 
-### P2b: mod skeleton plus status entry
+### P2b: mod skeleton plus status entry (`ah` 0.111.0)
 
-1. **First, before any mod code:** E12 and E13 are run and their results
-   recorded in the P2b report.
-2. `ah` loads through `claude --plugin-dir agent-hierarchy`. The user
-   launches it.
-3. `validate` and `tsc` are clean.
-4. The full `ah` bash suite passes with the mod files present, and the
-   command hooks are unaffected.
-5. The status entry passes its vector tests and the absent cases. It does
-   not render in a member session. Its text has no `ah · ` prefix.
-6. `status_entry` off suppresses the entry.
+**Step list (r3.11).** One commit per step, in this order, in a worktree.
+Every commit passes the full `ah` bash suite and
+`claude plugin validate agent-hierarchy` on its own. Mod tests run as §6.6
+"How the tests run" says. The ACs each step must satisfy are in brackets.
+
+0. **E14, read only, no commit.** Answer E14(a) and (b) from the
+   plugin-authoring reference and record the answers in the step-1
+   report. Both outcomes are decided in §11, so the answer needs no round
+   trip to the Architect. [AC 1]
+1. **Skeleton.** The three plugin.json keys (§6.1: the string-form
+   `hooks`, `types`, and `userConfig` in E12's exact shape),
+   `mod/hooks.json`, `mod/types/index.d.ts`, and a `mod/register.tsx`
+   whose `session.start` only returns `next(e)`. Add the read-only guard
+   test. This commit isolates the riskiest change, the hooks key, so a
+   bisect lands on it alone. [AC 2(a), 3, 4, 7]
+2. **Embedded fixtures and drift test.** Generate `mod/tests/fixtures.ts`,
+   extend the fixture-regeneration command to cover it, and add the bash
+   drift test with its one-time failure demonstration (§6.6 r3.11).
+   [AC 9, 4]
+3. **Status entry.** In view.ts, the status-entry part: §4.4's render
+   rule, §4.5 freshness, the timeline pick, the member-session rule, the
+   toggle input, control-character stripping and the absent cases. In
+   register.tsx: §6.2 locating (including a `cwd` change), `session.start`
+   (start the 2 s clock and run one tick at once), tick steps 1–5 with the
+   256 KB cap, `$.ui.status`, and the toggle read from `options` (§6.4
+   r3.11). Add `vectors.ts` with `statusText` for all seven cases, the
+   §6.6 edge cases that concern the entry, and the register tests on both
+   surfaces (the entry set, then cleared; the missing-file staging).
+   Leave out the `hierarchy-pane` command, the band, the Pane, the
+   toasts, auto-open, and tick steps 6–7: they are P3.
+   [AC 5, 6, 7, 3, 4]
+4. **README** (Implementer for this step: `docs-writer`). In the `ah`
+   README:
+   - the mod half needs Claude Code ≥ 2.1.289, and an older client is the
+     risk the user accepted with Q1;
+   - the `⚠ ah: …` line, whose glyph comes from the engine;
+   - `status_entry`: on by default; turn it off with `/config` or
+     `claude plugin configure`, at user scope only, because project and
+     local settings cannot set it;
+   - the fresh-install "not yet set" line is informational.
+   [AC 10, 4]
+5. **Release.** Bump to 0.111.0 in plugin.json and in the root
+   marketplace.json, so the two agree. Add a CHANGELOG [0.111.0] entry
+   (Added: the mod's status entry and the `status_entry` option; the
+   minimum client version). [AC 11, 4]
+
+If the user decides to ship P2b together with P3 (§8 header), step 5 moves
+to the end of P3, and P3's version is used instead.
+
+**ACs.**
+
+1. E12 and E13 are run and recorded in `0071-evidence.md` (done). E14's
+   answers are in the step-1 report.
+2. (a) **Implementor, step 1:** `ah` from the worktree loads under
+   `--plugin-dir`. Use E9's method: a scratch git repo,
+   `--setting-sources local`, a timeout, and `pgrep -fl claude`
+   afterwards. The debug log shows both `hooks/hooks.json` and
+   `mod/hooks.json` loading for `ah`, with no plugin load error.
+   (b) **User, after step 3 and before the merge:** in `agent-tools`,
+   while a dispatch is out, run
+   `claude --plugin-dir <worktree>/agent-hierarchy --setting-sources project,local`.
+   That flag keeps the installed `ah` and the user's other plugins out
+   of the session. Check that the classic SessionStart context line
+   appears and that `⚠ ah: …` shows.
+3. `claude plugin validate agent-hierarchy` is clean. Run E14(b)'s type
+   check if E14 found one; otherwise the report says none was run.
+4. The full `ah` bash suite passes with the mod files present, including
+   the drift test, and the command hooks are unaffected.
+5. The status entry:
+   - matches `vectors.ts` for all seven cases;
+   - every case has a vector and every vector names a case;
+   - the absent cases clear it: missing, unparseable, over 256 KB,
+     `schema: 2`, expired, `visible: false`;
+   - it does not render in a member session;
+   - its text has no `ah · ` prefix;
+   - control characters are stripped.
+6. `status_entry` set to `false` suppresses the entry; a missing value or
+   `true` does not. This is a view.ts test, plus a register test if
+   E14(a) allows one.
 7. The read-only guard passes.
-8. **After release, by the user:** with `ah` updated from the marketplace
-   (an installed copy, not `--plugin-dir`), a classic `ah` hook still fires
-   (the SessionStart context line appears) and the status entry shows in a
-   non-member session with a live team. If the classic hooks stop firing,
-   roll back to 0.110.x and return to the Architect.
+8. **After release, by the user:** update `ah` from the marketplace, so
+   the copy is installed, not `--plugin-dir`, and use a logged-in session.
+   Check that:
+   - no config dialog appears during the update or in the first session
+     afterwards (E12 did not observe a logged-in session or a
+     git-sourced marketplace);
+   - a classic `ah` hook still fires: the SessionStart context line
+     appears;
+   - the status entry shows in a non-member session with a live team.
+
+   If the classic hooks stop firing, roll back to 0.110.x and return to
+   the Architect.
+9. The drift test fails unless `fixtures.ts` is byte-identical to a fresh
+   generation, and it has been seen to fail once, on a one-byte edit in a
+   temp copy.
+10. The README carries the four step-4 points.
+11. plugin.json and the root marketplace.json both say 0.111.0, and the
+    CHANGELOG has the [0.111.0] entry.
 
 ### P3: band, pane, toasts
+
+r3.11: E12 and E13 change P3 only through §6.6. Its vectors go into
+`vectors.ts`, and it reads fixtures from `fixtures.ts`. P3 gets its step
+list when it starts. Its version is 0.112.0, or 0.111.0 if P2b ships
+with it.
 
 1. All of §6.6 passes.
 2. The auto-open rules hold: once per session, never after a person closes
@@ -1527,6 +1688,24 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.11 (E12, E13 in; P2b made build-ready):
+
+- §6.4 states how the toggle is read: from `register`'s `options`, with
+  only `false` turning it off, as an input to view.ts, at user scope only.
+  It also requires control-character stripping.
+- §6.3 gives the mod the 256 KB read cap.
+- §6.6 replaces the in-place fixture reads with a generated `fixtures.ts`,
+  a bash drift test, and a TypeScript `vectors.ts` whose cases must match
+  the fixtures. `tsc -p` is replaced by E14(b), because `ah` has no node
+  toolchain. The section also states how the tests run.
+- §6.1 lists the new files, the exact `userConfig` shape and the
+  dev-mods rule.
+- §8 P2b has a step list (0–5) and ACs 1–11. AC 2 is split into an
+  Implementor load check and a user launch; AC 8 also covers the cases
+  E12 did not observe. P3 gets a version note.
+- §11 records E1, E11, E12 and E13 as done and adds E14. §12 gains three
+  notes.
 
 r3.10 (E1 over bounds at step 7): the first run was over because of waste:
 a second exchange listing inside `openRunAnchor`, and a 609 KB dispatch-row
@@ -1641,12 +1820,14 @@ make liveness fire for `deliver`'d pane work, so P1 also adds:
 
 r3: E2–E5 and E8–E10 are done; results are in `0071-evidence.md` and folded
 into the body (§10). Their rows stay for the record, each marked with its
-verdict. Open: E1 (P1 step 7), E7 (P2a), E11's suite run (P1 step 2), E12
-and E13 (P2b start).
+verdict. r3.11: E1, E11, E12 and E13 are done too. The step-7 re-run of E1
+was within every bound: write p95 warm 5.63 ms and cold 13.40 ms;
+`listExchanges` p95 1.48 ms warm and 3.39 ms cold. Open: E7 (P2a) and E14
+(P2b step 0, read only).
 
 | # | Run or measure | Decides |
 |---|---|---|
-| E1 | **Open (P1 step 7).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). r3.3: also copy `~/.claude/agent-hierarchy.peer-pending.jsonl` to `$T/home/.claude/` and run with `HOME=$T/home`, because the status write now reads dispatch rows from that global, append-only file; report its size. r3.7: also report `node -e 'await import("<hooks>/lib-hier.mjs")'` wall time (p50/p95, 20 runs) on the pre-step-5 commit and on the final P1 commit, since every lib-hier importer now loads lib-status; a delta over 10 ms returns to the Architect. r3.8: measure `lib-config.mjs` the same way, because it is the floor every `ah` hook pays now that lib-config is in the cycle; the same 10 ms bound applies. Report p50 and p95 for each. | r3.10: status write warm p95 ≤ 15 ms and cold p95 ≤ 20 ms → ship. First run over (22.4 / 17.3 ms): fixed by the §3.6 levers (step 6b), then re-run at step 7; over again → Architect. Write coalescing is no longer a remedy (§3.6). `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
+| E1 | **Done: within bounds after step 6b (r3.11; numbers in the §11 intro).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). r3.3: also copy `~/.claude/agent-hierarchy.peer-pending.jsonl` to `$T/home/.claude/` and run with `HOME=$T/home`, because the status write now reads dispatch rows from that global, append-only file; report its size. r3.7: also report `node -e 'await import("<hooks>/lib-hier.mjs")'` wall time (p50/p95, 20 runs) on the pre-step-5 commit and on the final P1 commit, since every lib-hier importer now loads lib-status; a delta over 10 ms returns to the Architect. r3.8: measure `lib-config.mjs` the same way, because it is the floor every `ah` hook pays now that lib-config is in the cycle; the same 10 ms bound applies. Report p50 and p95 for each. | r3.10: status write warm p95 ≤ 15 ms and cold p95 ≤ 20 ms → ship. First run over (22.4 / 17.3 ms): fixed by the §3.6 levers (step 6b), then re-run at step 7; over again → Architect. Write coalescing is no longer a remedy (§3.6). `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
 | E2 | **Done: async honoured; sync = 32–36 ms per call; async killed at `-p` exit.** Does Claude Code 2.1.289 honour `"async": true` on a command hook in a plugin's hooks.json? Measure the added wall-clock per tool call for PostToolUse(`*`) with and without it. | Async works → register it async. It does not → measure sync cost; over 50 ms per call → escalate Q5 to the user with the number. |
 | E3 | **Done: fires ~6–8 s late; `message` is a constant → `note: null`.** In an `--agent` peer session under a test team in a temp git repo, trigger a permission prompt. Does Notification(`permission_prompt`) fire, and what does its `message` field contain? | Fires → design holds, and `blocked_note` = message. Does not fire → Claude-peer blocked detection has no event source; return to the Architect. |
 | E4 | **Done: yes (idle ≤ 1 s; busy at next tool boundary).** Does UserPromptSubmit fire in a peer when a cross-session `SendMessage` brief arrives? | Yes → `working` is immediate. No → the first PostToolUse sets it, and docs/status-file.md says so. No design change. |
@@ -1655,9 +1836,10 @@ and E13 (P2b start).
 | E8 | **Done: the engine cancels it.** After a hot reload, is a `$.clock.every` timer started in the old `session.start` cancelled by the engine? | No → the module must cancel it (`session.end`, or a guard). |
 | E9 | **Done: Branch A, both forms load both files (§6.1).** Can one plugin carry both a classic command-hooks file and a `{modules:[…]}` hooks file? Steps: (1) In `T=$(mktemp -d)`, checked non-empty, build plugin `$T/p`. `hooks/hooks.json` holds a classic SessionStart command hook that writes `$T/classic.ok`. `mod/hooks.json` is `{"modules":["./register.ts"]}`, and its `session.start` hook does `$.fs.write("$T/mod.ok","1")`, path baked in, then `next(e)`. (2) Try each plugin.json form in turn: `"hooks": "./mod/hooks.json"`, and `"hooks": ["./hooks/hooks.json","./mod/hooks.json"]`. (3) For each form, run `claude plugin validate $T/p`, then `timeout 90 claude --plugin-dir $T/p -p "reply ok"` from `$T/repo` (`git -C "$T/repo" init`). Record which markers appear. (4) Check `pgrep -fl claude` and kill anything this probe started. | Both markers under some form, and validate clean → **Branch A**, using that form. Otherwise → **Branch B**. If `mod.ok` never appears under `-p` even in a lone-module control plugin, repeat the run interactively, as in E10. |
 | E10 | **Done: both render (`⚠ <plugin>: …` above the statusLine) → toggle (§6.4).** Note for any rerun: the 2.1.289 folder-trust dialog defaults to "No, exit"; accept with `Down` then `Enter`. Does a configured `statusLine` command hide `$.ui.status` output? Steps: (1) In `T=$(mktemp -d)`, checked non-empty, run `git -C "$T/repo" init`. Write `$T/repo/.claude/settings.json` with `{"statusLine":{"type":"command","command":"echo E10-STATUSLINE"}}`. (2) Build mod plugin `$T/m`. Its `session.start` calls `$.ui.status("E10-PROBE")` and writes `$T/m.ok`. (3) Run `tmux new-session -d -s e10-$$ -x 200 -y 50 -c "$T/repo" "claude --plugin-dir $T/m"`. If the folder-trust dialog shows in `tmux capture-pane -p`, accept it with `send-keys Enter`. Wait ≤ 30 s, until `$T/m.ok` exists. (4) Run `tmux capture-pane -p -t e10-$$ > $T/screen.txt`, then grep it for both strings. (5) Run `tmux kill-session -t e10-$$`, then check `pgrep -fl claude` and kill what this probe started. | STATUSLINE shown and PROBE absent → no toggle (§6.4). Both shown → `status_entry` toggle, default on. STATUSLINE absent, or `m.ok` absent → the probe is invalid; fix it and rerun. Never guess. |
-| E11 (P1) | **Read part done** (it found NEEDS-ARCHITECT #5, resolved in §3.7.1). **Suite run open (P1 step 2):** with §3.7.1 in place, run the full `ah` bash suite. | Green after only the §3.7.7 updates → done. Any other failure → return it to the Architect before step 2 lands. |
-| E12 (P2b start) | Read the plugin-authoring reference (load the `plugin-authoring` skill) and, if it is not explicit, probe: how does a module read a plugin `userConfig` value, and does adding a `userConfig` key to an installed plugin's plugin.json prompt the user on update or enable? Probe sandbox-safely as in E9 (`T=$(mktemp -d)`, checked non-empty; `--plugin-dir`; `--setting-sources local`; timeout; `pgrep -fl claude` afterwards). | Readable and no prompt, or a prompt with the default pre-filled → userConfig as in §6.4. Not readable by a module → return to the Architect (the fallback is a `$.store` flag set by a mod command). A blocking prompt for every `ah` user → return to the Architect; it becomes a user decision. |
-| E13 (P2b start) | Can a `claude plugin test` test file under `<mod>/tests/` import a JSON file under `agent-hierarchy/tests/fixtures/status/` (a static `import … with { type: "json" }`, or a plain import)? One-test probe in a scratch copy of the plugin. | Yes → tests read fixtures in place. No → the embedded fixtures module plus the bash drift check (§6.6). |
+| E11 (P1) | **Done.** The read part found NEEDS-ARCHITECT #5, resolved in §3.7.1. The suite run at P1 step 2 showed only the intended failures. **Suite run (P1 step 2):** with §3.7.1 in place, run the full `ah` bash suite. | Green after only the §3.7.7 updates → done. Any other failure → return it to the Architect before step 2 lands. |
+| E12 (P2b start) | **Done: readable from `register`'s `options` (defaults filled in), no blocking prompt on update, enable or start → userConfig as in §6.4 (r3.11 read path and scope there).** Read the plugin-authoring reference (load the `plugin-authoring` skill) and, if it is not explicit, probe: how does a module read a plugin `userConfig` value, and does adding a `userConfig` key to an installed plugin's plugin.json prompt the user on update or enable? Probe sandbox-safely as in E9 (`T=$(mktemp -d)`, checked non-empty; `--plugin-dir`; `--setting-sources local`; timeout; `pgrep -fl claude` afterwards). | Readable and no prompt, or a prompt with the default pre-filled → userConfig as in §6.4. Not readable by a module → return to the Architect (the fallback is a `$.store` flag set by a mod command). A blocking prompt for every `ah` user → return to the Architect; it becomes a user decision. |
+| E13 (P2b start) | **Done: no; any `.json` import is refused, and a `.ts` module that embeds the JSON loads → `fixtures.ts` plus the drift test (§6.6 r3.11).** Can a `claude plugin test` test file under `<mod>/tests/` import a JSON file under `agent-hierarchy/tests/fixtures/status/` (a static `import … with { type: "json" }`, or a plain import)? One-test probe in a scratch copy of the plugin. | Yes → tests read fixtures in place. No → the embedded fixtures module plus the bash drift check (§6.6). |
+| E14 (P2b step 0, read only, r3.11) | Answer from the plugin-authoring reference only; run nothing. (a) Can a `claude plugin test` test supply `options` (userConfig values) to `register`? (b) Does the reference name a type check for module code that runs with no new dependency in the repo? `ah` has no package.json, and `tsc` is not installed. | (a) Yes → add a register-level toggle test. No → the view.ts toggle test alone carries P2b AC 6. (b) Yes → AC 3 runs it. No → AC 3 is `validate` only, and `ah` gains no node toolchain. Ceiling: type errors that the tests do not exercise go unseen. |
 
 All probes must be sandbox-safe:
 
@@ -1696,7 +1878,17 @@ All probes must be sandbox-safe:
   `ah` README, through docs-writer, together with the `⚠ ah:` rendering and
   the `status_entry` toggle.
 - **Installed-copy loading is untested** (E9 used `--plugin-dir`). P2b AC 8
-  is the check, and a rollback path is named there.
+  is the check, and a rollback path is named there. r3.11: E12 also left
+  two cases unobserved, a logged-in session and a git-sourced
+  marketplace, and AC 8 covers both.
+- **No type check (r3.11, unless E14(b) finds one).** `claude plugin test`
+  exercises the module, but type errors on paths no test reaches go
+  unseen. Add a toolchain only if one of those ever ships.
+- **Hot reload (r3.11).** Mod code never goes into `~/.claude/dev-mods/`
+  (§6.1). The user's AC 2(b) launch uses `--setting-sources project,local`,
+  so the installed `ah` does not load beside the worktree copy, and the
+  user's verb-themes plugin does not rewrite `~/.claude/settings.json`
+  (the E9 side effect).
 - **`$.state` writes.** These are refused during `ui.render`. All state
   writes happen in the tick, `command.run` and `ui.close`.
 - **Spec 0028.** As of r2, the Stop hook follows §5.7.2's half-threshold

@@ -18,6 +18,9 @@ Probes only. No product code was changed. Scratch root used below:
 | E9 | **Branch A** | Both plugin.json forms load the classic hooks file and the `{modules}` file together (`classic.ok` and `mod.ok` both present). Also, one hooks.json holding both keys works. |
 | E10 | **both shown → toggle** | A configured statusLine does not hide `$.ui.status`. The engine renders it as `⚠ <plugin>: <text>` on its own line, above the statusLine output. |
 | E11 | read done; suite run at P1 step 2: only intended failures (see E11) | Push guard: no new merge block on the three item slugs. But the pipeline closes `pipeline-run-anchor` with a stub, which the §3.7.1 rule would leave open (see below). |
+| E12 | **readable, no blocking prompt → userConfig (§6.4)** | `register(on, options)` gets `status_entry` with its default filled in. A stored value is read from user settings or `--settings` only, not from project or local settings. Update, enable and interactive start never prompt. A fresh install prints one non-blocking "1 userConfig option not yet set" line. |
+| E13 | **no → embedded fixtures module + drift check (§6.6)** | `claude plugin test` refuses any `.json` import ("not named like code and was not loaded"), with or without `with { type: "json" }`. A `.ts` module that embeds the JSON loads. |
+| E14 | **(a) yes → register-level toggle test; (b) no → AC 3 is `validate` only** | (a) `test(name, { options }, body)` hands `register` the userConfig values. (b) The only type check named is `tsc -p <mod folder>`, which needs `tsc`, and `ah` has none. Reference only; nothing was run. |
 
 ## Spec assumptions broken
 
@@ -228,8 +231,90 @@ Against the first run, p95: the warm write fell from 17.26 to 5.63 ms, the cold 
 
 The write grows with the number of out dispatches, at ~1 ms each from the peer-pending re-read, and with the exchange count. Those three are the levers. Per §8 the remedy amends the spec, so this goes to the Architect.
 
+### E12: userConfig read path, and prompts on update or enable (P2b start)
+
+Claude Code 2.1.289, 2026-10-05. Scratchpad `$SP=/private/tmp/claude-501/-Users-jimcline-git-repos-agent-tools/fc01c82d-251b-4bd7-b671-d7c6fbbbf0fd/scratchpad`. Scripts: `$SP/e12.sh`, `e12b.sh`, `e12c.sh` and `e12d.sh`. Probe field, the same as §6.4: `"userConfig": {"status_entry": {"type": "boolean", "title": "Status entry", "description": "…", "default": true}}`. The module's `session.start` writes `JSON.stringify(options)` to a file.
+
+**Reference.** The reference is explicit about the read path:
+- reference.md:15: `register(on, options)`, where "`options` holds the values of the fields the manifest's `userConfig` declares".
+- Types 7314–7326, `PluginOptions`: "defaults filled in", stored at `settings.json pluginConfigs[<plugin>].options`. "A change to them reloads the plugin and `register` runs again" (8796).
+- The reference does not say whether adding a field prompts anyone, so that part was probed.
+
+**Read path** (`--plugin-dir`, real HOME; validate passed):
+
+| Where the value is | Settings sources | `options` the module got |
+|---|---|---|
+| nowhere | `local` | `{"status_entry":true}` (the default) |
+| `.claude/settings.local.json` `pluginConfigs.e12p.options.status_entry=false` (also tried the `e12p@inline` key) | `local` | `{"status_entry":true}`: **not honoured** |
+| `.claude/settings.json`, same value | `project` | `{"status_entry":true}`: **not honoured** |
+| `--settings '{"pluginConfigs":{"e12p":{"options":{"status_entry":false}}}}'` | `local` + flag | `{"status_entry":false}` |
+| `$HOME/.claude/settings.json` with scratch HOME, same value | `user` | `{"status_entry":false}` |
+
+A stored value counts only from user settings or the `--settings` flag. That is where `/config` and `claude plugin configure` put it. A project or local settings file does not set it.
+
+**Installed plugin, under a scratch HOME.**
+- Setup: a folder marketplace (`claude plugin marketplace add <path>`). The plugin was installed at 0.1.0 with no userConfig, then moved to 0.2.0, which adds `status_entry`.
+- The commands run with a TTY (`script -q /dev/null …`), so a prompt would show rather than fail on a pipe.
+
+| Step | Output | Prompt? | `options` at the next session |
+|---|---|---|---|
+| install 0.1.0 | installed, scope user | no | `{}` |
+| `marketplace update` + `plugin update` → 0.2.0 | "updated from 0.1.0 to 0.2.0 … Restart to apply changes." | no | `{"status_entry":true}` |
+| `disable`, then `enable` | success lines | no | `{"status_entry":true}` |
+| fresh scratch HOME, install 0.2.0 | installed, then a notice: "1 userConfig option not yet set — run /plugin configure e12q@e12mkt in Claude Code, or pass --config KEY=VALUE." Exit 0 | no (an informational line) | `{"status_entry":true}` |
+| interactive `claude` in both HOMEs, past folder trust (tmux) | normal prompt; no config dialog | no | `{"status_entry":true}` |
+
+- `claude plugin configure e12q@e12mkt --json` after either path gives `"inputs": {"status_entry": "true"}`, `"configured": []` and `"unconfigured": ["status_entry"]`. A defaulted field counts as "unconfigured", but its default still reaches the module.
+
+**Verdict.**
+- **Readable with no blocking prompt → userConfig as in §6.4.**
+- A fresh install prints one non-blocking "not yet set" line. An upgrade prints nothing.
+
+**Unknowns.**
+- Login: a scratch HOME has none ("Not logged in"). `session.start` runs before the login check, so `options` was observed anyway, and the interactive screen showed no dialog. A logged-in session was not observed.
+- Marketplace source: only a folder marketplace was tested, which reads the plugin in place. A copied (git/GitHub) install was not, because `file://` sources are refused ("Invalid marketplace source format").
+- The `/plugin` UI flow was not driven.
+
+### E13: fixture JSON in `claude plugin test` (P2b start)
+
+Script `$SP/e13.sh`. It works on a scratch copy of the worktree's `agent-hierarchy` with `"hooks": "./mod/hooks.json"`, a no-op `mod/register.ts`, and tests under `mod/tests/`. Scratch HOME and CLAUDE_CONFIG_DIR. `claude plugin validate` passed.
+
+| Test file | Import | Result |
+|---|---|---|
+| control | none | pass |
+| attr | `import doc from '../../tests/fixtures/status/work.json' with { type: 'json' }` | **file did not load** |
+| plain | the same path, no attribute | **file did not load** |
+| inside | `./local.json` beside the test, with the attribute | **file did not load** |
+| embedded (second run) | `import { work } from './fixtures.ts'`, a module holding `export const work = <work.json verbatim> as const` | pass |
+
+The error is the same for each JSON import:
+
+> cannot import "…/work.json" (from mod/tests/attr.test.ts): $T/ah/tests/fixtures/status/work.json is not named like code and was not loaded: a hooks module and the files it imports end in .ts, .tsx, .jsx, .js, .mjs, .cjs, .mts or .cts
+
+This matches reference.md:12, "a file named otherwise is not loaded".
+
+**Verdict: no → the embedded fixtures module plus the bash drift check (§6.6).** The embedded `.ts` module loads and its values read correctly.
+
+### E14: test options and a type check, from the reference only (P2b step 0)
+
+Read only, nothing run. Source: the 2.1.289 plugin-authoring skill, `/private/tmp/claude-501/bundled-skills/2.1.289/674cb784a626d39e2cf6782970c9ba4e/plugin-authoring/`.
+
+- **(a) Can a test supply `options` to `register`? Yes.**
+  - reference.md:77: "A test gives the plugin under test its `userConfig` values with `test(name, { options }, body)`, which it reads as the values stored in settings (… defaults filled in, then validated); left out, the plugin gets its manifest's defaults."
+  - types/claude-code.d.ts 15148–15170 (`TestOptions.options`): "`register(on, options)` receives them as a load does."
+  - → A register.tsx toggle test is added, beside the view.ts test.
+- **(b) Is a type check named that needs no new dependency? No.**
+  - reference.md:39–49: the engine lays declarations and a `tsconfig.json` in `.claude-plugin/types/` "so its editor and `tsc -p <mod folder>` type it with no step taken. There is no command to run." The only type check named is `tsc`, which is not installed, and `ah` has no package.json.
+  - reference.md:62: `claude plugin validate` "checks the contract" of a plugin that adds a noun to `$`, meaning its types file. It does not type-check module code.
+  - → AC 3 is `claude plugin validate` only. The ceiling stands: type errors the tests do not exercise go unseen.
+- Side note: per reference.md:41–48, a mod loaded from a folder the person owns (`--plugin-dir` among them) gets `.claude-plugin/types/` written beside it at every load and reload. A live `--plugin-dir` run on the worktree would leave generated files in the plugin folder.
+
 ## Side effects outside scratch (for the user)
 - **`~/.claude/settings.json` was rewritten by the user's own verb-themes plugin** during the two E9 r2 runs. Those runs load full user settings, as r2 prescribes, and verb-themes `rotate.py:217` swaps the spinner pack on each SessionStart. File mtime: 22:47:55. It rotated twice. The runs' output named Star Trek, then James Bond, and the session had started on Doctor Strangelove. It was not reverted, because the brief forbids settings edits. `/verb-themes` restores it. Every other probe used `--setting-sources local|project,local` to avoid this.
 - Folder-trust was accepted for 3 `mktemp -d` repos under `/var/folders/…/T/`, as E10/E3 prescribe. This adds `~/.claude.json` project entries.
 - E9 r2 ran the user's full plugin set in temp repos, so Engram/ah hooks saw the prompt "reply ok".
 - Every `claude`/tmux process started here has exited: `pgrep -fl 'claude --setting-sources'` is empty and no tmux server is running.
+- E12/E13 (2026-10-05):
+  - Everything ran in the scratchpad, under scratch HOMEs, except E12's read-path runs. Those used the real HOME with `--setting-sources local|project` (no user plugins), and left one transcript folder under `~/.claude/projects/` for the scratch repo.
+  - `~/.claude/settings.json`, `~/.claude.json` and `~/.claude/dev-mods` were not written.
+  - The interactive runs used private tmux sockets (`tmux -L e12…`), killed afterwards. No probe process is left.
