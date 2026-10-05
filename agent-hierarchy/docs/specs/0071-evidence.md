@@ -8,7 +8,7 @@ Probes only. No product code was changed. Scratch root used below:
 
 | # | Verdict | One line |
 |---|---|---|
-| E1 | deferred to P1 | Needs the P1 status write path and the new `listExchanges`. |
+| E1 | **two thresholds broken** (P1 step 7, see E1) | Status write p95 17–22 ms (bound 15). `listExchanges` p95 5.7–5.8 ms (bound 5). Import deltas within 10 ms. |
 | E2 | **async works** | `"async": true` is honoured on a plugin PostToolUse command hook. Sync no-op node hook = +32–36 ms per tool call. |
 | E3 | **fires, but note is generic** | Notification(`permission_prompt`) fires in an `--agent ah:implementor` session. `message` is always `"Claude needs your permission"`. It lands ~6–8 s after the dialog shows. |
 | E4 | **yes** | UserPromptSubmit fires on a cross-session SendMessage. Idle peer: within 1 s. Busy peer: at the next tool boundary, inside the running turn. |
@@ -179,6 +179,38 @@ Probes only. No product code was changed. Scratch root used below:
   - No other failure. These pass unedited: `test-pipeline-decisions.sh`, `test-push-guard.sh`, and every pre-existing `test-pipeline-merge.sh` case (its `-ok` and `-x` records are orchestrator-addressed, so they still close on a bodyless response).
   - `merge-check` against the open rule (AC 22, new cases in `test-pipeline-merge.sh`): an Architect-addressed `-ok` with a skeleton response gives `not-signed-off`; the same response filled gives none; a `-x` record closed bodyless gives no `exception`.
   - After the updates: 98 files, 98 pass (with the new `test-exchange-open.sh`).
+
+### E1: status write cost (P1 step 7)
+
+**Method.**
+
+- The pool is a copy of the live `agent-tools` `.claude/hierarchy` (`cp -Rp`) and of `~/.claude/agent-hierarchy.peer-pending.jsonl`, placed in `T=$(mktemp -d)` (checked non-empty). The run used `AGENT_HIERARCHY_DIR=$T/hierarchy` and `HOME=$T/home`, and cwd `$T`.
+- Final code: the P1 worktree at 206c4ab, plus the step-7 version bump. Pre-step-5 code: `git archive ed9367b`.
+- Driver: `run-e1.sh` and `e1.mjs` in the Implementor's scratchpad.
+- "Cold" means one fresh `node` process per sample, timing only the call, with module load reported separately. "Warm" means 50 calls in one process after one untimed call. Import wall time covers the whole `node -e 'await import(…)'` process, 20 runs.
+- **A copy must keep mtimes.** A plain `cp -R` resets every response's mtime to now. Every recently closed member exchange then counts as reported in the last 10 min and becomes a dispatch: 73 instead of 4. That inflated the write to p95 ~111 ms in a first run, which is discarded.
+
+**Pool.** 85 exchanges: 3 open, and 82 member-addressed with a response. One live team. The document holds 4 dispatches and 3 members. The peer-pending file is 609,525 bytes. status.json is 5,028 bytes.
+
+| Measure | p50 | p95 | max | Bound | Verdict |
+|---|---|---|---|---|---|
+| Status write path, cold (`writeStatus`) | 19.28 ms | 22.40 ms | 27.63 ms | p95 ≤ 15 ms | **over** |
+| Status write path, warm | 13.74 ms | 17.26 ms | 19.97 ms | p95 ≤ 15 ms | **over** |
+| Module load before the first write (lib-status + lib-hier) | 6.77 ms | 7.53 ms | 8.84 ms | — | — |
+| `listExchanges`, cold | 5.01 ms | 5.80 ms | 6.25 ms | p95 ≤ 5 ms | **over** |
+| `listExchanges`, warm | 3.39 ms | 5.74 ms | 7.47 ms | p95 ≤ 5 ms | **over** |
+| `import lib-hier`, pre-step-5 → final | 26.69 → 27.48 ms | 29.20 → 28.98 ms | — | delta ≤ 10 ms | ok (+0.79 / −0.22) |
+| `import lib-config`, pre-step-5 → final | 25.54 → 27.24 ms | 27.43 → 34.38 ms | 28.29 → 36.06 ms | delta ≤ 10 ms | ok (+1.70 / +6.95) |
+
+**Where one write goes.** Warm medians of 20, timed separately. The compute total is 12.8 ms:
+
+- `listExchanges` 3.25 ms. It reads every member-addressed response for the open rule.
+- `openRunAnchor` for the one live team 3.20 ms. It goes through `openExchanges`, which runs `listExchanges` a second time.
+- `dispatchOrigin` 1.02 ms per dispatch, 4 dispatches here. Each call re-reads the whole 609 KB peer-pending file.
+- `readMsgFile` of every member request 1.39 ms.
+- `resolveConfig` 0.10, `attributedRoster` 0.15, `readGates` 0.03.
+
+The write grows with the number of out dispatches, at ~1 ms each from the peer-pending re-read, and with the exchange count. Those three are the levers. Per §8 the remedy amends the spec, so this goes to the Architect.
 
 ## Side effects outside scratch (for the user)
 - **`~/.claude/settings.json` was rewritten by the user's own verb-themes plugin** during the two E9 r2 runs. Those runs load full user settings, as r2 prescribes, and verb-themes `rotate.py:217` swaps the spinner pack on each SessionStart. File mtime: 22:47:55. It rotated twice. The runs' output named Star Trek, then James Bond, and the session had started on Doctor Strangelove. It was not reverted, because the brief forbids settings edits. `/verb-themes` restores it. Every other probe used `--setting-sources local|project,local` to avoid this.

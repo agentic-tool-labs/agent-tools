@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.9, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.10, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -156,8 +156,9 @@ mockup, it says so.
     takes the request file's `created` as its origin. A corrupt row must
     not hide a dispatch; this fails toward nudging, as `dueForNudge`
     already does for a bad gate `ts`. One exported
-    function in `hooks/lib-peer.mjs` (which owns the rows) computes it,
-    given a request id; the Stop hook and lib-status both call it. Its name
+    function in `hooks/lib-peer.mjs` (which owns the rows) computes it
+    for a set of request ids, reading the rows once per call (r3.10); the
+    Stop hook and lib-status both call it, once per run. Its name
     is the Implementor's choice; AC 7 covers it.
   - stream-label's event→state table (`SELF_STATE`). Move it to a lib, and
     stream-label imports it.
@@ -456,8 +457,25 @@ vectors next to its own tests (§6.6 for the mod, §7.6 for claude-tui-line).
 
 - A consumer's read is one `stat` plus a read of a file that is usually
   under 8 KB, plus a JSON parse. It never spawns anything.
-- The producer's cost per write is E1. Target: p95 ≤ 15 ms on the live
-  `agent-tools` pool.
+- The producer's cost per write is E1. Target on the live `agent-tools`
+  pool (r3.10): warm p95 ≤ 15 ms (our code) and cold p95 ≤ 20 ms (our code
+  plus the per-process warm-up every short-lived hook pays anyway, about
+  5 ms in E1). r2's single 15 ms figure did not separate the two.
+- r3.10, the first E1 run (cold 22.4 / warm 17.3 ms) was over because of
+  waste, not inherent cost. Each write listed the exchanges twice (once
+  more inside `openRunAnchor`) and re-read the 609 KB dispatch-row file
+  once per dispatch. Three levers remove it (step 6b):
+  1. The dispatch-origin function (§3.1) reads the rows once per call and
+     answers for a set of request ids. The Stop hook and lib-status each
+     call it once per run with all their ids.
+  2. `openRunAnchor` accepts an optional, already-computed exchange list
+     and uses it instead of listing again. Its logic is unchanged and
+     still the one definition (§4.2.1). lib-status passes its list.
+  3. The §3.7.1 4 KB pre-check.
+- Write coalescing (r2's remedy) is **dropped**. Hooks are short-lived, so
+  there is no process to make the "trailing write", and skipping a write
+  would lose the final state (a Stop's report hidden behind a UserPromptSubmit
+  written 0.5 s earlier). It trades correctness for latency.
 
 ### 3.7 Exchange open/closed fix, and Stop-hook liveness for pane work (P1)
 
@@ -490,9 +508,12 @@ records (§3.7.1 second bullet, §3.7.6).
 - `listExchanges` reads the text of each member-addressed exchange's
   **response** file, once per call. It never reads request files for this
   rule, and never reads the response of an orchestrator-addressed exchange.
-- If E1 shows `listExchanges` p95 over 5 ms on the live pool, add a cheap
-  pre-check: a response over 4 KB cannot be unauthored, so treat it as
-  closed without reading it. Do not add it otherwise.
+- Size pre-check (r3.10: required, since E1 measured `listExchanges` p95 at
+  5.8 ms): a member-addressed response file over 4 KB is treated as closed
+  from its `stat` size alone, without reading it. Ceiling (`ponytail:`
+  comment): a body over 4 KB made only of skeleton lines would read closed;
+  nobody writes 4 KB of `- none`. `reportStatus` itself (deliver's use) has
+  no pre-check.
 
 Why not a `--body` flag on `msg.mjs new` (the other fix E11 suggested): it
 would also work going forward, but every record already closed by a stub,
@@ -756,7 +777,8 @@ Per team:
 
 - `pipeline` is `null` unless `openRunAnchor(dir, team)` returns an id
   (exactly one open anchor for that team). Reuse that function; do not
-  re-derive anchors.
+  re-derive anchors. lib-status passes it the exchange list it has already
+  computed (§3.6 lever 2), so a write lists exchanges once.
 - `anchor_id` is that id; `started` is the anchor request's `created`.
 - `round_cap` is 3, the skill's cap. It has no code constant today; define
   it once, in lib-status.
@@ -1213,11 +1235,20 @@ commit whole (§3.7.8). The ACs each step must satisfy are in brackets.
    activity-record change writes status); `msg.mjs sweep` deletes activity
    files past its cutoff, through lib-hier's `sweep`, so msg.mjs itself is
    untouched (§5). [AC 8, 9, and AC 5 for item 5]
+6b. **Write-cost levers (r3.10).** The three §3.6 levers: the origin
+   function batched over ids, `openRunAnchor` taking an optional exchange
+   list, and the §3.7.1 4 KB pre-check. Its own commit, after the r3.9
+   step-6 rework and before step 7. [AC 28; AC 26, 12, 17, 23 still pass;
+   AC 14]
 7. **Release.** Version 0.110.0 in plugin.json and the root marketplace.json
-   together; release text with the §3.7.5 note; run E1. [AC 15, 16, 14]
+   together; release text with the §3.7.5 note; **re-run E1** on the
+   step-6b tree with the same method, and replace the first run's numbers
+   in the evidence file (keep the first run as "before"). [AC 15, 16, 14]
 
-If E1 (step 7) breaks a threshold, stop and return to the Architect before
-merging: the remedy (write coalescing, the 4 KB pre-check) amends this spec.
+If the re-run breaks a bound (status write warm p95 > 15 ms or cold p95 >
+20 ms; `listExchanges` p95 > 5 ms; an import delta > 10 ms), stop and return
+to the Architect before merging, with the same cost breakdown as the first
+run.
 
 Bash tests go in `tests/test-status*.sh` and `tests/test-exchange-open*.sh`,
 using `--now` and an `AGENT_HIERARCHY_DIR` temp pool. No test touches the
@@ -1377,6 +1408,19 @@ live pool.
     - `<tag>-i5-ok` addressed to the Architect with a filled response → no
       `not-signed-off`;
     - every other `merge-check` reason and test is unchanged.
+28. **Write-cost levers** (r3.10, step 6b):
+    - the origin function, given several ids in one call, returns the
+      same origins as one call per id, including the r3.5 corrupt-row
+      fallback and "no row → none";
+    - `openRunAnchor` with a passed exchange list returns the same result
+      as without one, for 0, 1 and 2 open anchors;
+    - a member-addressed request whose response is a 5 KB file with no
+      frontmatter is closed, and `listExchanges` does not read it (a test
+      may assert this with an unreadable 5 KB file, e.g. mode 000, where
+      the platform allows);
+    - a status write lists exchanges once and reads the dispatch-row file
+      once. A grep-style or instrumentation test is fine; pick whichever
+      can fail.
 
 ### P2a: claude-tui-line items
 
@@ -1483,6 +1527,16 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.10 (E1 over bounds at step 7): the first run was over because of waste:
+a second exchange listing inside `openRunAnchor`, and a 609 KB dispatch-row
+re-read per dispatch. New step 6b removes it with three levers (the batched
+origin function, `openRunAnchor` taking an optional list, the 4 KB
+pre-check), plus AC 28. The bound is split: warm p95 ≤ 15 ms, cold
+≤ 20 ms. r2's 15 ms did not separate out the per-process warm-up. Write
+coalescing is dropped, because no process lives to make the trailing write
+and skipping a write loses the final state. Step 7 re-runs E1; over again →
+Architect.
 
 r3.9 (step-6 interpretations): (a) the pane `note` is the recognised
 prompt's heading line, else null: confirmed. (b) Changed: `at` is when the
@@ -1592,7 +1646,7 @@ and E13 (P2b start).
 
 | # | Run or measure | Decides |
 |---|---|---|
-| E1 | **Open (P1 step 7).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). r3.3: also copy `~/.claude/agent-hierarchy.peer-pending.jsonl` to `$T/home/.claude/` and run with `HOME=$T/home`, because the status write now reads dispatch rows from that global, append-only file; report its size. r3.7: also report `node -e 'await import("<hooks>/lib-hier.mjs")'` wall time (p50/p95, 20 runs) on the pre-step-5 commit and on the final P1 commit, since every lib-hier importer now loads lib-status; a delta over 10 ms returns to the Architect. r3.8: measure `lib-config.mjs` the same way, because it is the floor every `ah` hook pays now that lib-config is in the cycle; the same 10 ms bound applies. Report p50 and p95 for each. | Status write p95 ≤ 15 ms → ship as is. Over 15 ms → add write coalescing (skip a write if the last one was under 1 s ago, plus one trailing write), and amend the spec. `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
+| E1 | **Open (P1 step 7).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). r3.3: also copy `~/.claude/agent-hierarchy.peer-pending.jsonl` to `$T/home/.claude/` and run with `HOME=$T/home`, because the status write now reads dispatch rows from that global, append-only file; report its size. r3.7: also report `node -e 'await import("<hooks>/lib-hier.mjs")'` wall time (p50/p95, 20 runs) on the pre-step-5 commit and on the final P1 commit, since every lib-hier importer now loads lib-status; a delta over 10 ms returns to the Architect. r3.8: measure `lib-config.mjs` the same way, because it is the floor every `ah` hook pays now that lib-config is in the cycle; the same 10 ms bound applies. Report p50 and p95 for each. | r3.10: status write warm p95 ≤ 15 ms and cold p95 ≤ 20 ms → ship. First run over (22.4 / 17.3 ms): fixed by the §3.6 levers (step 6b), then re-run at step 7; over again → Architect. Write coalescing is no longer a remedy (§3.6). `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
 | E2 | **Done: async honoured; sync = 32–36 ms per call; async killed at `-p` exit.** Does Claude Code 2.1.289 honour `"async": true` on a command hook in a plugin's hooks.json? Measure the added wall-clock per tool call for PostToolUse(`*`) with and without it. | Async works → register it async. It does not → measure sync cost; over 50 ms per call → escalate Q5 to the user with the number. |
 | E3 | **Done: fires ~6–8 s late; `message` is a constant → `note: null`.** In an `--agent` peer session under a test team in a temp git repo, trigger a permission prompt. Does Notification(`permission_prompt`) fire, and what does its `message` field contain? | Fires → design holds, and `blocked_note` = message. Does not fire → Claude-peer blocked detection has no event source; return to the Architect. |
 | E4 | **Done: yes (idle ≤ 1 s; busy at next tool boundary).** Does UserPromptSubmit fire in a peer when a cross-session `SendMessage` brief arrives? | Yes → `working` is immediate. No → the first PostToolUse sets it, and docs/status-file.md says so. No design change. |
