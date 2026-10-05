@@ -4,7 +4,7 @@
 # `roster.mjs status --now` produces today: this stages each case's pool, regenerates its document
 # and fails unless it is byte-identical to the committed file. A rule change that alters a fixture
 # therefore fails here until the fixture is regenerated and its consumers are checked.
-# Regenerate: AH_UPDATE_FIXTURES=1 bash tests/test-status-fixtures.sh
+# Regenerate (the fixtures, then mod/tests/fixtures.ts from them): AH_UPDATE_FIXTURES=1 bash tests/test-status-fixtures.sh
 # HOME- and AGENT_HIERARCHY_DIR-redirected; real state untouched.
 # Usage: bash tests/test-status-fixtures.sh   (exits 0 iff all cases pass)
 
@@ -99,6 +99,7 @@ for c in idle work warn bad hidden pipeline member-session; do
   check "fixture $c: holds no sandbox path" '! grep -q "$SANDBOX" "$FIXTURES/$c.json"'
 done
 check "the fixture set is exactly the seven cases" '[ "$(ls "$FIXTURES" | tr "\n" " ")" = "bad.json hidden.json idle.json member-session.json pipeline.json warn.json work.json " ]'
+if [ -n "${AH_UPDATE_FIXTURES:-}" ]; then mkdir -p "$PLUGIN/mod/tests" && node "$PLUGIN/tests/gen-mod-fixtures.mjs" "$FIXTURES" > "$PLUGIN/mod/tests/fixtures.ts"; fi
 
 # What each case is for: a fixture that drifted into showing something else fails here, not in a consumer.
 f() { node -e 'const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String((new Function("o", "return (" + process.argv[2] + ")"))(o)))' "$FIXTURES/$1.json" "$2"; }
