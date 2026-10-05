@@ -17,8 +17,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
-
-const SELF_STATE = { UserPromptSubmit: "working", Stop: "idle", Notification: "blocked" };
+import { SELF_STATE } from "./lib-hier.mjs";
 
 try {
   const pane = process.env.HERDR_PANE_ID;

@@ -159,7 +159,7 @@ import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
-import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
+import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
@@ -4536,7 +4536,7 @@ function allTeamRows(dir, invoker) {
 /** A stream's name: git-branch-safe, directory-safe, and short enough that `<glyph> <name>` stays
     well under Herdr's 80-character metadata limit. */
 const STREAM_NAME_RE = /^[a-z][a-z0-9_-]{0,39}$/;
-const STREAM_SELF_STATES = ["working", "idle", "blocked"];
+const STREAM_SELF_STATES = Object.values(SELF_STATE);
 
 function rejectUnknownFlags(allowed, verb) {
   for (const key of Object.keys(opts)) {
@@ -5113,29 +5113,6 @@ function requireUltraApproval(dir, member) {
       `Ask the user first (agent-team's "When a role can't take the work"): AskUserQuestion, header "Ultra-Advisor", with the options "Yes, rest of session", "Ask me each time" and "No, not this session". ` +
       `Record the answer with node "${gateCli}" set --session "${sessionId}" --choice <session|each|off>, then re-run this command.`
   );
-}
-
-/**
- * Whether a response file holds a report. It is created with a fixed body below its frontmatter, so
- * a body that is still that skeleton, trailing whitespace aside, is no report; a frontmatter that no
- * longer parses, or no longer carries the request's id, is a malformed one. The skeleton is the
- * baseline for a file this run did not create as well, a reused one or one `--wait-only` reads.
- */
-function reportStatus(path, id) {
-  let text;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return "no-report";
-  }
-  const fm = parseFrontmatter(text);
-  if (!fm || fm.fields.id !== id) return "malformed-report";
-  const norm = (body) => {
-    const lines = body.split("\n").map((l) => l.replace(/\s+$/, ""));
-    while (lines.length && lines[lines.length - 1] === "") lines.pop();
-    return lines.join("\n");
-  };
-  return norm(text.split("\n").slice(fm.end).join("\n")) === norm(responseSkeleton()) ? "no-report" : "reported";
 }
 
 /** The member's last 20 lines, for diagnosis only: a report is only ever the file. */

@@ -32,7 +32,7 @@
  */
 
 import { hierarchyDir, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
-import { appendGate, exchangeAgeSec, openExchanges, readGates, readMsgFile } from "./lib-hier.mjs";
+import { appendGate, exchangeAgeSec, openExchanges, readGates, readMsgFile, thresholdFor } from "./lib-hier.mjs";
 import { dispatchRecordsFor, pendingFor } from "./lib-peer.mjs";
 
 function allow() {
@@ -44,12 +44,6 @@ function block(reason) {
   process.exit(0);
 }
 
-/** small=5min, medium=10min, large=20min; absent/unrecognised treated as small — spec §5.6. */
-const ETA_THRESHOLD_SEC = { small: 5 * 60, medium: 10 * 60, large: 20 * 60 };
-
-function thresholdFor(eta) {
-  return ETA_THRESHOLD_SEC[eta] || ETA_THRESHOLD_SEC.small;
-}
 
 /**
  * §5.3 (r4): open exchanges THIS session dispatched on the peer route — a

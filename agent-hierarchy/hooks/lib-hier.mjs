@@ -31,6 +31,14 @@ export const MSG_TYPES = ["request", "response"];
 export const REASONS = ["context", "second-opinion", "parallel"];
 /** Complexity scaling for a peer dispatch (spec 0028 §5.6): the liveness check-in threshold. Absent/unrecognised treated as "small". */
 export const ETAS = ["small", "medium", "large"];
+/** small=5min, medium=10min, large=20min. */
+export const ETA_THRESHOLD_SEC = { small: 5 * 60, medium: 10 * 60, large: 20 * 60 };
+/** An absent or unrecognised eta is treated as small. */
+export function thresholdFor(eta) {
+  return ETA_THRESHOLD_SEC[eta] || ETA_THRESHOLD_SEC.small;
+}
+/** The activity state a session's own hook event signals. */
+export const SELF_STATE = { UserPromptSubmit: "working", Stop: "idle", Notification: "blocked" };
 export const REQUEST_KEYS = ["tldr", "goal", "context", "constraints", "files", "acceptance", "want_back"];
 export const RESPONSE_KEYS = ["tldr", "status", "changes", "evidence", "gaps", "open_questions"];
 export const SLUG_RE = /^[a-z0-9-]{1,32}$/;
@@ -181,12 +189,6 @@ function skeletonBody(keys) {
     lines.push("", `## [${i + 1}] ${key}`, "- none");
   });
   return lines.join("\n") + "\n";
-}
-
-/** What a response file is created with below its frontmatter's closing line (a blank line, then
-    the skeleton): while that is unchanged, nothing has been reported in it. */
-export function responseSkeleton() {
-  return "\n" + skeletonBody(RESPONSE_KEYS);
 }
 
 /** What the team file is and how a session acts on it — shipped with the plugin, named in every message that names a team file. */
@@ -649,6 +651,23 @@ function hasAuthoredContent(body) {
     return true;
   }
   return false;
+}
+
+/**
+ * Whether a response file holds a report: missing or unreadable → `no-report`; a frontmatter that
+ * does not parse, or does not carry the exchange's id → `malformed-report`; a body with no
+ * authored content (`hasAuthoredContent`) → `no-report`; otherwise `reported`.
+ */
+export function reportStatus(path, id) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return "no-report";
+  }
+  const fm = parseFrontmatter(text);
+  if (!fm || fm.fields.id !== id) return "malformed-report";
+  return hasAuthoredContent(text.split("\n").slice(fm.end).join("\n")) ? "reported" : "no-report";
 }
 
 /**
