@@ -54,7 +54,8 @@ Nothing breaks; you just don't get herdr's pane placement. It's been checked
 against herdr 0.8.2. See herdr's own install instructions for getting it on
 your `PATH`.
 
-The [status entry](#the-status-entry-the-team-at-a-glance) needs Claude Code
+The [status entry](#the-status-entry-the-team-at-a-glance), and the
+[band, the Pane and toasts](#the-band-the-pane-and-toasts), need Claude Code
 2.1.289 or later.
 
 ## The flow
@@ -235,6 +236,113 @@ while the hierarchy is off (`/hierarchy off`).
   `ah` rather than as a separate plugin, so an older client that rejects the
   mod file is a known risk, accepted with that choice; `ah` neither detects
   nor works around it.
+
+## The band, the Pane and toasts
+
+The same mod shows the team in three more places, to every session that sees
+the status entry. A member session sees none of them (more on that
+[below](#who-sees-them)).
+
+### The band
+
+While a dispatch is out or a member is blocked, one line sits just above the
+prompt and names the thing most worth your attention:
+
+```
+architect is waiting on a prompt · answer it through the Orchestrator
+```
+
+It picks a stalled dispatch first, then an overdue one, then a blocked member,
+and only then work in progress. When other stalled, overdue or blocked items
+remain, it ends with `· +2 more` (for example).
+
+| Subject | Example |
+|---|---|
+| stalled | `reviewer stalled on review-step · 1 check-in unanswered`; before any check-in, `· no report after 7m`; when the member has left, `· demo-reviewer is gone` |
+| overdue | `architect is 1m 0s past its 5m eta`, plus `· check-in 1 sent` once one has gone out |
+| blocked | `… · answer it through the Orchestrator` for a pane-driven member; `… · answer it in its pane` for a Claude member |
+| working | `2 out · architect 2:30 of 10m · reviewer 0:45 of 5m`, adding each further dispatch while it fits |
+
+Stalled and overdue lines draw in the warning colour and bold, blocked in the
+warning colour, and work in the default colour. The words carry the severity
+too, so the line reads the same without colour. The times count up every 2
+seconds, and the line is cut to the terminal's width with `…`. It steps aside
+while Claude Code shows a survey above the prompt.
+
+### The Pane and `/hierarchy-pane`
+
+The Pane, titled **Hierarchy**, is the whole picture:
+
+```
+Hierarchy
+round 2/3 · reviewer
+1 decision waiting for you
+Team
+demo-architect · codex · pane · idle 35m
+demo-reviewer · codex · pane · working 30m
+Dispatches
+ac-1 → reviewer | eta 20m | ██████████ 100% | 30:01 | stalled
+```
+
+- **Hierarchy:** each open `/pipeline` item with its round, and how many
+  decisions are waiting for you. `No pipeline run.` when there is none.
+- **Team:** one row per member: name, kind, route and what it's doing, or
+  `gone` once it has left. A pane-driven member's row also says how long ago.
+- **Dispatches:** newest first, each with its eta, a progress bar, the time
+  since it was sent and its state. A reported dispatch stays for 10 minutes.
+  `None outstanding.` when there is none.
+- With more than one live team, each heading names its team (`Team
+  agent-tools`).
+- A narrow Pane drops the bar below 60 columns and the eta below 40. Below 28,
+  a dispatch row is just its slug and state, and below 40 a member row is just
+  its name and state. Long slugs and names are cut first.
+- With nothing to show (no status file, the hierarchy off, nothing up) it reads
+  `No hierarchy status here.`
+
+Rows use the band's colours; idle and finished rows are dimmed.
+
+`/hierarchy-pane` opens the Pane at any width and replies `Opened the
+hierarchy Pane.` If this session's surfaces show no panes at all, it replies
+`The hierarchy Pane is open, but this session shows no panes.`
+
+- **When it opens unasked.** The first time in a session that there is
+  something to show, `ah` asks for the Pane once. Claude Code places an unasked
+  pane only in a terminal at least 144 columns wide. Once you have opened it
+  yourself with `/hierarchy-pane`, in this session or an earlier one, 110
+  columns is enough, until you next close it by hand. In a narrower terminal
+  it waits, and appears if you widen the window.
+- **Closing it.** Close it by hand and it stays closed for the rest of the
+  session, whatever changes. `/hierarchy-pane` opens it again.
+
+### Toasts
+
+A short notice pops up for three things:
+
+- a dispatch reports: `reviewer reported · p3-s6 · 6m 40s`, with the time from
+  sending to report;
+- a member is blocked: for a pane-driven member, the note `ah` recorded with
+  the block when there is one (`architect blocked · Allow edits to
+  config.toml? (y/n)`); for a Claude member at a permission prompt,
+  `· waiting for permission`; otherwise `· waiting on a prompt`;
+- a dispatch stalls: `reviewer stalled · review-step · 1 check-in unanswered`.
+
+Each event toasts once per session, and a reload of the plugin doesn't repeat
+it. What is already true when a session starts, or when the mod first loads
+mid-session, counts as seen and is not toasted. A member that blocks again
+later toasts again. A status file that is unreadable for a moment doesn't
+replay anything when it comes back.
+
+### Who sees them
+
+The same sessions as the status entry: the Orchestrator, plain sessions, and
+`--agent` sessions on no team. A member session gets no band, no Pane opening
+on its own and no toasts, and there `/hierarchy-pane` opens nothing and replies
+`The hierarchy view is hidden in member sessions.`
+
+The `status_entry` option turns off only the `⚠ ah:` line. The band, the Pane
+and the toasts have no switch of their own. Like the entry, they only read the
+status file: the mod opens its own Pane and shows toasts, and never sends a
+message, answers a prompt, or runs anything named in the file.
 
 ## Durable agents (retired)
 
@@ -662,6 +770,7 @@ and pushes aren't covered by it at all. The real boundary is on GitHub:
 /hierarchy peers                    # live peer roster
 /hierarchy sweep [days]             # archive old closed exchanges
 /hierarchy on | off                 # toggle without losing the config
+/hierarchy-pane                     # open the hierarchy status Pane
 /agent-roster [show|init|add|edit|remove|list|copy|delete|use]   # define the roster, or keep several and pick one
 /agent-team [create [auto|manual]|spawn-one <role>|spawn-ad-hoc <role>|dismiss <name>|disband|untrack|teams|resync|move|adopt|reap|history]   # stand up, reshape, or tear down a live team
 /agent-role [list|add|edit|remove|check|install|update|uninstall|adopt|trust] [name]   # define your own roles, or take them from a role pack
@@ -701,7 +810,7 @@ agents/          one contract per role (frontmatter pins model + tool denies)
 hooks/           hooks and the libraries they share
 commands/        the /hierarchy and /pipeline commands
 skills/          agent-roster, agent-team, agent-role, autonomous-pipeline
-mod/             the status entry (a Claude Code mod) and its tests
+mod/             the status entry, band, Pane and toasts (a Claude Code mod) and its tests
 docs/specs/      per-feature design records
 tests/           HOME-redirected; real config untouched
 ```
