@@ -15,5 +15,15 @@
     "review",
     "cost",
     "herdr"
-  ]
+  ],
+  "hooks": "./mod/hooks.json",
+  "types": "./mod/types/index.d.ts",
+  "userConfig": {
+    "status_entry": {
+      "type": "boolean",
+      "title": "Status entry",
+      "description": "Show the hierarchy line (⚠ ah: …) above the prompt. Turn it off when claude-tui-line's ah item already shows it.",
+      "default": true
+    }
+  }
 }
