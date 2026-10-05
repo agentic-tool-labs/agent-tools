@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.24. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.25. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -2471,7 +2471,13 @@ r3.20: the step list. P3 starts after P2b's step 5 has released 0.111.0
      the Pane;
    - auto-open fires once, never after a person close, never in a member
      session, and with `isPlaced: false` it still counts as opened;
-   - a person close sets `closed`; `/hierarchy-pane` clears it;
+   - a person close sets `closed`; `/hierarchy-pane` clears it.
+     r3.25 (K1): the kit cannot raise a close by a person. The engine
+     stamps `origin`, a test plugin's close arrives as `plugin`, and a
+     rewrite is refused. So the automated tests are: a plugin close does
+     not set `closed`; with `closed` set, auto-open does not fire; and
+     `/hierarchy-pane` clears it. The person-origin write itself is
+     checked only by AC 4;
    - `ui.close` calls `next` exactly once and returns its value.
 
    [AC 1, 2, 5]
@@ -2526,7 +2532,11 @@ r3.20: the step list. P3 starts after P2b's step 5 has released 0.111.0
        With the item placed and `status_entry` off, it is the
        claude-tui-line item.
    - In a terminal of 144 columns or more, the Pane opens once, unasked.
-     Closing it by hand keeps it closed for the session.
+     Closing it by hand keeps it closed for the session. r3.25: this is
+     the only check that a close by a person sets `closed` (K1, step 4).
+     Close it with the engine's close mark, or with ctrl+x x, then wait
+     past several ticks: it must not reopen. Then `/hierarchy-pane`
+     reopens it.
 5. The read-only guard holds for the P3 module:
    - every §6.6 and P3 step-1 planted case fails the lexer alone;
    - validate's `hooks:` are within the allowed registrations, matchers
@@ -2604,6 +2614,15 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.25 (K1 from P3 step 4): `claude plugin test` cannot raise a close
+by a person, because the engine stamps `origin` and refuses a rewrite.
+The person-origin `closed` write moves to P3 AC 4's manual check, as
+paint and placement already did. Automated tests cover a plugin close
+not setting `closed`, `closed` blocking auto-open, and the command
+clearing it. No automated alternative exists: the hook must be inline
+(§6.3 item 3), so a test cannot call it directly. Moving the decision
+into view.ts would still leave the write itself untested.
 
 r3.24 (P3 step 4, G-A to G-C):
 
