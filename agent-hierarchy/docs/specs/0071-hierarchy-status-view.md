@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.17. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.19. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1046,7 +1046,7 @@ non-git fallback dir. claude-tui-line uses the same rule (§7.2).
 | Event | Behaviour |
 |---|---|
 | `session.start` | Register command `hierarchy-pane`. Start `$.clock.every(2000, tick)` and run one tick at once. Return `next(e)`. |
-| tick | 1. `stat` the file. 2. Re-read and parse it only if `mtimeMs` changed. r3.11: a file over 256 KB (§7.2's cap) is not read, and it, an unreadable file and unparseable text all count as no doc. 3. Build the view model with `$.clock.now()`. 4. Update state only if the view model changed. 5. Call `$.ui.status(...)` (§6.4). 6. Raise the toasts (§6.5). 7. Auto-open the Pane (below). |
+| tick | 1. `stat` the file. 2. Re-read and parse it only if `mtimeMs` changed. r3.11: a file over 256 KB (§7.2's cap) is not read, and it, an unreadable file and unparseable text all count as no doc. 3. Build the view model with `$.clock.now()`. 4. Update state only if the view model changed. 5. Call `$.ui.status(...)` (§6.4). r3.18, P2b: the "state" in step 4 is the tick closure's last text, and `$.state` is not used until P3's readers need it. Step 5 runs only when the text changed, except that the first tick after `session.start` always calls `$.ui.status`, to set or clear the entry, so an entry left by a module before a reload never stays stale. 6. Raise the toasts (§6.5). 7. Auto-open the Pane (below). |
 | `command.run` `{command:'hierarchy-pane'}` | `$.ui.open({id:'ah-status', title:'Hierarchy'})`, which places at any width. Clears the "closed by person" flag. Returns `{text}`. |
 | `ui.render` `{component:'Pane', requestId:'ah-status'}` | Draws §6.4 Pane at `e.props.bodyColumns`. |
 | `ui.render` `{component:'AbovePrompt'}` | Returns `next(e)` when `e.props.hasSurvey`, or when there is no band. Otherwise draws one line (§6.4). |
@@ -1116,7 +1116,7 @@ The source is the 2.1.289 types file:
    | `session.start` | none | `next(e)` | its own value | `SessionStartResult` :11145; its own value is ignored anyway (:11143) |
    | `ui.close` (op event) | none | `next(e)`, after noting the "closed by person" flag (§6.3) | `{deny}`, `{value}` | `ValueOrDeny` :13925; `OpValueOf['ui.close']` is `void` (:6927) |
    | P3 `command.run` | exactly `{ command: 'hierarchy-pane' }` | `{ text }` and no other key | `context`, `exitCode`, or a value from `next` | `CommandRunResult` :1755 |
-   | P3 `ui.render` | exactly `{ component: 'Pane', requestId: 'ah-status' }`, or exactly `{ component: 'AbovePrompt' }` | `next(e)`, or a tree whose every node is `Box` or `Text` | any other element type; any node with a `press`, `client` or `raster` key | `RenderElement` :8851 |
+   | P3 `ui.render` | exactly `{ component: 'Pane', requestId: 'ah-status' }`, or exactly `{ component: 'AbovePrompt' }` | `next(e)`, or a tree whose every node is `Box` or `Text`. r3.19: also the `engine` element that `next(e)` answers, which is core drawing its own component with its own props (:9165) | any other element type; any node with a `press`, `client` or `raster` key | `RenderElement` :8851 |
 
    - `command.run`'s `context` is the send: each entry is "one hidden
      user message recorded after the output row" (:1762). `exitCode`
@@ -1144,7 +1144,9 @@ The source is the 2.1.289 types file:
      exactly two places, as `register`'s first parameter and as the
      callee of `on('<event>', …)`. Anywhere else is a violation, as an
      argument (`extra(on)`, `f(x, on)`) included.
-   - Template `${…}` is not a `$` identifier.
+   - Template `${…}` is not a `$` identifier. r3.18: a `$` inside a
+     regex literal does count. Write an end-of-input check another way,
+     for example a start-anchored match whose length equals the input's.
 
    r3.16: those rules held only for the name `$`, so renaming the
    environment hid it from the lexer. The step-1c review found seven such
@@ -1190,6 +1192,10 @@ The source is the 2.1.289 types file:
      other than `Box` and `Text` (`Button`, `Input`, `Select`, `Link`,
      `Code`, `Markdown`, `Client`, `Svg`, `Raster`, `Image`, and any
      other name at :8851).
+   - r3.19: `deny` is a banned word, because an op-event hook (`ui.close`)
+     returning `{deny}` refuses the person's close. `engine` is not a
+     banned word: it is core's own drawing, carried from `next(e)`
+     (item 2), and the guard's element list records it as allowed.
 
    So `h(els.Link, …)`, `const { Button } = $.ui.resolve(e)`, `'Link'`
    and a substitution-free template `` `context` `` all fail. A status
@@ -1229,7 +1235,11 @@ The source is the 2.1.289 types file:
    values computed at run time:
    - a key or element name assembled from pieces (`'con' + 'text'`, or
      a template with `${…}`);
-   - a value carried through from `next` (a spread of `next(e)`).
+   - a value carried through from `next` (a spread of `next(e)`);
+   - r3.19: an op-event hook that answers `{ value }` itself instead of
+     calling `next`, which would also refuse the close. `value` is too
+     common a word to ban, so the P3 `ui.close` behaviour test covers
+     it.
 
    The behaviour tests (§6.6) catch these on every path the fixtures
    exercise, the validate subsets catch registrations and calls, and
@@ -1504,7 +1514,8 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
   - `h(els.Link, …)` in a matched Pane `ui.render`;
   - `const { Button } = $.ui.resolve(e)`;
   - the review's b5: a computed key written as a substitution-free
-    template literal whose text is `context`.
+    template literal whose text is `context`;
+  - r3.19: a `ui.close` hook returning `{ deny: 'x' }`.
 
   Each `\u` case must actually contain the escape in the planted file.
   Check its bytes, because a runner that writes the decoded character
@@ -1527,7 +1538,10 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
     hooks return has only `Box` and `Text` nodes, and no node has a
     `press`, `client` or `raster` key;
   - P3: a `ui.render` for another component passes through;
-  - P3: `ui.close` always returns what `next` returned.
+  - P3: `ui.close` always returns what `next` returned. r3.19: `next` is
+    called exactly once;
+  - r3.19, P3: the tree walk above also accepts `engine` nodes, the
+    ones that `next(e)` answers.
 
 **Toggle.** With `status_entry` off, the entry stays cleared.
 
@@ -1547,6 +1561,26 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
 - r3.16: the bash suite needs the `claude` CLI on PATH. The guard's
   validate net fails closed without it, which is correct. Step 4's
   README says so.
+- **r3.18: the bash suite runs the mod tests.** A new
+  `tests/test-mod-plugin-test.sh` runs `claude plugin test` on the
+  plugin root. It uses the command line above: scratch `HOME` and
+  `CLAUDE_CONFIG_DIR`, under a timeout (300 s).
+  - It fails on a non-zero exit, on any failed test, on a timeout, and
+    when `claude` is missing (fail closed, like the guard).
+  - It leaves no process behind.
+
+  Without it, AC 4's suite passed while `view.ts` and `register.tsx`
+  were never run.
+- **r3.18: suite scans skip engine output.** Any suite test that walks
+  the plugin's files limits itself to `git ls-files --cached --others
+  --exclude-standard`: tracked files plus untracked files that are not
+  ignored. That includes test-ah-cli T7's "no `mcp__` reference
+  outside docs/specs and tests". Engine output from a `--plugin-dir`
+  load (`.claude-plugin/types/`, `tsconfig.json`, ignored since step 1b)
+  is then never scanned, and a new file is scanned before it is
+  committed. The Implementor checks the other suite tests that walk the
+  tree and applies the same file set where one would match the
+  generated files.
 
 ## 7. claude-tui-line items (Phase 2a)
 
@@ -1974,6 +2008,15 @@ Every commit passes the full `ah` bash suite and
    before step 5, and the real module as it stands then must pass it.
    This round closes the guard: §6.3 item 6 sets what a later review
    may still raise. [AC 7, 4]
+
+1f. **Guard list touch-up (r3.19).** In `tests/test-mod-readonly.sh`:
+   - add `deny` to the banned words;
+   - record `engine` in the element list as allowed, not banned;
+   - add the `{ deny: 'x' }` planted case.
+
+   The current module must still pass. Tests only. It rides in step
+   3a's commit if 3a has not committed yet; otherwise it is its own
+   commit, before step 5. [AC 7, 4]
 2. **Embedded fixtures and drift test.** Generate `mod/tests/fixtures.ts`,
    extend the fixture-regeneration command to cover it, and add the bash
    drift test with its one-time failure demonstration (§6.6 r3.11).
@@ -1997,6 +2040,19 @@ Every commit passes the full `ah` bash suite and
    - a register test shows `session.start` returns what `next` returned.
 
    [AC 5, 6, 7, 3, 4]
+
+3a. **Step-3 follow-ups (r3.18).** One commit, after step 3 and before
+   step 4. It is independent of 1e.
+   - Add `tests/test-mod-plugin-test.sh` (§6.6 r3.18).
+   - T7, and any other suite test that walks the plugin's files, uses
+     the `git ls-files --cached --others --exclude-standard` set (§6.6
+     r3.18).
+   - register.tsx: the first tick after `session.start` always calls
+     `$.ui.status` (§6.3 tick row, r3.18). Add a register test: the
+     first tick with no doc still calls it, with the clear form. Skip
+     this if the code already does it, and say so.
+
+   [AC 4, 13]
 4. **README** (Implementer for this step: `docs-writer`). In the `ah`
    README:
    - the mod half needs Claude Code ≥ 2.1.289, and an older client is the
@@ -2050,7 +2106,10 @@ run. Step 5 stays at the end of P2b.
 3. `claude plugin validate agent-hierarchy` is clean. Run E14(b)'s type
    check if E14 found one; otherwise the report says none was run.
 4. The full `ah` bash suite passes with the mod files present, including
-   the drift test, and the command hooks are unaffected.
+   the drift test, and the command hooks are unaffected. r3.18: the
+   suite includes `test-mod-plugin-test.sh`, so `claude plugin test`
+   gates it. It also passes with a `--plugin-dir` load's generated files
+   present in the checkout.
 5. The status entry:
    - matches `vectors.ts` for all seven cases;
    - every case has a vector and every vector names a case;
@@ -2198,6 +2257,32 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.19 (two in-ceiling nits from the step-1e review, which passed):
+
+- **`engine`** (:9165) is core's own drawing, answered by `next(e)`. It
+  is allowed in `ui.render` returns and is not a banned word.
+- **`ui.close` returning `{deny}`** refuses the person's close, an
+  ordinary form that acts (item 6(a)). `deny` joins the banned words.
+- **`{value}` answered without `next`** has the same effect, but
+  `value` is too common to ban. It is a named ceiling item, and the P3
+  test asserts `next` is called exactly once.
+- New step 1f.
+
+r3.18 (step-3 follow-ups from the Implementor):
+
+- **T7** failed in any checkout after a `--plugin-dir` load, because
+  the engine's generated `.claude-plugin/types/` contains `mcp__` text.
+  Suite tests that walk files now use git's tracked plus
+  untracked-but-not-ignored set (§6.6).
+- **The bash suite never ran `claude plugin test`.** The new
+  `test-mod-plugin-test.sh` makes the mod tests part of AC 4.
+- **Tick step 4 interpretation confirmed:** P2b keeps the last text in
+  the closure and uses no `$.state` until P3. Added: the first tick
+  always calls `$.ui.status`, so a stale entry cannot outlive a reload.
+- **Lexer note:** a `$` inside a regex literal counts as `$` (§6.3 item
+  3).
+- New step 3a; AC 4 extended.
 
 r3.17 (step-1d review, third guard round; the Orchestrator asked for a
 stopping point):
