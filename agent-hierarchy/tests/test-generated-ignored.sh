@@ -1,10 +1,14 @@
 #!/bin/bash
 # agent-hierarchy — the files Claude Code writes into the plugin on a --plugin-dir load (tsconfig.json
 # and .claude-plugin/types/) are ignored by the plugin's own .gitignore, and the authored types contract
-# mod/types/index.d.ts is not. Needs the plugin inside a git work tree; reads only, writes nothing.
+# mod/types/index.d.ts is not. Skips outside a git work tree; reads only, writes nothing.
 # Usage: bash tests/test-generated-ignored.sh   (exits 0 iff all cases pass)
 
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
+if [ "$(git -C "$PLUGIN" rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then
+  echo "SKIP: $PLUGIN is not inside a git work tree (a git archive copy), so there are no ignore rules to check"
+  exit 0
+fi
 PASS=0; FAIL=0
 
 check() {
