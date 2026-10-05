@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.1, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.2, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -148,9 +148,18 @@ mockup, it says so.
     exported constant; its identifier is the Implementor's choice, defined
     once. Why lib-hier: `ETAS` already lives there and is documented as the
     liveness threshold; the Stop hook, lib-status and activity.mjs import
-    lib-hier anyway; lib-config is not in §2's changed list; and the
-    Implementor measured the import cost of lib-hier and lib-config as
-    equal (~26 ms), so stream-label pays nothing extra.
+    lib-hier anyway; and lib-config is not in §2's changed list.
+  - **stream-label loads lib-hier lazily (r3.2).** A static import would
+    cost every session about 6 ms (Implementor-measured: ~26 ms against
+    ~20 ms) on each UserPromptSubmit, Stop and Notification, before
+    stream-label's early exit, because lib-hier loads on top of the
+    lib-config/lib-roster chain stream-label already pays for. That breaks
+    stream-label's "inert in every session that is not a stream member"
+    contract. So stream-label has **no** static lib-hier import: it
+    dynamically imports lib-hier for `SELF_STATE` only after the
+    `HERDR_PANE_ID`/`AH_TEAM_FILE` check passes. Non-stream sessions load
+    nothing new, and `SELF_STATE` is still defined once. A grep test (AC 7)
+    asserts stream-label has no static import from `./lib-hier.mjs`.
 - It must not call `herdr`, spawn any process, or take a lock.
 - A write is atomic: write a temp file in `<hier>`, then rename it over
   `status.json`.
@@ -986,8 +995,9 @@ commit whole (§3.7.8). The ACs each step must satisfy are in brackets.
 1. **Single sources, no semantic change beyond §3.1's predicate.** Move
    `ETA_THRESHOLD_SEC` and `thresholdFor` into lib-hier, exported (the Stop
    hook imports them; its cadence is unchanged in this step). Move
-   `SELF_STATE` into lib-hier, exported (stream-label imports it; roster.mjs
-   derives `STREAM_SELF_STATES` from it). Placement and names: §3.1. Move `reportStatus` into lib-hier on
+   `SELF_STATE` into lib-hier, exported (stream-label imports it lazily,
+   after its early exit, §3.1 r3.2; roster.mjs derives `STREAM_SELF_STATES`
+   from it). Placement and names: §3.1. Move `reportStatus` into lib-hier on
    `hasAuthoredContent`; roster.mjs `deliver` imports it; delete
    `responseSkeleton()` if it has no caller left. [AC 7 for these three;
    AC 24; AC 14]
@@ -1048,8 +1058,9 @@ live pool.
    output and exit code.
 7. **Single source:** a grep test proves each of these is defined exactly
    once in `hooks/`: the eta threshold table, the check-in cadence,
-   `reportStatus`, and the event→state table. The existing liveness-hook
-   tests still pass unchanged.
+   `reportStatus`, and the event→state table. The same test fails if
+   `stream-label.mjs` has a static import from `./lib-hier.mjs` (§3.1
+   r3.2). The existing liveness-hook tests still pass unchanged.
 8. **Activity hook:**
    - a role session's UserPromptSubmit, Stop and Notification produce
      `working`, `idle` and `blocked` records; the `blocked` record has
@@ -1242,6 +1253,12 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.2 (Reviewer spec-defect at P1 step 1): §3.1's "stream-label pays nothing
+extra" was false: a static lib-hier import costs every session about 6 ms per
+UserPromptSubmit/Stop/Notification. stream-label now imports lib-hier lazily
+after its early exit, and AC 7 guards against a static import. §8 step 1
+matches.
 
 r3.1 (spec gap at P1 step 1): §3.1 names the destination, `hooks/lib-hier.mjs`
 beside `ETAS`, and the exports, `ETA_THRESHOLD_SEC`, `thresholdFor` (it moves
