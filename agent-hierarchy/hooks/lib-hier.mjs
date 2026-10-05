@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, MSG_ROLES, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
 import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamArgName, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
-import { statusChanged } from "./lib-status.mjs";
+import { statusChanged, sweepActivity } from "./lib-status.mjs";
 
 export { hierarchyDir, MSG_ROLES };
 
@@ -551,7 +551,7 @@ function createdMs(path) {
   }
 }
 
-/** Move closed pairs whose response is older than `days` into msgs/archive/. Returns the count of pairs moved. */
+/** Move closed pairs whose response is older than `days` into msgs/archive/, and delete activity records not written since then. Returns the count of pairs moved. */
 export function sweep(dir, days = SWEEP_DAYS, now = Date.now()) {
   const cutoff = now - days * 86400 * 1000;
   let moved = 0;
@@ -562,6 +562,7 @@ export function sweep(dir, days = SWEEP_DAYS, now = Date.now()) {
     for (const f of [e.request, e.response]) renameSync(f.path, join(archiveDir(dir), basename(f.path)));
     moved++;
   }
+  sweepActivity(dir, cutoff);
   return moved;
 }
 

@@ -13,7 +13,7 @@
  * a process, calls herdr or takes a lock.
  */
 
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { hierarchyDir, resolveConfig } from "./lib-config.mjs";
@@ -60,6 +60,73 @@ function readActivity(dir, file) {
   } catch {
     return null;
   }
+}
+
+/** An activity subject's file name: `<session id>.json` for a Claude member, `pane-<name>.json` for a pane member. */
+function activityFile(subject) {
+  return typeof subject === "string" && subject && subject !== "." && subject !== ".." && !/[/\\]/.test(subject) ? `${subject}.json` : null;
+}
+
+/** A subject's activity record `{activity, at, blocked_by, note}`, or null. */
+export function readActivityRecord(dir, subject) {
+  const file = activityFile(subject);
+  return file && dir ? readActivity(dir, file) : null;
+}
+
+/**
+ * Write a subject's activity record atomically and refresh the status file. Only the subject's own
+ * events write its record. Writes nothing without the hierarchy dir. Never throws; true when written.
+ */
+export function recordActivity(dir, subject, { activity, blocked_by = null, note = null }) {
+  const file = activityFile(subject);
+  if (!file || !dir || !existsSync(dir)) return false;
+  try {
+    const activityDir = join(dir, "activity");
+    mkdirSync(activityDir, { recursive: true });
+    const tmp = join(activityDir, `${file}.${process.pid}.tmp`);
+    writeFileSync(tmp, JSON.stringify({ activity, at: new Date().toISOString(), blocked_by, note }) + "\n");
+    renameSync(tmp, join(activityDir, file));
+  } catch {
+    return false;
+  }
+  statusChanged(dir);
+  return true;
+}
+
+/** Remove a subject's activity record and refresh the status file. Never throws. */
+export function clearActivity(dir, subject) {
+  const file = activityFile(subject);
+  if (!file || !dir) return;
+  try {
+    unlinkSync(join(dir, "activity", file));
+  } catch {
+    return;
+  }
+  statusChanged(dir);
+}
+
+/** Delete activity records last written before `cutoffMs`, refreshing the status file once if any went. Returns the count. */
+export function sweepActivity(dir, cutoffMs) {
+  let removed = 0;
+  try {
+    const activityDir = join(dir, "activity");
+    for (const f of readdirSync(activityDir)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const path = join(activityDir, f);
+        if (statSync(path).mtimeMs < cutoffMs) {
+          unlinkSync(path);
+          removed++;
+        }
+      } catch {
+        // a record removed or rewritten meanwhile is left to its writer
+      }
+    }
+  } catch {
+    return 0;
+  }
+  if (removed) statusChanged(dir);
+  return removed;
 }
 
 function describeMembers(dir, team, roster) {

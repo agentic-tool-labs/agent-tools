@@ -305,6 +305,8 @@ r() { # <extra env> <roster.mjs args...>   (cwd $PROJ unless --cwd is given)
   OUT="$(cat "$STDOUT_F" "$STDERR_F")"
 }
 jo() { node -e 'let o;try{o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))}catch{console.log("ERR");process.exit(0)}try{const v=eval(process.argv[2]);console.log(typeof v==="object"?JSON.stringify(v):v)}catch(e){console.log("ERR")}' "$STDOUT_F" "$1"; }
+# <member name> <js expression over the record a>: that pane member's activity record, or "none".
+activity_of() { node -e 'let a;try{a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))}catch{console.log("none");process.exit(0)}console.log(eval(process.argv[2]))' "$HIER/activity/pane-$1.json" "$2"; }
 lib() { HOME="$FAKEHOME" node --input-type=module -e "const R=await import('$H/lib-roster.mjs');const C=await import('$H/lib-config.mjs');const out=await (async()=>{ $1 })();console.log(typeof out==='object'?JSON.stringify(out):out)"; }
 screen_hash() { HOME="$FAKEHOME" node --input-type=module -e "const R=await import('$H/lib-roster.mjs');const fs=await import('node:fs');console.log(R.screenHash(fs.readFileSync('$SCREENS/$1.txt','utf8')))"; }
 roster_cfg() { # <members JSON array>: the repo roster, route pane
@@ -678,7 +680,9 @@ check "K4: --wait-only after a sent brief waits out a working turn, and sends no
 
 setup_deliver
 hs "{agents:{\"myrepo-architect\":{gets:[$IDLE],visible:\"@trust\"}}}"
+rm -f "$HIER/activity/pane-myrepo-architect.json"
 r "" deliver myrepo-architect --req "$REQ"
+check "AC9: deliver records the pane member blocked, with blocked_by and the prompt line" '[ "$(activity_of myrepo-architect "a.activity + \" \" + a.blocked_by + \" \" + Boolean(a.note)")" = "blocked trust-dialog true" ]'
 check "K4/K13: blocked — the trust dialog on screen, though Herdr says idle and ready; nothing sent, no pane closed" '[ "$(jo o.status)" = blocked ] && [ "$(jo o.blocked_by)" = trust-dialog ] && [ "$(calls prompt)" -eq 0 ] && [ "$(calls pane-close)" -eq 0 ] && [ ! -f "$RESP" ]'
 check "K17: a blocked from the check before sending has sent: false, and its next step is the same command" '[ "$(jo o.sent)" = false ] && jo o.message | grep -q "re-run this same command in the background: node .*deliver myrepo-architect --req"'
 check "K13: ...with the screen verbatim and its options" 'jo o.screen | grep -q "Do you trust the contents" && [ "$(jo "o.options.map(x=>x.id).join()")" = trust,distrust ]'
@@ -848,7 +852,9 @@ k13 "$UNTRUSTED" "{gets:[{agent_status:\"blocked\",interactive_ready:true}],visi
 check "K13: (a) untrusted, and Herdr blocked on a screen no pattern recognises: refused harness-cwd-untrusted too" '[ "$RC" -eq 2 ] && [ "$(jo o.refused)" = harness-cwd-untrusted ] && [ "$(calls pane-close)" -eq 1 ]'
 k13 none "{gets:[{agent_status:\"blocked\",interactive_ready:true}],visible:\"@other-1\"}"
 check "K13: (a) unknown, and Herdr blocked on an unrecognised screen: launched with a harness-prompt blocked object, options []" '[ "$RC" -eq 0 ] && [ "$(jo o.blocked.blocked_by)" = harness-prompt ] && [ "$(jo "o.blocked.options.length")" = 0 ] && [ "$(calls pane-close)" -eq 0 ]'
+rm -f "$HIER/activity/pane-myrepo-architect.json"
 k13 none "{gets:[$IDLE],visible:\"@composer\"}"
+check "AC9: a spawned pane member is recorded idle" '[ "$(activity_of myrepo-architect a.activity)" = idle ]'
 check "K13: (a) unknown (no config) and no prompt: launches normally" '[ "$RC" -eq 0 ] && [ "$(jo o.spawned)" = true ] && [ "$(jo o.blocked)" = undefined ] && [ "$(calls pane-close)" -eq 0 ]'
 k13 dir "{gets:[$IDLE],visible:\"@composer\"}"
 check "K13: an unreadable config: spawn proceeds to layer (b) and launches" '[ "$RC" -eq 0 ] && [ "$(jo o.spawned)" = true ]'
@@ -888,7 +894,9 @@ k15() { # <screen> [afterKeys JS] [Herdr get JS, default blocked] -> a codex arc
 HERDR_BLOCKED='{agent_status:"blocked",interactive_ready:false}'
 AH=$(screen_hash approval)
 k15 approval "{visible:\"@composer\",gets:[$IDLE]}"
+rm -f "$HIER/activity/pane-myrepo-architect.json"
 r "" answer myrepo-architect --prompt approval --choice approve --screen-hash "$AH"
+check "AC9: answer records the member working" '[ "$(activity_of myrepo-architect a.activity)" = working ]'
 check "K15: a matching prompt and hash: exactly the row's keys, once — approve sends 1" '[ "$RC" -eq 0 ] && [ "$(jo o.status)" = answered ] && [ "$(keys_sent)" = "[\"1\"]" ] && [ "$(jo o.prompt_after)" = null ] && [ "$(jo o.live)" = true ]'
 k15 approval
 r "" answer myrepo-architect --prompt approval --choice deny --screen-hash "$AH"

@@ -164,7 +164,7 @@ import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expan
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
-import { computeStatus, plainStatus, saveStatus } from "./lib-status.mjs";
+import { clearActivity, computeStatus, plainStatus, readActivityRecord, recordActivity, saveStatus } from "./lib-status.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
@@ -3802,6 +3802,43 @@ function blockedFields(p) {
   return { blocked_by: p.blocked_by, screen: p.screen, screen_hash: p.screen_hash, options: p.options };
 }
 
+/** The screen line a recognised prompt starts on (the line holding its heading), or null. */
+function promptNote(member, p) {
+  const prompts = (KIND_HARNESS[resolveKind(member)] || {}).prompts || {};
+  const spec = p && p.recognized ? prompts[p.recognized] : null;
+  if (!spec || typeof spec.heading !== "string") return null;
+  const line = String(p.screen || "").split("\n").find((l) => l.includes(spec.heading));
+  return line ? line.trim() : null;
+}
+
+const PANE_ACTIVITY = { working: "working", idle: "idle", done: "idle", blocked: "blocked", agent_not_found: "unknown" };
+
+/**
+ * A pane member's activity record as `deliver` learns its state from Herdr: `see` writes it when
+ * the state changes from what the record holds, and `final` writes the last state seen once more
+ * as the run ends.
+ */
+function paneActivityObserver(dir, member) {
+  const subject = `pane-${member.name}`;
+  let written = readActivityRecord(dir, subject);
+  let latest = null;
+  const write = (rec) => {
+    if (recordActivity(dir, subject, rec)) written = rec;
+  };
+  return {
+    see(agentStatus, p = null) {
+      const activity = PANE_ACTIVITY[agentStatus];
+      if (!activity) return;
+      const blocked = activity === "blocked";
+      latest = { activity, blocked_by: blocked ? (p && p.blocked_by) || null : null, note: blocked ? promptNote(member, p) : null };
+      if (!written || written.activity !== latest.activity || (written.blocked_by || null) !== latest.blocked_by) write(latest);
+    },
+    final() {
+      if (latest && latest !== written) write(latest);
+    },
+  };
+}
+
 /**
  * What the Orchestrator does about a member stopped at a prompt. A prompt with answers to offer is
  * relayed: the user picks in AskUserQuestion and `answer` sends that row's keys; one with none is
@@ -4448,8 +4485,9 @@ function reconcileAfterClose(dir, snapshot, results) {
 }
 
 /** Writes `team` with only `rows`, or clears its file when no row is left: a team's last departure
-    ends it. True when the file was cleared. */
+    ends it. A pane member that leaves takes its activity record with it. True when the file was cleared. */
 function writeTeamRows(dir, team, rows) {
+  for (const m of team.members) if (m && m.name != null && !rows.includes(m)) clearActivity(dir, `pane-${m.name}`);
   if (rows.length === 0) clearTeam(dir, teamFile);
   else writeTeam(dir, { ...team, members: rows }, teamFile);
   return rows.length === 0;
@@ -5043,6 +5081,7 @@ async function spawnOneCore(role, callerLabel, adHocMember = null) {
   if (idx === -1) outTeam.members.push(newRecord);
   else outTeam.members[idx] = newRecord;
   writeTeam(dir, outTeam, teamFile);
+  if (newRecord.route === "pane") recordActivity(dir, `pane-${newRecord.name}`, { activity: "idle" });
   const outMember = launched.label ? { ...newRecord, label: launched.label } : newRecord;
   // Spec 0035 §2.4: report where this peer actually launched, not just that it launched.
   const spawnOut = { spawned: true, member: outMember, team_id: outTeam.team_id, roster_level: outTeam.roster_level, launch_cwd: planEntry.spawn.launch_cwd, ...validation, ...renamedField(renamedNow) };
@@ -6461,6 +6500,11 @@ try {
       }
       const dir = hierarchyDir(cwd);
       const member = paneMemberOrFail(dir, opts._[0], "deliver");
+      const seen = paneActivityObserver(dir, member);
+      const report = (res) => {
+        seen.final();
+        out(res);
+      };
       if (typeof opts.req !== "string") fail("deliver: --req <abs request path> is required");
       const req = opts.req;
       const plan = responsePlan(req);
@@ -6482,8 +6526,12 @@ try {
       const base = { name: member.name, request: req, response };
       const self = argWord(fileURLToPath(import.meta.url));
       const deadline = Date.now() + timeoutSec * 1000;
-      const notLive = (sent) => ({ status: "not-live", sent, ...base, agent_status: null, ...respawnCommand(dir, member) });
+      const notLive = (sent) => {
+        seen.see("agent_not_found");
+        return { status: "not-live", sent, ...base, agent_status: null, ...respawnCommand(dir, member) };
+      };
       const blocked = (agentStatus, p, sent) => {
+        seen.see("blocked", p);
         const b = blockedFields(p);
         // Answered, the prompt is re-checked by the command that stopped at it: this same command when
         // nothing was sent, or a wait on the brief that was.
@@ -6505,6 +6553,7 @@ try {
         // screen is checked too. A working member shows no prompt Herdr would not call blocked.
         const onScreen = state.agent_status === "working" ? null : readPrompt(member, state.agent_status);
         if (onScreen && onScreen.blocked_by) return blocked(state.agent_status, onScreen, false);
+        seen.see(state.agent_status);
         if (waitOnly) return { go: true };
         if (state.agent_status === "working" || !state.ready) return null;
         // A brief or ping is typed only into the idle, empty composer.
@@ -6513,11 +6562,11 @@ try {
         return screen.go ? screen : blocked(state.agent_status, screen, false);
       }, deadline, Number(process.env.AH_DELIVER_POLL_MS || 2000));
       if (!pre) {
-        out({ status: "busy", sent: false, ...base, agent_status: state.agent_status, message: "The member stayed working or not ready until --timeout, so nothing was sent. Re-run this same command." });
+        report({ status: "busy", sent: false, ...base, agent_status: state.agent_status, message: "The member stayed working or not ready until --timeout, so nothing was sent. Re-run this same command." });
         break;
       }
       if (!pre.go) {
-        out(pre);
+        report(pre);
         break;
       }
       // After the wait: `sent` says whether this run sent its brief or ping.
@@ -6536,6 +6585,7 @@ try {
         return evaluate(agentStatus, sent);
       };
       const evaluate = (agentStatus, sent) => {
+        seen.see(agentStatus);
         const status = reportStatus(response, plan.fields.id);
         return { status, sent, ...base, agent_status: agentStatus, ...(status === "no-report" ? { pane_tail: paneTail(member) } : {}) };
       };
@@ -6552,15 +6602,15 @@ try {
         // No response file means no brief was ever delivered for this request: that is not a report
         // owed, and never counts toward the pings.
         if (!existsSync(response)) {
-          out({ status: "not-sent", sent: false, ...base, agent_status: state.agent_status, message: "Nothing was delivered for this request: send the brief, without --wait-only." });
+          report({ status: "not-sent", sent: false, ...base, agent_status: state.agent_status, message: "Nothing was delivered for this request: send the brief, without --wait-only." });
           break;
         }
         if (state.agent_status !== "working") {
-          out(evaluate(state.agent_status, false));
+          report(evaluate(state.agent_status, false));
           break;
         }
         const w = call(["agent", "wait", member.name]);
-        out(w.error ? { status: "timeout", sent: false, ...base, agent_status: null, why: w.error.message, pane_tail: paneTail(member) } : finish(w.res, w.args, false));
+        report(w.error ? { status: "timeout", sent: false, ...base, agent_status: null, why: w.error.message, pane_tail: paneTail(member) } : finish(w.res, w.args, false));
         break;
       }
       if (!existsSync(response)) {
@@ -6575,7 +6625,7 @@ try {
           ? `Ping ${ping}/3: you owe a report on task ${plan.fields.slug} — write it to ${response}, then end your turn.`
           : [`[hierarchy-msg ${req}]`, `Report to: ${response}`, `Standing instructions: ${instructionsPath(member.name)} — read it first if you have not read it this session.`].join("\n");
       const sentCall = call(["agent", "prompt", member.name, text, "--wait"]);
-      out(sentCall.error ? { status: "timeout", sent: true, ...base, agent_status: null, why: sentCall.error.message, pane_tail: paneTail(member) } : finish(sentCall.res, sentCall.args, true));
+      report(sentCall.error ? { status: "timeout", sent: true, ...base, agent_status: null, why: sentCall.error.message, pane_tail: paneTail(member) } : finish(sentCall.res, sentCall.args, true));
       break;
     }
 
@@ -6622,6 +6672,7 @@ try {
       for (const key of row.keys) herdrCall(["agent", "send-keys", member.name, key]);
       // One look afterwards. A prompt still shown is reported, never answered again; an agent that
       // is gone (distrust quits Codex) is reported not live.
+      recordActivity(dir, `pane-${member.name}`, { activity: "working" });
       const after = herdrAgentState(member.name);
       const read = readPrompt(member, after.agent_status);
       out({ status: "answered", ...base, agent_status: after.agent_status, live: after.indeterminate ? null : after.live, prompt_after: read.recognized, screen: read.screen });

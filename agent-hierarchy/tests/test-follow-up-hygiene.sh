@@ -376,8 +376,10 @@ check "P1: spawning the missing member clears it, with no other write" '[ "$RC" 
 check "P1: ...the stored key is untouched and ignored" '[ "$(jq_file "$HD/team.json" "t.partial")" = false ]'
 run_h dismiss p1-reviewer
 TOKEN=$(jq_out o.close_token)
+mkdir -p "$HD/activity"; printf '{"activity":"idle","at":"2026-01-01T00:00:00.000Z","blocked_by":null,"note":null}\n' > "$HD/activity/pane-p1-reviewer.json"
 run_h dismiss p1-reviewer --close --confirm --plan-token "$TOKEN"
 check "P2: dismissing a member of a full team shows partial" '[ "$RC" -eq 0 ] && [ "$(jq_file "$HD/team.json" "t.members.length")" = 2 ] && shown_partial'
+check "AC9: dismiss removes the dismissed member's activity record" '[ ! -e "$HD/activity/pane-p1-reviewer.json" ]'
 
 new_repo p3; setup_roster architect reviewer implementor
 write_legacy false null "$(rec p3-architect-2 architect '"renamed_from":"p3-architect"')" "$(rec p3-reviewer reviewer)" "$(rec p3-implementor implementor)"
