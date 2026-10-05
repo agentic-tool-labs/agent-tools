@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.1, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -83,7 +83,7 @@ mockup, it says so.
 
 | Repo / plugin | Kind | Files |
 |---|---|---|
-| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to a lib; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports the shared table), `skills/hierarchy/SKILL.md` (the on/off path refreshes status), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. **Not changed:** `hooks/msg.mjs`, `hooks/pretooluse-push-guard.mjs`. |
+| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `skills/hierarchy/SKILL.md` (the on/off path refreshes status), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. **Not changed:** `hooks/msg.mjs`, `hooks/pretooluse-push-guard.mjs`. |
 | `agent-tools/agent-hierarchy` (`ah`), P2b/P3 | new code | `agent-hierarchy/mod/`, plus `hooks`, `types` and `userConfig` keys in ah's plugin.json (§6.1). |
 | `claude-tui-line` | new items | §7 |
 
@@ -132,6 +132,25 @@ mockup, it says so.
     `stalled_at = created + 1.5T` (§4.2). Neither copies a number.
   - stream-label's event→state table (`SELF_STATE`). Move it to a lib, and
     stream-label imports it.
+  - **Placement (r3.1).** All three go into `hooks/lib-hier.mjs`, beside the
+    existing `ETAS` enum (lib-hier.mjs:33), as exports under their current
+    names:
+    - `ETA_THRESHOLD_SEC`, keyed by `ETAS`, values unchanged;
+    - `thresholdFor(eta)`, moved with the table, behaviour unchanged
+      (absent or unrecognised eta → the `small` value);
+    - `SELF_STATE`, value unchanged.
+
+    `stop-orchestrator-liveness.mjs` and `stream-label.mjs` import them and
+    keep no local copy. `roster.mjs`'s `STREAM_SELF_STATES` (:4539), the
+    `--self-state` value list, is derived from `SELF_STATE`'s values rather
+    than restated, keeping the `working, idle, blocked` order its error text
+    shows. In step 3 the check-in cadence joins them in lib-hier as one
+    exported constant; its identifier is the Implementor's choice, defined
+    once. Why lib-hier: `ETAS` already lives there and is documented as the
+    liveness threshold; the Stop hook, lib-status and activity.mjs import
+    lib-hier anyway; lib-config is not in §2's changed list; and the
+    Implementor measured the import cost of lib-hier and lib-config as
+    equal (~26 ms), so stream-label pays nothing extra.
 - It must not call `herdr`, spawn any process, or take a lock.
 - A write is atomic: write a temp file in `<hier>`, then rename it over
   `status.json`.
@@ -964,10 +983,11 @@ Changes to make:
 full `ah` bash suite on its own. Work in a separate worktree and land each
 commit whole (§3.7.8). The ACs each step must satisfy are in brackets.
 
-1. **Single sources, no semantic change beyond §3.1's predicate.** Move the
-   eta threshold table into one shared lib (the Stop hook imports it; its
-   cadence is unchanged in this step). Move `SELF_STATE` into a lib
-   (stream-label imports it). Move `reportStatus` into lib-hier on
+1. **Single sources, no semantic change beyond §3.1's predicate.** Move
+   `ETA_THRESHOLD_SEC` and `thresholdFor` into lib-hier, exported (the Stop
+   hook imports them; its cadence is unchanged in this step). Move
+   `SELF_STATE` into lib-hier, exported (stream-label imports it; roster.mjs
+   derives `STREAM_SELF_STATES` from it). Placement and names: §3.1. Move `reportStatus` into lib-hier on
    `hasAuthoredContent`; roster.mjs `deliver` imports it; delete
    `responseSkeleton()` if it has no caller left. [AC 7 for these three;
    AC 24; AC 14]
@@ -1222,6 +1242,12 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.1 (spec gap at P1 step 1): §3.1 names the destination, `hooks/lib-hier.mjs`
+beside `ETAS`, and the exports, `ETA_THRESHOLD_SEC`, `thresholdFor` (it moves
+with the table) and `SELF_STATE`; roster.mjs's `STREAM_SELF_STATES` derives
+from `SELF_STATE`; the step-3 cadence constant goes to the same place. §2 and
+§8 step 1 match.
 
 Changes from r1 (r2):
 
