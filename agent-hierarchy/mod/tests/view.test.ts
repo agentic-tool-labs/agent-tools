@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
-import { bandLine, cut, paneRows, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
+import { bandLine, cut, keepSeen, paneRows, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
 const ms = (iso: string) => Date.parse(iso)
@@ -299,4 +299,11 @@ test('cut: cells counted by code point, ending in …', async () => {
   expect(cut('abcdef', 4)).toBe('abc…')
   expect(cut('██████', 3)).toBe('██…')
   expect(cut('abc', 0)).toBe('')
+})
+
+test('keepSeen: keys whose dispatch or member is still in the doc stay, everything else goes', async () => {
+  const doc = parseDoc(docText({ teams: [team()] }, { out: 1, blocked: 0 }))
+  expect(doc).not.toBe(null)
+  const seen = ['reported:d1', 'stalled:d1', 'stalled:gone', `blocked:demo-architect:${at(-1000)}`, 'blocked:someone:x', 'other:d1', 7, null]
+  expect(keepSeen(seen, doc!, ms(T0))).toEqual(['reported:d1', 'stalled:d1', `blocked:demo-architect:${at(-1000)}`])
 })

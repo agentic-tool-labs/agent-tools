@@ -235,6 +235,17 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
   return { band, pane, toasts }
 }
 
+/**
+ * The seen toast keys whose subject is still in the doc: the dispatch of a `reported:` or `stalled:` key, the
+ * member of a `blocked:` key. Anything else is dropped.
+ */
+export function keepSeen(seen: readonly unknown[], doc: Doc, nowMs: number): string[] {
+  const teams = readTeams(doc, nowMs)
+  const dispatchKeys = new Set(teams.flatMap((t) => t.dispatches.flatMap((d) => [`reported:${d.id}`, `stalled:${d.id}`])))
+  const memberPrefixes = teams.flatMap((t) => t.members.map((m) => `blocked:${m.name}:`))
+  return seen.filter((k): k is string => typeof k === 'string' && (dispatchKeys.has(k) || memberPrefixes.some((p) => k.startsWith(p))))
+}
+
 /** Display width, one cell per code point: the band, the Pane and the cut all count this way. */
 const width = (s: string): number => [...s].length
 

@@ -20,9 +20,10 @@ type World = {
   opens: unknown[]
   placed: boolean
   writes: { key: string; value: unknown }[]
+  toasts: string[]
 }
 const world = (over: Partial<World> = {}): World => ({
-  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], ...over,
+  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], ...over,
 })
 
 // Answers every $ call the module makes, from `w`; nothing real is read.
@@ -44,6 +45,7 @@ const stage = (on: any, w: World) => {
   on('command.register', (_$: any, e: any) => { w.registered.push(e); return { value: undefined } })
   on('ui.open', (_$: any, e: any) => { w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
   on('state.set', async (_$: any, e: any, next: any) => { w.writes.push({ key: e.key, value: e.value }); return next(e) })
+  on('ui.toast', (_$: any, e: any) => { w.toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } })
 }
 const writesOf = (w: World, key: string) => w.writes.filter((x) => x.key === key).map((x) => x.value)
 const start = ($: any, w: World, surface: string) => $.session.start({ cwd: w.cwd, surface, isInteractive: true })
@@ -411,6 +413,98 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(answer.text).toContain(expected)
     })
   }
+
+
+  // ---- toasts
+  test(`${surface}: the first view seeds the seen set and toasts nothing`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.bad, mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: Date.parse(vectors.bad.now) })
+    await start($, w, surface)
+    await clock.advance(4000)
+    expect(w.toasts).toEqual([])
+    expect(writesOf(w, 'seen')).toEqual([vectors.bad.toasts.map((t) => t.key)])
+  })
+
+  test(`${surface}: a new key toasts once, with its text, and not again`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    w.files[FILE] = { text: fixtures.warn, mtimeMs: 2 }
+    await clock.advance(2000)
+    expect(w.toasts).toEqual(['architect blocked · Allow edits to config.toml? (y/n)'])
+    w.files[FILE] = { text: fixtures.warn, mtimeMs: 3 }
+    await clock.advance(6000)
+    expect(w.toasts.length).toBe(1)
+    expect(writesOf(w, 'seen')).toEqual([[], [vectors.warn.toasts[0].key]])
+  })
+
+  test(`${surface}: a tick with no view neither prunes nor toasts again`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    w.files[FILE] = { text: fixtures.warn, mtimeMs: 2 }
+    await clock.advance(2000)
+    delete w.files[FILE]
+    await clock.advance(2000)
+    w.files[FILE] = { text: fixtures.warn, mtimeMs: 3 }
+    await clock.advance(2000)
+    expect(w.toasts.length).toBe(1)
+    expect(writesOf(w, 'seen')).toEqual([[], [vectors.warn.toasts[0].key]])
+  })
+
+  test(`${surface}: a member session toasts nothing and seeds nothing`, async ($, on) => {
+    const doc = JSON.parse(fixtures.warn)
+    doc.member_sessions = [...doc.member_sessions, 'sess-member']
+    const w = world({ id: 'sess-member', files: { [FILE]: { text: JSON.stringify(doc), mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    await clock.advance(4000)
+    expect(w.toasts).toEqual([])
+    expect(writesOf(w, 'seen')).toEqual([])
+  })
+
+  test(`${surface}: the seen set outlives a reload, so a key does not toast twice`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    w.files[FILE] = { text: fixtures.warn, mtimeMs: 2 }
+    await clock.advance(2000)
+    await start($, w, surface)
+    await clock.advance(4000)
+    expect(w.toasts.length).toBe(1)
+  })
+
+  test(`${surface}: a key is pruned once its dispatch leaves the doc, and toasts if it comes back`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.bad, mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: Date.parse(vectors.bad.now) })
+    await start($, w, surface)
+    w.files[FILE] = { text: fixtures.idle, mtimeMs: 2 }
+    await clock.advance(2000)
+    expect(writesOf(w, 'seen').at(-1)).toEqual([])
+    w.files[FILE] = { text: fixtures.bad, mtimeMs: 3 }
+    await clock.advance(2000)
+    expect(w.toasts).toEqual(vectors.bad.toasts.map((t) => t.text))
+  })
+
+  test(`${surface}: a member still in the doc keeps its key, so the same block does not toast again`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    w.files[FILE] = { text: fixtures.warn, mtimeMs: 2 }
+    await clock.advance(2000)
+    w.files[FILE] = { text: fixtures.idle, mtimeMs: 3 }
+    await clock.advance(2000)
+    w.files[FILE] = { text: fixtures.warn, mtimeMs: 4 }
+    await clock.advance(2000)
+    expect(w.toasts.length).toBe(1)
+  })
 
 }
 
