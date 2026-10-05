@@ -8,7 +8,7 @@ Probes only. No product code was changed. Scratch root used below:
 
 | # | Verdict | One line |
 |---|---|---|
-| E1 | **two thresholds broken** (P1 step 7, see E1) | Status write p95 17–22 ms (bound 15). `listExchanges` p95 5.7–5.8 ms (bound 5). Import deltas within 10 ms. |
+| E1 | **within bounds** (P1 step 7 re-run on the step-6b tree, see E1) | Status write p95: warm 5.6 ms (bound 15), cold 13.4 ms (bound 20). `listExchanges` p95 1.5–3.4 ms (bound 5). Import deltas within 10 ms. The first run (write 17–22 ms, `listExchanges` 5.7–5.8 ms) was over; step 6b removed the waste. |
 | E2 | **async works** | `"async": true` is honoured on a plugin PostToolUse command hook. Sync no-op node hook = +32–36 ms per tool call. |
 | E3 | **fires, but note is generic** | Notification(`permission_prompt`) fires in an `--agent ah:implementor` session. `message` is always `"Claude needs your permission"`. It lands ~6–8 s after the dialog shows. |
 | E4 | **yes** | UserPromptSubmit fires on a cross-session SendMessage. Idle peer: within 1 s. Busy peer: at the next tool boundary, inside the running turn. |
@@ -185,12 +185,28 @@ Probes only. No product code was changed. Scratch root used below:
 **Method.**
 
 - The pool is a copy of the live `agent-tools` `.claude/hierarchy` (`cp -Rp`) and of `~/.claude/agent-hierarchy.peer-pending.jsonl`, placed in `T=$(mktemp -d)` (checked non-empty). The run used `AGENT_HIERARCHY_DIR=$T/hierarchy` and `HOME=$T/home`, and cwd `$T`.
-- Final code: the P1 worktree at 206c4ab, plus the step-7 version bump. Pre-step-5 code: `git archive ed9367b`.
+- Final code: the P1 worktree at f6742a7 (step 6b), plus the step-7 version bump. The first run, kept below as "Before", used 206c4ab. Pre-step-5 code: `git archive ed9367b`.
 - Driver: `run-e1.sh` and `e1.mjs` in the Implementor's scratchpad.
 - "Cold" means one fresh `node` process per sample, timing only the call, with module load reported separately. "Warm" means 50 calls in one process after one untimed call. Import wall time covers the whole `node -e 'await import(…)'` process, 20 runs.
 - **A copy must keep mtimes.** A plain `cp -R` resets every response's mtime to now. Every recently closed member exchange then counts as reported in the last 10 min and becomes a dispatch: 73 instead of 4. That inflated the write to p95 ~111 ms in a first run, which is discarded.
 
-**Pool.** 85 exchanges: 3 open, and 82 member-addressed with a response. One live team. The document holds 4 dispatches and 3 members. The peer-pending file is 609,525 bytes. status.json is 5,028 bytes.
+**Pool.** 90 exchanges: 2 open, and 88 member-addressed with a response. One live team. The document holds 2 dispatches and 3 members, counted on a copy taken just after the run. The peer-pending file is 610,501 bytes. status.json is 3,799 bytes.
+
+| Measure | p50 | p95 | max | Bound | Verdict |
+|---|---|---|---|---|---|
+| Status write path, cold (`writeStatus`) | 10.15 ms | 13.40 ms | 20.44 ms | p95 ≤ 20 ms | ok |
+| Status write path, warm | 4.89 ms | 5.63 ms | 5.84 ms | p95 ≤ 15 ms | ok |
+| Module load before the first write (lib-status + lib-hier) | 7.21 ms | 9.16 ms | 12.32 ms | — | — |
+| `listExchanges`, cold | 2.86 ms | 3.39 ms | 3.65 ms | p95 ≤ 5 ms | ok |
+| `listExchanges`, warm | 1.16 ms | 1.48 ms | 1.78 ms | p95 ≤ 5 ms | ok |
+| `import lib-hier`, pre-step-5 → final | 26.69 → 27.12 ms | 29.17 → 28.64 ms | 29.60 → 28.97 ms | delta ≤ 10 ms | ok (+0.43 / −0.53) |
+| `import lib-config`, pre-step-5 → final | 26.05 → 27.18 ms | 27.98 → 31.12 ms | 28.20 → 32.54 ms | delta ≤ 10 ms | ok (+1.13 / +3.14) |
+
+Against the first run, p95: the warm write fell from 17.26 to 5.63 ms, the cold write from 22.40 to 13.40 ms, and warm `listExchanges` from 5.74 to 1.48 ms. A write now lists the exchanges once and reads the peer-pending file once (AC 28). It no longer grows by ~1 ms per out dispatch.
+
+**Before: the first run (206c4ab).** It was measured against r2's single bound of 15 ms. r3.10 ruled on it, and step 6b applied the three levers below.
+
+**Pool, first run.** 85 exchanges: 3 open, and 82 member-addressed with a response. One live team. The document holds 4 dispatches and 3 members. The peer-pending file is 609,525 bytes. status.json is 5,028 bytes.
 
 | Measure | p50 | p95 | max | Bound | Verdict |
 |---|---|---|---|---|---|

@@ -5,6 +5,53 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.110.0]
+
+`ah` keeps one status file describing the live hierarchy, for status lines and
+the coming `ah` mod to show.
+
+### Added
+
+- **The hierarchy status file.** `<hier>/status.json` describes the live teams,
+  their members (live or gone, working, idle or blocked), the work dispatched to
+  them (working, overdue, stalled or reported) and any `/pipeline` run. Changes
+  that only depend on time are scheduled inside the document, so a reader picks
+  the entry current at its own clock and works nothing out. `ah` rewrites it
+  whenever hierarchy state changes: peers rows, message files, team files,
+  decision rows, check-ins, activity records, every session start, and
+  `/hierarchy` config changes. A failed write never affects what triggered it.
+  Schema, rules and the shared test fixtures:
+  [docs/status-file.md](./docs/status-file.md).
+- **`roster.mjs status [--plain] [--now <ISO>]`.** Computes the document, writes
+  it and prints it. `--plain` prints the one-line `ah · …` text.
+- **Activity records.** A Claude role session records its own activity in
+  `<hier>/activity/` from its UserPromptSubmit, Stop and permission-prompt
+  events. A new PostToolUse hook on every tool call, registered async, marks it
+  working again after a permission prompt. Each hook run loads `ah`'s libraries
+  (tens of milliseconds) but doesn't delay the next tool. Pane members are
+  recorded by `deliver`, `answer`, spawn, `dismiss` and `disband`.
+
+### Changed
+
+- **A member's exchange stays open until its response holds a report.** A
+  skeleton response stub addressed to a member no longer closes the exchange.
+  Exchanges addressed to the Orchestrator, which includes every `/pipeline` run
+  record, still close on any response.
+
+  After upgrading, older unfilled stubs of member exchanges show as open again in
+  `msg.mjs list`, and their roles count as busy. To clear one that was
+  abandoned, write a line of content into its response file. There is no
+  automatic migration.
+- **Stop-hook check-ins.**
+  - The clock starts at the first dispatch, not when the request file was
+    written.
+  - The second check-in comes half an eta interval after the first.
+  - Work sent to a pane member with `roster.mjs deliver` is now checked in on
+    too, with the `deliver … --wait-only` command to run instead of
+    ListAgents/SendMessage.
+- **`merge-check` sign-off.** Only a closed `-ok` addressed to a member, with a
+  report in its response, counts as the Architect's sign-off.
+
 ## [0.109.0]
 
 `/pipeline` decides safe questions for you instead of waiting.
