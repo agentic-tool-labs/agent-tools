@@ -9,6 +9,9 @@ const toneProps = (tone: string) =>
 export const register: Register = (on, options) => {
   // Only an explicit false turns the entry off; a missing option counts as on.
   const statusEntry = options?.status_entry !== false
+  // Whether the last doc read lists this session, set by every tick. Nothing is drawn from it, and a reload
+  // runs session.start again, whose first tick sets it before any command can arrive.
+  let member = false
 
   on('session.start', async ($, e, next) => {
     let cwd: string | undefined
@@ -49,6 +52,8 @@ export const register: Register = (on, options) => {
       // The id is read every tick: /clear keeps this environment but starts a new session.
       const now = await $.clock.now()
       const id = await $.session.id()
+      // Expiry and visibility do not matter here, only that a shape-valid doc lists this session.
+      member = doc !== null && doc.memberSessions.includes(id)
       // Written only on change, since every write redraws the band and the Pane. Compared with the held value,
       // not a closure copy, because the state outlives a reload of this module.
       const view = viewModel(doc, now, id)
@@ -56,8 +61,19 @@ export const register: Register = (on, options) => {
       if (JSON.stringify(held.value) !== JSON.stringify(view)) await $.state.set({ plugin: 'ah', key: 'view' }, view)
       const text = statusText(doc, now, id, statusEntry)
       if (text !== shown) { shown = text; $.ui.status(text) }
+      // Opened unasked once per session, the first time there is something to show, unless the person has
+      // closed it. Below the engine's width floor the open waits undrawn; that still counts as opened.
+      if (view !== null) {
+        const opened = await $.state.get({ plugin: 'ah', key: 'opened' })
+        const closed = await $.state.get({ plugin: 'ah', key: 'closed' })
+        if (opened.value !== true && closed.value !== true) {
+          await $.state.set({ plugin: 'ah', key: 'opened' }, true)
+          await $.ui.open({ id: 'ah-status', title: 'Hierarchy' })
+        }
+      }
     }
 
+    await $.command.register({ name: 'hierarchy-pane', description: 'Open the hierarchy status Pane' })
     await tick()
     $.clock.every(2000, () => tick())
     return next(e)
@@ -76,6 +92,22 @@ export const register: Register = (on, options) => {
         {await next(e)}
       </Box>
     )
+  })
+
+  // Asked for, so the engine places it at any width; not placed means this session's surfaces show no panes.
+  // Answers with text alone and never runs another command. A member session sees no hierarchy view at all.
+  on('command.run', { command: 'hierarchy-pane' }, async ($) => {
+    if (member) return { text: 'The hierarchy view is hidden in member sessions.' }
+    await $.state.set({ plugin: 'ah', key: 'closed' }, false)
+    const opened = await $.ui.open({ id: 'ah-status', title: 'Hierarchy' })
+    return { text: opened.isPlaced ? 'Opened the hierarchy Pane.' : 'The hierarchy Pane is open, but this session shows no panes.' }
+  })
+
+  // A close by the person keeps the Pane closed for the session. Always passes the close on: answering without
+  // next would keep the Pane open.
+  on('ui.close', { id: 'ah-status' }, async ($, e, next) => {
+    if (e.origin.kind === 'person') await $.state.set({ plugin: 'ah', key: 'closed' }, true)
+    return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e) => {

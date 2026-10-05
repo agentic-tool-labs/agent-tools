@@ -16,9 +16,13 @@ type World = {
   files: Record<string, { text: string; mtimeMs: number }>
   shown: (string | undefined)[]
   reads: number
+  registered: unknown[]
+  opens: unknown[]
+  placed: boolean
+  writes: { key: string; value: unknown }[]
 }
 const world = (over: Partial<World> = {}): World => ({
-  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, ...over,
+  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], ...over,
 })
 
 // Answers every $ call the module makes, from `w`; nothing real is read.
@@ -37,8 +41,24 @@ const stage = (on: any, w: World) => {
     return f ? { value: f.text } : { deny: 'no such file' }
   })
   on('ui.status', (_$: any, e: any) => { w.shown.push(e.text); return { value: undefined } })
+  on('command.register', (_$: any, e: any) => { w.registered.push(e); return { value: undefined } })
+  on('ui.open', (_$: any, e: any) => { w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
+  on('state.set', async (_$: any, e: any, next: any) => { w.writes.push({ key: e.key, value: e.value }); return next(e) })
 }
+const writesOf = (w: World, key: string) => w.writes.filter((x) => x.key === key).map((x) => x.value)
 const start = ($: any, w: World, surface: string) => $.session.start({ cwd: w.cwd, surface, isInteractive: true })
+
+// Another plugin that closes ah's Pane from its own command. A close it makes reaches ah's hook with origin
+// `plugin`; the kit has no way to raise a person's close.
+const CLOSER: any = {
+  name: 'closer',
+  register(on: any) {
+    on('session.start', async ($: any, e: any, next: any) => { await $.command.register({ name: 'close-ah', description: 'closes ah-status' }); return next(e) })
+    on('command.run', { command: 'close-ah' }, async ($: any) => {
+      try { await $.ui.close({ id: 'ah-status' }); return { text: 'closed' } } catch (err) { return { text: `refused: ${String(err)}` } }
+    })
+  },
+}
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`${surface}: session.start returns what next returned, and sets the entry from the doc`, async ($, on) => {
@@ -202,17 +222,15 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
   test(`${surface}: the tick writes the view only when it changed`, async ($, on) => {
     const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
-    const writes: unknown[] = []
-    on('state.set', async (_$: any, e: any, next: any) => { writes.push(e); return next(e) })
     stage(on, w)
     const clock = mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(writes.length).toBe(1)
+    expect(writesOf(w, 'view').length).toBe(1)
     await clock.advance(4000)
-    expect(writes.length).toBe(1)
+    expect(writesOf(w, 'view').length).toBe(1)
     w.files[FILE] = { text: fixtures.work, mtimeMs: 2 }
     await clock.advance(2000)
-    expect(writes.length).toBe(2)
+    expect(writesOf(w, 'view').length).toBe(2)
   })
 
   for (const [name, now, text, props] of [
@@ -255,6 +273,145 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(other).toMatchObject(CORE)
     expect(texts(other)).toEqual([CORE_LINE])
   })
+
+  // ---- /hierarchy-pane, auto-open and close
+  test(`${surface}: session.start registers /hierarchy-pane`, async ($, on) => {
+    const w = world()
+    stage(on, w)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(w.registered).toEqual([{ name: 'hierarchy-pane', description: 'Open the hierarchy status Pane' }])
+  })
+
+  for (const placed of [true, false]) {
+    test(`${surface}: /hierarchy-pane with no status file opens the Pane and answers with text alone (placed ${placed})`, async ($, on) => {
+      const w = world({ files: {}, placed })
+      on('command.run', { command: 'hierarchy-pane' }, () => ({ text: 'beneath', context: ['sent to the model'], exitCode: 3 }))
+      stage(on, w)
+      mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      const answer = await $.command.run({ command: 'hierarchy-pane', args: '' })
+      expect(answer).toEqual({ text: placed ? 'Opened the hierarchy Pane.' : 'The hierarchy Pane is open, but this session shows no panes.' })
+      expect(w.opens).toEqual([{ id: 'ah-status', title: 'Hierarchy' }])
+    })
+  }
+
+  for (const [when, now] of [['current', NOW], ['expired', Date.parse('2030-01-01T00:00:00.000Z')]] as const) {
+    test(`${surface}: /hierarchy-pane in a member session opens nothing and says why (doc ${when})`, async ($, on) => {
+      const w = world({ id: 'sess-demo-reviewer', files: { [FILE]: { text: fixtures['member-session'], mtimeMs: 1 } } })
+      on('command.run', { command: 'hierarchy-pane' }, () => ({ text: 'beneath', context: ['sent to the model'], exitCode: 3 }))
+      stage(on, w)
+      mock.clock(on, { now })
+      await start($, w, surface)
+      expect(await $.command.run({ command: 'hierarchy-pane', args: '' })).toEqual({ text: 'The hierarchy view is hidden in member sessions.' })
+      expect(w.opens).toEqual([])
+    })
+  }
+
+  test(`${surface}: a session that stops being a member gets the Pane at the next tick`, async ($, on) => {
+    const w = world({ id: 'sess-demo-reviewer', files: { [FILE]: { text: fixtures['member-session'], mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    w.id = 'sess-orch'
+    await clock.advance(2000)
+    w.opens.length = 0
+    expect(await $.command.run({ command: 'hierarchy-pane', args: '' })).toEqual({ text: 'Opened the hierarchy Pane.' })
+    expect(w.opens).toEqual([{ id: 'ah-status', title: 'Hierarchy' }])
+  })
+
+  test(`${surface}: another command is not answered`, async ($, on) => {
+    const w = world({ files: {} })
+    on('command.run', { command: 'other' }, () => ({ text: 'other ran' }))
+    stage(on, w)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(await $.command.run({ command: 'other', args: '' })).toEqual({ text: 'other ran' })
+    expect(w.opens).toEqual([])
+  })
+
+  for (const placed of [true, false]) {
+    test(`${surface}: auto-open fires once, when there is first a view (placed ${placed})`, async ($, on) => {
+      const w = world({ files: {}, placed })
+      stage(on, w)
+      const clock = mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      expect(w.opens).toEqual([])
+      w.files[FILE] = { text: fixtures.work, mtimeMs: 1 }
+      await clock.advance(2000)
+      expect(w.opens).toEqual([{ id: 'ah-status', title: 'Hierarchy' }])
+      await clock.advance(6000)
+      expect(w.opens.length).toBe(1)
+      expect(writesOf(w, 'opened')).toEqual([true])
+    })
+  }
+
+  test(`${surface}: auto-open never fires in a member session`, async ($, on) => {
+    const w = world({ id: 'sess-demo-reviewer', files: { [FILE]: { text: fixtures['member-session'], mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    await clock.advance(4000)
+    expect(w.opens).toEqual([])
+  })
+
+  test(`${surface}: auto-open does not fire again after a reload`, async ($, on) => {
+    const w = world()
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(w.opens.length).toBe(1)
+    await start($, w, surface)
+    await clock.advance(2000)
+    expect(w.opens.length).toBe(1)
+  })
+
+  test(`${surface}: auto-open never fires while the Pane is marked closed`, async ($, on) => {
+    on('state.get', async (_$: any, e: any, next: any) => (e.key === 'closed' ? { value: { value: true, version: 1 } } : next(e)))
+    const w = world({ files: {} })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    w.files[FILE] = { text: fixtures.work, mtimeMs: 1 }
+    await clock.advance(4000)
+    expect(w.opens).toEqual([])
+    expect(writesOf(w, 'opened')).toEqual([])
+  })
+
+  test(`${surface}: /hierarchy-pane clears the closed mark before it opens the Pane`, async ($, on) => {
+    const w = world({ files: {} })
+    stage(on, w)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    await $.command.run({ command: 'hierarchy-pane', args: '' })
+    expect(writesOf(w, 'closed')).toEqual([false])
+    expect(w.opens).toEqual([{ id: 'ah-status', title: 'Hierarchy' }])
+  })
+
+  test(`${surface}: a close by a plugin does not mark the Pane closed`, { plugins: [CLOSER] }, async ($, on) => {
+    const w = world({ files: {} })
+    on('ui.close', () => ({ value: undefined }))
+    stage(on, w)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(await $.command.run({ command: 'close-ah', args: '' })).toEqual({ text: 'closed' })
+    expect(writesOf(w, 'closed')).toEqual([])
+  })
+
+  for (const [beneathAnswer, expected] of [[{ value: undefined }, 'closed'], [{ deny: 'kept open beneath' }, 'kept open beneath']] as const) {
+    test(`${surface}: ui.close calls next exactly once and returns what it returned (${expected})`, { plugins: [CLOSER] }, async ($, on) => {
+      const w = world({ files: {} })
+      let calls = 0
+      on('ui.close', () => { calls++; return beneathAnswer })
+      stage(on, w)
+      mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      const answer: any = await $.command.run({ command: 'close-ah', args: '' })
+      expect(calls).toBe(1)
+      expect(answer.text).toContain(expected)
+    })
+  }
+
 }
 
 // What the chain beneath the module answers for the band, and for any Pane but the module's.
