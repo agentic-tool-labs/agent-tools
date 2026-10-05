@@ -22,21 +22,24 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realp
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
+import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, MSG_ROLES, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
 import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamArgName, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
+import { statusChanged } from "./lib-status.mjs";
 
-export { hierarchyDir };
+export { hierarchyDir, MSG_ROLES };
 
-export const MSG_ROLES = ["orchestrator", ...ROLES];
 export const MSG_TYPES = ["request", "response"];
 export const REASONS = ["context", "second-opinion", "parallel"];
 /** Complexity scaling for a peer dispatch (spec 0028 §5.6): the liveness check-in threshold. Absent/unrecognised treated as "small". */
 export const ETAS = ["small", "medium", "large"];
 /** small=5min, medium=10min, large=20min. */
 export const ETA_THRESHOLD_SEC = { small: 5 * 60, medium: 10 * 60, large: 20 * 60 };
-/** An absent or unrecognised eta is treated as small. */
+/** A request's eta as one of ETAS: an absent or unrecognised one is treated as small. */
+export function etaOf(eta) {
+  return ETAS.includes(eta) ? eta : "small";
+}
 export function thresholdFor(eta) {
-  return ETA_THRESHOLD_SEC[eta] || ETA_THRESHOLD_SEC.small;
+  return ETA_THRESHOLD_SEC[etaOf(eta)];
 }
 /**
  * Check-in gaps in multiples of a dispatch's eta threshold T: the first check-in falls due T after
@@ -356,6 +359,7 @@ export function createMessage(dir, opts) {
   if (!opts.reqPath) {
     mkdirSync(targetMsgs, { recursive: true });
     writeFileSync(path, body, "utf8");
+    statusChanged(dirname(targetMsgs));
     return { id: fields.id, path, fields };
   }
   // §2.1.5: same duplicate rule as the local pool, applied to the pool the file actually lands in.
@@ -373,6 +377,7 @@ export function createMessage(dir, opts) {
   const localPool = resolve(dir);
   const targetPool = resolve(dirname(targetMsgs));
   const divergent = localPool !== targetPool ? { local: localPool, target: targetPool } : null;
+  statusChanged(dirname(targetMsgs));
   return { id: fields.id, path, fields, divergent };
 }
 
@@ -721,6 +726,7 @@ export function readGates(dir) {
 
 export function appendGate(dir, rec) {
   appendJsonl(gatesPath(dir), { ...rec, ts: new Date().toISOString() });
+  if (rec && rec.type === "liveness-nudge") statusChanged(dir);
 }
 
 export function hasGate(dir, pred) {
@@ -813,6 +819,7 @@ export function readRoster(dir) {
 
 export function appendRosterRecord(dir, rec) {
   appendJsonl(peersPath(dir), { type: "peer", ...rec, ts: new Date().toISOString() });
+  statusChanged(dir);
 }
 
 /**

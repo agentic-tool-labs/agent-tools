@@ -164,7 +164,7 @@ import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expan
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
-import { plainStatus, writeStatus } from "./lib-status.mjs";
+import { computeStatus, plainStatus, saveStatus } from "./lib-status.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
@@ -6708,7 +6708,8 @@ try {
         nowMs = typeof opts.now === "string" ? Date.parse(opts.now) : NaN;
         if (!Number.isFinite(nowMs)) fail(`status: --now takes an ISO-8601 time, got ${JSON.stringify(opts.now)}`);
       }
-      const doc = writeStatus(cwd, nowMs);
+      const doc = computeStatus(cwd, nowMs);
+      saveStatus(hierarchyDir(cwd), doc);
       if (opts.plain === true) process.stdout.write(plainStatus(doc, nowMs) + "\n");
       else out(doc);
       break;

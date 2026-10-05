@@ -207,6 +207,10 @@ const BUILTIN_ROWS = [
 
 /** Built-in roles, in display order. Orchestrator is the session agent and is not configurable. */
 export const ROLES = BUILTIN_ROWS.map((r) => r.name);
+// Every role a message file may be addressed to or from. Built here, beside ROLES, and re-exported by
+// lib-hier.mjs: lib-hier is in an import cycle with this module (through lib-roster and
+// lib-status), so it must not read ROLES at its own top level.
+export const MSG_ROLES = ["orchestrator", ...ROLES];
 export const ROLE_LABELS = Object.fromEntries(BUILTIN_ROWS.map((r) => [r.name, r.label]));
 export const ROLE_DEFAULTS = Object.fromEntries(BUILTIN_ROWS.map((r) => [r.name, { ...r.defaults }]));
 export const VALID_MODELS_BY_ROLE = Object.fromEntries(BUILTIN_ROWS.map((r) => [r.name, CLASSES[r.class].models]));

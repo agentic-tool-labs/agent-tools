@@ -20,6 +20,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 import { homedir } from "node:os";
 
 import { checkoutRoot, CLASSES, declaredTier, isTeamAliasShape, isValidTeamAlias, KIND_DEFAULT, KIND_RE, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
+import { statusChanged } from "./lib-status.mjs";
 
 // Spec 0043 §1.1/§1.5: `kind`/`route`-shape helpers are DEFINED in lib-config.mjs (the leaf) and
 // re-exported here so the member schema still reads as one module. Defining them here instead
@@ -812,6 +813,7 @@ function atomicWriteJson(path, data) {
 /** Atomic write: `<path>.tmp` then rename. `team` names which file (default when omitted). */
 export function writeTeam(dir, teamData, team = null) {
   atomicWriteJson(teamPath(dir, team), teamData);
+  statusChanged(dir);
 }
 
 /** Unlink team.json (or a named team's file); no-op if absent. */
@@ -820,6 +822,7 @@ export function clearTeam(dir, team = null) {
   if (!existsSync(path)) return;
   try {
     unlinkSync(path);
+    statusChanged(dir);
   } catch {
     // already gone / racing another sweep — fine
   }

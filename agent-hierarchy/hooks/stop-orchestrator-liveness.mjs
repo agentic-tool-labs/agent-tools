@@ -35,7 +35,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { hierarchyDir, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
-import { appendGate, CHECKIN_CADENCE, openExchanges, readGates, readMsgFile, thresholdFor } from "./lib-hier.mjs";
+import { appendGate, CHECKIN_CADENCE, etaOf, openExchanges, readGates, readMsgFile, thresholdFor } from "./lib-hier.mjs";
 import { dispatchOrigin, dispatchRecordsFor, pendingFor } from "./lib-peer.mjs";
 import { readTeam, teamMemberByName } from "./lib-roster.mjs";
 
@@ -71,7 +71,7 @@ function outstandingDispatches(dir, resolved, sessionId, now) {
     const origin = Date.parse(dispatchOrigin(e.id, fm.created));
     if (!Number.isFinite(origin)) continue;
     const ageSec = Math.max(0, (now - origin) / 1000);
-    const eta = fm.eta || "small";
+    const eta = etaOf(fm.eta);
     if (ageSec < thresholdFor(eta) * CHECKIN_CADENCE[0]) continue; // too young to flag (T13)
     out.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta, pane: paneMemberName(dir, fm, e.to) });
   }

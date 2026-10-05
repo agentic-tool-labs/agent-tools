@@ -145,7 +145,10 @@ roster assignment (which roles exist, their model/effort/route) lives in
    the `.claude` directory first if needed), preserving every other existing
    key at that scope. Set `"version": 1`, `"enabled": true`, `"handoffs"` to
    the flow answer (write it explicitly even for `"auto"`, so the file
-   documents the choice), and `roles.task-runner` from step 3. Echo the
+   documents the choice), and `roles.task-runner` from step 3. Refresh the
+   hierarchy status file with Bash,
+   `node <AH_ROOT>/hooks/roster.mjs status --plain --cwd <abs cwd>`; its
+   one-line output need not be shown. Echo the
    resolved effective table (resolver command above), and close with the
    propagation note: this applies to **this** session immediately, and other
    live sessions pick it up at their next start, clear, or compaction.
@@ -186,7 +189,9 @@ if the role isn't in the roster yet).
 
 Set `"enabled": true` / `false` in the most specific config that already exists
 (project if present, else user), preserving all other keys. If neither exists,
-say so and suggest `/hierarchy init`. Then echo the resolved table and the
+say so and suggest `/hierarchy init`. Then refresh the hierarchy status file
+with Bash, `node <AH_ROOT>/hooks/roster.mjs status --plain --cwd <abs cwd>` (its
+one-line output need not be shown), and echo the resolved table and the
 propagation note.
 
 Note when turning it **off**: the SessionStart hook goes fully silent — no

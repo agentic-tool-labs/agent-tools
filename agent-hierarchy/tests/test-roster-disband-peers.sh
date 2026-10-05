@@ -318,7 +318,7 @@ check "T10: role-vs-name hint preserved" '[ "$RC" -eq 2 ] && echo "$OUT" | grep 
 check "T8: roster.mjs no longer carries the freshness arithmetic" '! grep -q "ROSTER_FRESH_SEC" "$H/roster.mjs"'
 check "T8: lib-hier computes the freshness comparison exactly once" '[ "$(grep -c "ageSec < ROSTER_FRESH_SEC" "$H/lib-hier.mjs")" = "1" ]'
 check "T8: roster() and livePeerSlots both route through recordLiveness" '[ "$(grep -c "recordLiveness(rec, now)" "$H/lib-hier.mjs")" = "2" ]'
-check "T8: the fallback enumerates via livePeerSlots (no second enumeration in roster.mjs)" 'grep -q "livePeerSlots(dir, scope)" "$H/roster.mjs" && ! grep -q "attributedRoster(dir).find(" "$H/roster.mjs" && [ "$(grep -c "roster.find((r) => r.name === name)" "$H/lib-hier.mjs")" = "1" ]'
+check "T8: the fallback enumerates via livePeerSlots (no second enumeration in roster.mjs)" 'grep -q "livePeerSlots(dir, scope)" "$H/roster.mjs" && ! grep -q "attributedRoster(dir).find(" "$H/roster.mjs" && [ "$(grep -c "roster.find((r) => r.name === name)" "$H/lib-hier.mjs")" = "1" ] && grep -q "attributedLiveness(attributedRoster(dir), name)" "$H/roster.mjs"'
 # Spec 0046 §2.2: the scope is the operated-on team's identity, never the --team FLAG. Passing
 # `teamArg` here WAS GitHub #4 — a bare disband scoped to null and excluded every tagged peer.
 check "T8: peerFallbackMembers never scopes on teamArg again (0046 §2.2)" '! grep -q "livePeerSlots(dir, teamArg" "$H/roster.mjs"'

@@ -14,11 +14,11 @@
  */
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { hierarchyDir, resolveConfig } from "./lib-config.mjs";
 import { decisionLogPath, decisionSummary, openRunAnchor, readDecisions } from "./lib-decisions.mjs";
-import { attributedRoster, CHECKIN_CADENCE, ETAS, listExchanges, attributedLiveness, readGates, readMsgFile, SELF_STATE, thresholdFor } from "./lib-hier.mjs";
+import { attributedRoster, CHECKIN_CADENCE, etaOf, listExchanges, attributedLiveness, readGates, readMsgFile, SELF_STATE, thresholdFor } from "./lib-hier.mjs";
 import { dispatchOrigin } from "./lib-peer.mjs";
 import { listTeamNames, readTeam, teamIsLive } from "./lib-roster.mjs";
 
@@ -33,7 +33,10 @@ const ITEM_CAP = 20;
 const NAME_CAP = 64;
 const SLUG_CAP = 32;
 const NOTE_CAP = 80;
-const ACTIVITIES = [...Object.values(SELF_STATE), "unknown"];
+// lib-hier, lib-roster and lib-decisions import this module back, so nothing at module top level may
+// read an imported binding: derived values are built on first use.
+let activities = null;
+const knownActivity = (a) => (activities ||= [...Object.values(SELF_STATE), "unknown"]).includes(a);
 const SEVERITY = { stalled: 0, blocked: 1, overdue: 2, working: 3, reported: 4, expired: 5 };
 
 // Escape sequences go whole (CSI and OSC), then any C0/C1 control character left.
@@ -72,7 +75,7 @@ function describeMembers(dir, team, roster) {
       sessionId = att.rec && typeof att.rec.session_id === "string" ? att.rec.session_id : null;
       rec = sessionId ? readActivity(dir, `${sessionId}.json`) : null;
     }
-    const activity = rec && ACTIVITIES.includes(rec.activity) ? rec.activity : "unknown";
+    const activity = rec && knownActivity(rec.activity) ? rec.activity : "unknown";
     return {
       name: clean(m.name, NAME_CAP),
       role: clean(m.role, NAME_CAP),
@@ -141,7 +144,7 @@ function describeDispatches(exchanges, fmCache, teamKey, members, gates, nowMs) 
     const sentAt = dispatchOrigin(e.id, fm.created || null);
     const sentMs = Date.parse(sentAt);
     if (!Number.isFinite(sentMs)) continue;
-    const eta = ETAS.includes(fm.eta) ? fm.eta : "small";
+    const eta = etaOf(fm.eta);
     const tMs = thresholdFor(eta) * 1000;
     const toName = clean(fm.to_name, NAME_CAP);
     const member = (toName && members.find((m) => m.name === toName)) || (() => {
@@ -234,9 +237,8 @@ function buildTimeline(nowMs, members, dispatches, enabled, anyPipeline) {
   return timeline;
 }
 
-/** The status document for the pool `cwd` resolves to, evaluated at `nowMs`. Reads only. */
-export function computeStatus(cwd, nowMs = Date.now()) {
-  const dir = hierarchyDir(cwd);
+/** The status document for the pool `dir` (by default the one `cwd` resolves to), evaluated at `nowMs`. Reads only. */
+export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd)) {
   const enabled = Boolean(resolveConfig(cwd).enabled);
   const teams = [];
   const allMembers = [];
@@ -274,14 +276,11 @@ export function computeStatus(cwd, nowMs = Date.now()) {
 }
 
 /**
- * Compute the document and write it to `<hier>/status.json` atomically (temp file, then rename).
- * Writes nothing when the hierarchy dir does not exist, and never creates it. Returns the document.
- * A failed write is swallowed: it never changes the caller's exit code, output or decision.
+ * Write `doc` to `<dir>/status.json` atomically (a per-process temp file, then rename). Writes nothing
+ * when `dir` does not exist, and never creates it. Never throws.
  */
-export function writeStatus(cwd, nowMs = Date.now()) {
-  const doc = computeStatus(cwd, nowMs);
+export function saveStatus(dir, doc) {
   try {
-    const dir = hierarchyDir(cwd);
     if (dir && existsSync(dir)) {
       const tmp = join(dir, `status.json.${process.pid}.tmp`);
       writeFileSync(tmp, JSON.stringify(doc) + "\n");
@@ -291,7 +290,50 @@ export function writeStatus(cwd, nowMs = Date.now()) {
   } catch {
     // A status write never fails the operation that triggered it.
   }
-  return doc;
+}
+
+let writing = false;
+
+/** Compute and save, ignoring a call made while a write is already running in this process. Never throws. */
+function refresh(cwd, dir, nowMs) {
+  if (writing) return null;
+  writing = true;
+  try {
+    const doc = computeStatus(cwd, nowMs, dir);
+    saveStatus(dir, doc);
+    return doc;
+  } catch {
+    return null;
+  } finally {
+    writing = false;
+  }
+}
+
+/**
+ * Recompute and write the document for the pool `cwd` resolves to. Returns it, or null when it could
+ * not be computed. Never throws: a status write never changes its caller's exit code, output or decision.
+ */
+export function writeStatus(cwd, nowMs = Date.now()) {
+  return refresh(cwd, hierarchyDir(cwd), nowMs);
+}
+
+/** The repo whose config governs a hierarchy dir: `<root>` for `<root>/.claude/hierarchy`, else this process's cwd. */
+function cwdOfDir(dir) {
+  const parent = dirname(dir);
+  return basename(dir) === "hierarchy" && basename(parent) === ".claude" ? dirname(parent) : process.cwd();
+}
+
+/**
+ * The write trigger the hierarchy's shared write helpers call after changing state in `dir`: peers
+ * rows, message files, team files, decision rows, check-in rows. Never throws, does nothing without
+ * the dir, and ignores a trigger that arrives while this process is already writing.
+ */
+export function statusChanged(dir) {
+  try {
+    if (dir && existsSync(dir)) refresh(cwdOfDir(dir), dir, Date.now());
+  } catch {
+    // A status write never fails the operation that triggered it.
+  }
 }
 
 /** `ah · <text>` for the timeline entry current at `nowMs`, or "" when that entry is not visible. */
