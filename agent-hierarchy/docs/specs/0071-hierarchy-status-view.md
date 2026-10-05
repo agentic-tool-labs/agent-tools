@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.23. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.24. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1722,6 +1722,26 @@ where it is silent they are display detail, not product behaviour.
   title: 'Hierarchy' })`. An open from a command is asked, so the Pane
   is placed at any width (F:2382). The hook returns a `{text}` saying
   whether the Pane was placed (`isPlaced`, F:13387).
+- r3.24, how the hook knows it is in a member session (G-A, option a):
+  - Each tick records whether this is a member session in a variable in
+    `register`'s scope, which the `command.run` hook reads.
+  - It is true only when the last doc read passed §4.4 step 1's shape
+    checks and its `member_sessions` holds `$.session.id()`. Expiry and
+    `visible` are ignored for this purpose.
+  - With no doc (absent, unreadable, malformed), it is false. Nothing
+    else is consulted (§4.4: no heuristics), so the command then opens
+    the Pane, which draws `No hierarchy status here.`
+  - It needs no `$.state` value. Nothing is drawn from it, and a reload
+    re-runs `session.start`, whose first tick sets it before `next(e)`
+    returns, so before any command can arrive.
+- r3.24, the texts:
+  - `command.register` description (G-B): `Open the hierarchy status
+    Pane`.
+  - Reply when `isPlaced` is true (G-C): `Opened the hierarchy Pane.`
+  - Reply when `isPlaced` is false (G-C, overridden). An asked open is
+    placed at any width, so false means this session's surfaces place no
+    panes (F:13387), not that space is short:
+    `The hierarchy Pane is open, but this session shows no panes.`
 
 **Auto-open.** This refines §6.3 with F:2382 and F:7061.
 - In the tick, it fires when `view` is first non-null in a session and
@@ -2446,6 +2466,9 @@ r3.20: the step list. P3 starts after P2b's step 5 has released 0.111.0
      returns exactly `{text}`, with `next` staged to carry `context` and
      `exitCode`;
    - another command is not answered;
+   - r3.24: in a member session (by the last doc) the command opens
+     nothing and returns the member text. With no status file, it opens
+     the Pane;
    - auto-open fires once, never after a person close, never in a member
      session, and with `isPlaced: false` it still counts as opened;
    - a person close sets `closed`; `/hierarchy-pane` clears it;
@@ -2581,6 +2604,22 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.24 (P3 step 4, G-A to G-C):
+
+- **G-A, option (a):** the tick records membership in a variable in
+  `register`'s scope, and the command hook reads it.
+  - It is true only for a doc that passed §4.4 step 1 and lists this
+    session. No doc means false, and the command opens the Pane, which
+    draws `No hierarchy status here.`
+  - It survives reloads because `session.start`'s first tick runs before
+    any command can arrive.
+  - (b) was rejected: a state value for something never drawn. (c) was
+    rejected: a second read path.
+- **G-B** is confirmed.
+- **G-C:** "placed" is confirmed. "Not placed" is overridden to the
+  no-panes wording, because an asked open is never refused for lack of
+  width.
 
 r3.23 (P3 step 2 follow-ups): G18 pins the overdue band subject when
 `eta_ms` is invalid to the Implementor's default, and G19 gives the
