@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.16. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.17. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1140,7 +1140,10 @@ The source is the 2.1.289 types file:
      in module source.
    - `view.ts` contains no `$` at all (it is pure, §6.1).
    - `on` is used only as `on('<literal>', …)` calls on `register`'s
-     parameter.
+     parameter. r3.17, to be exact: the identifier `on` appears in
+     exactly two places, as `register`'s first parameter and as the
+     callee of `on('<event>', …)`. Anywhere else is a violation, as an
+     argument (`extra(on)`, `f(x, on)`) included.
    - Template `${…}` is not a `$` identifier.
 
    r3.16: those rules held only for the name `$`, so renaming the
@@ -1160,9 +1163,13 @@ The source is the 2.1.289 types file:
    - No `\u` escape anywhere in module source: not in identifiers,
      strings, templates or regexes. Write the character itself, or `\x..`
      (C0, DEL and C1 all fit, so §6.4's stripping regex needs no `\u`).
-     This closes `$` for `$`, `on` for `on`, and
-     `'tool.check'` as an event name. Event names and matchers are
-     compared as written.
+     This closes a `\u`-escaped `$` (code 0024), a `\u`-escaped `o` in
+     `on` (006f), and a `\u`-escaped `t` in `'tool.check'` (0074) used as
+     an event name. Event names and matchers are compared as written.
+     (r3.17: r3.16's text for these three cases, and for the matching
+     planted cases in §6.6, lost its escapes when it was written, so it
+     read as `$`, `on` and `'tool.check'`. The cases mean the escaped
+     forms. The spec now describes them in words.)
 4. **Return values, statically** (r3.16). The lexer also enforces item
    2's table where source shows it:
    - `on('command.run', …)` and `on('ui.render', …)` carry one of the
@@ -1172,14 +1179,75 @@ The source is the 2.1.289 types file:
    - no JSX tag and no string literal names an element type other than
      `Box` or `Text`. The guard holds the full list of `RenderElement`
      type names (:8851), next to the other lists.
-5. **The guard's ceiling** (r3.16). The lexer is a regression net for
-   code written in the open. Every form named in items 1–4 and in §6.6's
-   planted cases must fail the lexer on its own, without validate, so it
-   holds even if validate's analysis loosens in a later client.
-   Deliberate obfuscation past that is out of the lexer's reach, for
-   example a computed key such as `['con' + 'text']`. Validate's
-   `hooks:`/`calls:` subsets, the behaviour tests (§6.6, which check
-   returns at run time) and review cover it.
+
+   r3.17, one rule in place of the two above: there is one list of
+   **banned words**, checked by token, whatever the token's role:
+   - the tokens checked are every identifier, property name, JSX tag,
+     string literal, and template literal without `${…}`;
+   - a token fails when it equals a banned word;
+   - the banned words are the return keys `context`, `exitCode`,
+     `press`, `client` and `raster`, and every `RenderElement` type name
+     other than `Box` and `Text` (`Button`, `Input`, `Select`, `Link`,
+     `Code`, `Markdown`, `Client`, `Svg`, `Raster`, `Image`, and any
+     other name at :8851).
+
+   So `h(els.Link, …)`, `const { Button } = $.ui.resolve(e)`, `'Link'`
+   and a substitution-free template `` `context` `` all fail. A status
+   mod has no use for these words as names.
+5. **Imports** (r3.17). The scanned module is `register.tsx` and
+   `view.ts`: all of `mod/` except `types/` and `tests/`. No code
+   outside the scan may run in the module:
+   - `register.tsx` imports values only from `./view`;
+   - `view.ts` imports no values;
+   - anything else is `import type`, from `'claude-code'` or
+     `./types/`;
+   - nothing in the module imports from `./tests/`.
+
+   JSX needs no import: `h` and `Fragment` are globals of the module's
+   environment (types :16-24). `import()` and `require` need no rule
+   either. The engine does not load a module holding `import()`, and
+   there is no `require` (:22-24).
+6. **The guard's stopping point and ceiling** (r3.17; replaces r3.16's
+   item 5).
+
+   **Why the rules are complete.** A hooks module runs "in an
+   environment of its own, with no DOM and no Node: everything outside
+   it is reached through `$`" (plugin-authoring `reference.md`:23). Its
+   globals are a fixed list, "these and no others" (types :13988), with
+   no `fetch`, no timers, no `console`, no `eval`/`new Function`
+   (they throw) and no `WebAssembly`. So the module can act, send or
+   answer in only two ways:
+   - through a `$` call, closed by items 1 and 3: `$` and `on` stay at
+     their names and positions;
+   - through a hook's return, closed by items 2 and 4: each
+     registration's matcher and return are fixed, and the banned words
+     are kept out.
+
+   Item 5 keeps all module code inside the scan.
+
+   **What the guard does not cover.** The lexer cannot see names or
+   values computed at run time:
+   - a key or element name assembled from pieces (`'con' + 'text'`, or
+     a template with `${…}`);
+   - a value carried through from `next` (a spread of `next(e)`).
+
+   The behaviour tests (§6.6) catch these on every path the fixtures
+   exercise, the validate subsets catch registrations and calls, and
+   review covers the rest. The threat is an ordinary edit that acts by
+   accident. It is not a hostile author, who could edit the guard
+   itself.
+
+   **What a later review may raise.** After step 1e, a guard finding
+   is a defect only if it is one of these:
+   - (a) an ordinary form that a maintainer could write without
+     meaning to evade, which acts, sends or answers, uses no computed
+     name, and passes the lexer;
+   - (b) legitimate code the guard rejects (as F2 was);
+   - (c) the test not matching items 1–5 or §6.6.
+
+   Anything else is inside the ceiling. It is recorded in the review
+   and adds no rule. A new rule must close a class, not one instance.
+   The class is named in the rule, as items 3–5 do.
 
 **Timer and reload:** the engine drops the old environment's `every` timer
 on a hot reload (E8). The module adds no cancel or guard.
@@ -1366,6 +1434,17 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
   the module's registered hooks (`hooks: …`), and the test asserts they
   are a subset of the allowed events. If validate also prints a `calls:`
   set, assert that it is a subset of the allowed calls too.
+  r3.17: validate prints a registration with a matcher as
+  `event{k=v,…}`, for example `ui.render{component=AbovePrompt}`. The
+  net parses that form:
+  - `event` must be an allowed event;
+  - the matcher, as sorted `k=v` pairs, must equal one of that event's
+    exact matchers (§6.3 item 2), in the same canonical form the lexer
+    builds;
+  - `command.run` or `ui.render` printed with no matcher fails.
+
+  This is the net's own matcher check. Without it, the real P3 module,
+  which must use matchers, fails the guard.
 - **Planted cases**, in a scratch copy, never committed. Each one must
   fail the guard:
   - the reviewer's eight: `$.session.authorize()`, `$.session.append()`,
@@ -1393,9 +1472,12 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
     - `(env.session as any)[k]()`;
     - `env['session']['append']()`;
     - `const s = env.session; s.authorize()`;
-    - `$.session.authorize()`;
-    - `on('tool.check', …)`;
-  - `on('tool.check', …)`;
+    - `$.session.authorize()` with the `$` written as a `\u` escape
+      (code 0024);
+    - `on('tool.check', …)` with the `o` of `on` written as a `\u`
+      escape (006f);
+  - `on('tool.check', …)` with the `t` of the event name written as a
+    `\u` escape (0074);
   - a named hook: `on('session.start', h)`;
   - `$.clock.every(2000, (env) => env.prompt.fill())`;
   - a `function ($, e, next) { arguments[0].prompt.fill() }` hook, and
@@ -1414,11 +1496,32 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
   - `on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => <Box><Text>x</Text></Box>)`;
   - `$.clock.every(2000, () => tick())`;
   - `/[\x00-\x1f\x7f-\x9f]/g`.
+- **r3.17 planted cases.** Each must fail the lexer layer alone:
+  - `extra(on)`, where `extra` registers `tool.check`;
+  - the same helper placed in `mod/types/extra.ts` and imported as a
+    value;
+  - any import from `./tests/`;
+  - `h(els.Link, …)` in a matched Pane `ui.render`;
+  - `const { Button } = $.ui.resolve(e)`;
+  - the review's b5: a computed key written as a substitution-free
+    template literal whose text is `context`.
+
+  Each `\u` case must actually contain the escape in the planted file.
+  Check its bytes, because a runner that writes the decoded character
+  plants the wrong case.
+
+  r3.17 allowed forms, each also run through the **validate** net:
+  - a register with both P3 `ui.render` matchers;
+  - a register with the `command.run` matcher.
+
+  These prove the matcher parse accepts legitimate code.
 - **Behaviour (register tests).** These check returns at run time,
-  including forms the lexer cannot see (§6.3 item 5):
+  including forms the lexer cannot see (§6.3 item 6):
   - step 3: `session.start` returns what `next` returned;
   - P3: the own-command `command.run` answer has exactly the key set
-    `{text}`;
+    `{text}`. r3.17: the test's `next` returns a value that carries
+    `context` and `exitCode`, so a hook that spreads or returns `next`'s
+    value fails;
   - P3: a `command.run` for another command is not answered;
   - P3: for every fixture case, each tree the Pane and band `ui.render`
     hooks return has only `Box` and `Text` nodes, and no node has a
@@ -1855,6 +1958,22 @@ Every commit passes the full `ah` bash suite and
    planted-case run show each case, r3.15's included, failing the lexer
    layer alone. Its own commit, after 1c and before step 3. Tests only.
    The current skeleton must still pass. [AC 7, 4]
+
+1e. **Guard, final round (r3.17).** Rework `tests/test-mod-readonly.sh`:
+   - F1: `on` passes only in its two positions (§6.3 item 3);
+   - F2: the validate net parses `event{k=v,…}` (§6.6);
+   - F3/F4: the one banned-words list, checked by token, with
+     substitution-free templates recorded as strings (§6.3 item 4);
+   - F5: the import rules (§6.3 item 5);
+   - §6.6's r3.17 planted cases and allowed forms.
+
+   Also check that 1d's three `\u` cases contain real escape bytes, and
+   re-plant any that were written decoded.
+
+   Its own commit, tests only. Step 3 need not wait for it. It lands
+   before step 5, and the real module as it stands then must pass it.
+   This round closes the guard: §6.3 item 6 sets what a later review
+   may still raise. [AC 7, 4]
 2. **Embedded fixtures and drift test.** Generate `mod/tests/fixtures.ts`,
    extend the fixture-regeneration command to cover it, and add the bash
    drift test with its one-time failure demonstration (§6.6 r3.11).
@@ -1951,7 +2070,9 @@ run. Step 5 stays at the end of P2b.
    - validate's `hooks:` set is a subset of the allowed events (and its
      `calls:` set of the allowed calls, if printed);
    - from step 3 on, the real module passes it, and the step-3 register
-     test shows `session.start` returns what `next` returned.
+     test shows `session.start` returns what `next` returned;
+   - r3.17: the matcher allowed forms pass through validate, and a
+     review of the guard finds nothing outside §6.3 item 6's ceiling.
 8. **After release, by the user:** update `ah` from the marketplace, so
    the copy is installed, not `--plugin-dir`, and use a logged-in session.
    Check that:
@@ -2077,6 +2198,31 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.17 (step-1d review, third guard round; the Orchestrator asked for a
+stopping point):
+
+- **F3** (spec): element names reached as identifiers (`h(els.Link)`)
+  passed both nets. §6.3 item 4 is now one banned-words list, checked
+  per token whatever the token's role. **F4** (substitution-free
+  templates) is closed by the same rule.
+- **F5** (spec): the module may not value-import unscanned code (item
+  5). JSX needs no import, because `h` is a global.
+- **F1** (impl): the spec already said where `on` may appear. Item 3
+  now names its two positions.
+- **F2** (impl): validate's `event{k=v}` form is now specified, with
+  its own matcher check (§6.6).
+- **Stopping point** (item 6): the module's environment has no
+  ambient I/O (types :13988, `reference.md`:23), so `$` and hook
+  returns are the only ways to act, and items 1–5 close both. The
+  ceiling is run-time-computed names and `next`-carried values, which
+  the behaviour tests cover. After step 1e, a review raises only (a)
+  an ordinary accidental form, (b) a false rejection, or (c) a mismatch
+  between the test and the spec.
+- The `\u` cases in r3.16's text had lost their escapes when written.
+  They are now described in words.
+- New step 1e; AC 7 extended; the `command.run` behaviour test's `next`
+  carries `context`.
 
 r3.16 (two Reviewer should-fix spec-defects at P2b step 1c):
 
