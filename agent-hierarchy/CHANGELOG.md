@@ -22,7 +22,10 @@ the session. See
   or `claude plugin configure` (user scope only) to hide the line, for example
   when claude-tui-line's `ah` item already shows the counts.
 - **Minimum client version.** The mod half of `ah` needs Claude Code 2.1.289 or
-  later. The command hooks work as before on older clients.
+  later. An older client may reject the mod file outright. Whether the command
+  hooks still load then is untested; this is an accepted risk. The bundled mod
+  has been tested only with `--plugin-dir`, not yet as an installed marketplace
+  copy.
 
 ### Fixed
 
