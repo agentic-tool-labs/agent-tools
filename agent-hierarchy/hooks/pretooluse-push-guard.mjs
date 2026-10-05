@@ -778,7 +778,9 @@ async function mergeCheck(argv) {
     const record = tag && issue ? exchanges.find((e) => e.open && e.slug === `${tag}-i${issue}`) : null;
     if (!record) reasons.push("not-this-run");
     else {
-      if (!exchanges.some((e) => !e.open && e.slug === `${tag}-i${issue}-ok`)) reasons.push("not-signed-off");
+      // Only a closed sign-off addressed to a member counts: an -ok the Orchestrator wrote to itself
+      // closes on any response, and that is no Architect sign-off.
+      if (!exchanges.some((e) => !e.open && e.to !== "orchestrator" && e.slug === `${tag}-i${issue}-ok`)) reasons.push("not-signed-off");
       if (exchanges.some((e) => e.open && e.slug === `${tag}-i${issue}-x`)) reasons.push("exception");
     }
 

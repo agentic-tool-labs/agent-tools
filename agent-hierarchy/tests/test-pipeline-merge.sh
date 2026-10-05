@@ -373,11 +373,17 @@ FIX="$SANDBOX/fix"
 BASE_VIEW="{\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ah/issue-5\",\"headRefOid\":\"$SHA\",\"baseRefName\":\"main\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":\"APPROVED\",\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"},{\"__typename\":\"StatusContext\",\"state\":\"SUCCESS\"}]}"
 BASE_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":true}]}}}}}'
 
+# The Architect's sign-off on item 5: an -ok request addressed to the Architect, answered with a report.
+signoff() {
+  local id; id=$(jout "$(node "$MSG" new --to architect --from orchestrator --slug ab12-i5-ok --team at --cwd "$REPO")" o.id)
+  local resp; resp=$(jout "$(node "$MSG" new --type response --id "$id" --to orchestrator --from architect --slug ab12-i5-ok --team at --cwd "$REPO")" o.path)
+  printf -- '- signed off: review and evidence hold\n' >> "$resp"
+}
 # A run whose item 5 is planned, signed off and has no exception, with PR #12 open and clean.
 item_run() { # [merge-opt-in] [depends-on]
   anchor "${1:-yes}"
   record ab12-i5 "issue: 5" "branch: ah/issue-5" "depends-on: ${2:-none}"
-  record ab12-i5-ok; close_record "$ID" ab12-i5-ok
+  signoff
   printf '%s' "$BASE_VIEW" > "$FIX/view-12.json"
   printf '%s' "$BASE_THREADS" > "$FIX/threads-12.json"
 }
@@ -405,7 +411,7 @@ check "C1 no open run → no-run" 'has_reason no-run'
 item_run no
 mc
 check "C1 merge-opt-in: no → off" 'has_reason off'
-item_run yes; anchor yes fast; record ab12-i5 "issue: 5" "branch: ah/issue-5" "depends-on: none"; record ab12-i5-ok; close_record "$ID" ab12-i5-ok
+item_run yes; anchor yes fast; record ab12-i5 "issue: 5" "branch: ah/issue-5" "depends-on: none"; signoff
 mc
 check "C1 no valid merge-method → no-method" 'has_reason no-method && ! has_reason off'
 item_run
@@ -431,6 +437,18 @@ check "C1 an Architect -ok answered by a skeleton response → not-signed-off" '
 printf -- '- signed off: review and evidence hold\n' >> "$OK_RESP"
 mc
 check "C1 the same -ok once its response holds a report → no not-signed-off" '[ "$RC" = 0 ] && [ -n "$OK_RESP" ] && ! has_reason not-signed-off'
+# Only a member-addressed -ok signs off: an -ok the Orchestrator addressed to itself never does.
+anchor yes; record ab12-i5 "issue: 5" "branch: ah/issue-5" "depends-on: none"; record ab12-i5-ok; close_record "$ID" ab12-i5-ok
+OK_RESP=$(ls "$REPO/.claude/hierarchy/msgs/"*--ab12-i5-ok--response.md 2>/dev/null | head -1)
+printf '%s' "$BASE_VIEW" > "$FIX/view-12.json"; printf '%s' "$BASE_THREADS" > "$FIX/threads-12.json"
+mc
+check "C1 an orchestrator-addressed -ok closed by a bodyless response → not-signed-off" '[ -n "$OK_RESP" ] && has_reason not-signed-off'
+printf -- '- signed off\n' >> "$OK_RESP"
+mc
+check "C1 the same orchestrator-addressed -ok with a filled response → not-signed-off" 'has_reason not-signed-off'
+item_run
+mc
+check "C1 an Architect-addressed -ok with a filled response → no not-signed-off" '[ "$RC" = 0 ] && [ "$(jout "$OUT" o.ok)" = true ]'
 item_run
 mc 'v.state = "CLOSED"'
 check "C1 a closed PR → closed" 'has_reason closed'
