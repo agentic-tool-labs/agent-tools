@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.22. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.23. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1703,6 +1703,8 @@ addition (G3). These are what `vectors.ts` freezes.
 | G15 | "slugs and names are cut first" | after the width fallback, cut the slug (dispatch rows) or the name (member rows) with `…`, down to 8 characters, then cut the whole row with `…` |
 | G16 | `{member name}` in "… is gone" | the dispatch's `member`, else `to_name`, else `label` |
 | G17 | the band's blocked subject | a member whose activity is `blocked`. The wording follows that member's `route`: `pane` → "through the Orchestrator", anything else → "in its pane" |
+| G18 (r3.23) | the overdue band subject when `eta_ms` is not a positive number | `{label} is past its eta`, plus ` · check-in {n} sent` when `checkins > 0` |
+| G19 (r3.23) | decisions line | `1 decision waiting for you`, `{n} decisions waiting for you`, the same plural rule as G7 |
 
 None of these is a user question. They follow the approved mockup, and
 where it is silent they are display detail, not product behaviour.
@@ -2579,6 +2581,10 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.23 (P3 step 2 follow-ups): G18 pins the overdue band subject when
+`eta_ms` is invalid to the Implementor's default, and G19 gives the
+decisions line a singular.
 
 r3.22 (P3 step 2 was blocked on 17 unpinned display formats): the
 Implementor's mockup-derived defaults G1–G17 are adopted and pinned in
