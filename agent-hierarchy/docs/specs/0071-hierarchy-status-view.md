@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.3, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.5, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -83,7 +83,7 @@ mockup, it says so.
 
 | Repo / plugin | Kind | Files |
 |---|---|---|
-| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-peer.mjs` (the dispatch-origin function, §3.1), `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `skills/hierarchy/SKILL.md` (the on/off path refreshes status), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. **Not changed:** `hooks/msg.mjs`, `hooks/pretooluse-push-guard.mjs`. |
+| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-peer.mjs` (the dispatch-origin function, §3.1), `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `skills/hierarchy/SKILL.md` (the on/off path refreshes status), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. `hooks/pretooluse-push-guard.mjs` (one `merge-check` sign-off condition only, §3.7.9). **Not changed:** `hooks/msg.mjs`. |
 | `agent-tools/agent-hierarchy` (`ah`), P2b/P3 | new code | `agent-hierarchy/mod/`, plus `hooks`, `types` and `userConfig` keys in ah's plugin.json (§6.1). |
 | `claude-tui-line` | new items | §7 |
 
@@ -141,7 +141,11 @@ mockup, it says so.
     request written early and sent later (queued rework) would count its
     queue time as work time. Earliest, not latest, so a re-send after a
     nudge cannot reset the clock and hide a stall. A request with no
-    dispatch row has no origin and is not "out" (§4.2). One exported
+    dispatch row has no origin and is not "out" (§4.2). One exception
+    (r3.5): an id that has dispatch rows, none with a parseable `created`,
+    takes the request file's `created` as its origin. A corrupt row must
+    not hide a dispatch; this fails toward nudging, as `dueForNudge`
+    already does for a bad gate `ts`. One exported
     function in `hooks/lib-peer.mjs` (which owns the rows) computes it,
     given a request id; the Stop hook and lib-status both call it. Its name
     is the Implementor's choice; AC 7 covers it.
@@ -165,12 +169,15 @@ mockup, it says so.
     liveness threshold; the Stop hook, lib-status and activity.mjs import
     lib-hier anyway; and lib-config is not in §2's changed list.
   - **stream-label loads lib-hier lazily (r3.2).** A static import would
-    cost every session about 6 ms (Implementor-measured: ~26 ms against
-    ~20 ms) on each UserPromptSubmit, Stop and Notification, before
-    stream-label's early exit, because lib-hier loads on top of the
-    lib-config/lib-roster chain stream-label already pays for. That breaks
-    stream-label's "inert in every session that is not a stream member"
-    contract. So stream-label has **no** static lib-hier import: it
+    add lib-hier's load to every session on each UserPromptSubmit, Stop and
+    Notification, before stream-label's early exit. r3.5: the Implementor
+    measured the saving on the inert path at about 0.4 ms (the earlier
+    "~6 ms" was a whole-process comparison). The rule stands on the
+    contract, not the number: stream-label is "inert in every session that
+    is not a stream member", and the lazy import keeps it so for free. The
+    same reasoning covers the lazy lib-hier/lib-peer import in
+    `pretooluse-ah-cli.mjs`, which runs on every Bash call and needs them
+    only for a `deliver`. So stream-label has **no** static lib-hier import: it
     dynamically imports lib-hier for `SELF_STATE` only after the
     `HERDR_PANE_ID`/`AH_TEAM_FILE` check passes. Non-stream sessions load
     nothing new, and `SELF_STATE` is still defined once. A grep test (AC 7)
@@ -407,7 +414,7 @@ needs a test. Rows marked "unchanged" need one test proving it (§8 P1 AC 23).
 | `sweep` (lib-hier:534) | archives any pair with a response file older than 7 days | uses `.open`, so a stub-only member pair is **not** archived; a stub-closed record still is (changes) |
 | Anchor liveness: `pipelineRunLive` (lib-hier:512), `openRunAnchor` (lib-decisions:31), `liveRun` (:196), `runLiveness` (:286), and all their callers (push guard `pinnedMerge`/`mergeGuard`, `pretooluse-mcp-guard`, `posttooluse-merge-record`, `pretooluse-roster-skill-gate`, roster.mjs trust/spawn refusals, `msg.mjs decision add/list`) | anchor open iff no response | unchanged: the anchor is orchestrator-addressed |
 | `merge-check` (pretooluse-push-guard:777-784): `<tag>-i<N>` must be open; `<tag>-i<N>-x` open → `exception` | records | unchanged: both are orchestrator-addressed |
-| `merge-check`: `<tag>-i<N>-ok` must be closed, else `not-signed-off` | any response signs off | a skeleton-only `-ok` response (addressed to the Architect) no longer signs off (changes). The pipeline's intended path has the Architect fill it, so a real sign-off is unaffected. |
+| `merge-check`: `<tag>-i<N>-ok` must be closed, else `not-signed-off` | any response signs off | a skeleton-only `-ok` response (addressed to the Architect) no longer signs off (changes). The pipeline's intended path has the Architect fill it, so a real sign-off is unaffected. r3.4: an `-ok` addressed to the Orchestrator never signs off, whatever its response holds (§3.7.9). |
 | `knownRun` (`lib-decisions.mjs:44`) | id and slug only | unchanged |
 | `deliver`'s own `evaluate` (roster.mjs:6560) | byte compare | `hasAuthoredContent` (§3.1) |
 | status file (§4.2) | — | the same rule. §4.2's "report present" **is** this rule. |
@@ -436,7 +443,9 @@ needs a test. Rows marked "unchanged" need one test proving it (§8 P1 AC 23).
    team file by `to_name`, then by role), its line must not say
    ListAgents/SendMessage. Instead it tells the Orchestrator to check the
    member with
-   `roster.mjs deliver <name> --req <path> --wait-only --timeout 10 --cwd <abs>`,
+   `roster.mjs deliver <name> --req <path> --wait-only --timeout 10 --cwd <abs>`
+   (r3.5: the command is meant to be pasted, so the script path, `<path>`
+   and `<abs>` are double-quoted in it),
    and to act on the returned `status` as agent-team `SKILL.md`
    §"Dispatching to a `route: pane` member" prescribes:
    - `blocked` → relay through AskUserQuestion and `answer`;
@@ -498,6 +507,16 @@ report. Any other failure is a defect: stop and report it (that is the E11
 suite run). Tests whose bodyless responses answer orchestrator-addressed
 records (`test-pipeline-decisions.sh:51`) must pass **unchanged**.
 
+r3.5, the clock origin (§3.1, §3.7.4 item 3): existing liveness tests build
+"a dispatch older than `T`" by backdating the request file's `created` while
+writing the dispatch row at now. Under the origin rule that dispatch is 0 s
+old. Their intent is the dispatch's age, so the fix is in the fixture: write
+the dispatch row at the same backdated instant as the request
+(`test-orchestrator-liveness.sh` `mark_dispatch`, `:81-83`;
+`test-sendmessage-response-nudge.sh` `dispatch_record`, `:320`). No assertion
+changes. The new behaviour, an old request with a fresh row not nudged, is
+AC 26's job, not theirs.
+
 **3.7.8 Landing while a `/pipeline` run is live.** The `ah` CLI root of the
 run that builds P1 is the same working tree P1 edits, so every edit is live
 for that run's own hooks the moment it hits disk.
@@ -518,6 +537,32 @@ for that run's own hooks the moment it hits disk.
 - Whether the `hooks/hooks.json` registrations added in step 6 reach
   sessions that are already running does not matter: nothing in the run
   depends on them.
+
+**3.7.9 merge-check counts only a member-addressed `-ok` (r3.4).** Under
+§3.7.1 an `-ok` request addressed to the Orchestrator closes on a bodyless
+response, so `merge-check` (pretooluse-push-guard.mjs:781) would accept a
+sign-off nobody wrote. That contradicts §3.7.6's "a skeleton `-ok` is not a
+sign-off". The rule:
+
+- `not-signed-off` is reported unless the pool has a **closed,
+  member-addressed** (`to` ≠ `orchestrator`, the same predicate as §3.7.1)
+  exchange with slug `<tag>-i<N>-ok`. An orchestrator-addressed `-ok` never
+  counts, whether its response is empty or filled: the Orchestrator writing
+  to itself is not an Architect sign-off.
+- Nothing else in the push guard changes. `merge-check` is the advisory verb
+  (:746-749, :893); the PreToolUse enforcement path, `pinnedMerge`, never
+  reads `-ok` and stays untouched. That is why §5's push-guard freeze yields
+  for this one condition: the contradiction lives only in that test, and
+  leaving it would leave the skill's rule unenforced in the one place that
+  checks it.
+- This is a tightening against 0.109.0, where any response to any `-ok`
+  passed. It is a process check, not authentication: an Orchestrator that
+  fills an Architect-addressed `-ok` itself still passes, as before.
+- Tests: `test-pipeline-merge.sh`'s `-ok` cases that use `record …-ok;
+  close_record` (:380 `item_run`, :408) become Architect-addressed requests
+  with a filled response. That changes the fixture's address, not an
+  assertion, and §3.7.7 allows it for this case. Add the negative case
+  (AC 27).
 
 ## 4. State model (exact rules)
 
@@ -704,7 +749,8 @@ Consumers never re-derive eta, stall, liveness, counts or the status text.
 - `msg.mjs list` output format and flags. Only which exchanges count as
   open changes (§3.7).
 - `msg.mjs` code, including `new`'s flags: no `--body` flag is added.
-- `pretooluse-push-guard.mjs` code. Its behaviour changes only through
+- `pretooluse-push-guard.mjs` code, except the one `merge-check` sign-off
+  condition in §3.7.9 (r3.4). Otherwise its behaviour changes only through
   `listExchanges`, and only for `-ok` (§3.7.2).
 - The open/closed state of every orchestrator-addressed exchange, which
   includes every pipeline run record and so every anchor-liveness answer.
@@ -1038,6 +1084,10 @@ commit whole (§3.7.8). The ACs each step must satisfy are in brackets.
    `pretooluse-ah-cli.mjs`; the dispatch-origin function in lib-peer and
    the Stop hook's clock moved onto it (§3.1, §3.7.4 item 3).
    [AC 19, 20, 21, 26; AC 7 for cadence and origin; AC 14]
+3a. **merge-check sign-off address (r3.4).** §3.7.9 only: one condition
+   in `merge-check`, the `test-pipeline-merge.sh` `-ok` fixture change, and
+   the negative case. Its own commit, landed after step 3 and before
+   step 4; independent of both. [AC 27, 22; AC 14]
 4. **Producer and verb.** `lib-status.mjs`, `roster.mjs status`,
    `tests/fixtures/status/`, `docs/status-file.md`, the `docs/cli-tools.md`
    row. No write triggers yet; tests stage activity files directly.
@@ -1095,7 +1145,8 @@ live pool.
    `reportStatus`, the event→state table, and the dispatch-origin function
    (no other hook reads dispatch-row timestamps). The same test fails if
    `stream-label.mjs` has a static import from `./lib-hier.mjs` (§3.1
-   r3.2). The existing liveness-hook tests still pass unchanged.
+   r3.2). The existing liveness-hook tests keep every assertion; the only
+   change allowed in them is the §3.7.7 r3.5 dispatch-row backdating.
 8. **Activity hook:**
    - a role session's UserPromptSubmit, Stop and Notification produce
      `working`, `idle` and `blocked` records; the `blocked` record has
@@ -1190,7 +1241,17 @@ live pool.
     - a second dispatch row for the same id 2 min after the first does not
       delay the first nudge;
     - the origin function returns the earliest row's `created` across
-      sessions, and nothing for an id with no row.
+      sessions, and nothing for an id with no row;
+    - (r3.5) an id whose only dispatch row has an unparseable `created`,
+      with its request backdated past `T`, is nudged.
+27. **Sign-off address** (`test-pipeline-merge.sh`), with an open anchor
+    and an open `<tag>-i5` record:
+    - `<tag>-i5-ok` addressed to the Orchestrator, closed by a bodyless
+      response → `not-signed-off`;
+    - the same with a filled response → `not-signed-off`;
+    - `<tag>-i5-ok` addressed to the Architect with a filled response → no
+      `not-signed-off`;
+    - every other `merge-check` reason and test is unchanged.
 
 ### P2a: claude-tui-line items
 
@@ -1297,6 +1358,23 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.5 (spec conflict at P1 step 3): AC 7's "existing liveness tests pass
+unchanged" contradicted the r3.3 origin, because those tests backdate the
+request, not the dispatch row. §3.7.7 now allows exactly one fixture change,
+backdating the dispatch row to the request's instant, with no assertion
+changed; AC 7 says so. Also: a dispatch whose rows all have an unparseable
+`created` falls back to the request's `created` (§3.1; AC 26 gains a
+bullet); the pane command's paths are quoted (§3.7.4); r3.2's "~6 ms" is
+corrected to ~0.4 ms, and the lazy-import rule now rests on the inert
+contract, covering pretooluse-ah-cli's lazy imports too.
+
+r3.4 (Reviewer spec-defect at P1 step 2): `merge-check` accepted an
+orchestrator-addressed `-ok` closed by a bodyless response as a sign-off,
+which contradicts §3.7.6. New §3.7.9: only a closed, member-addressed `-ok`
+signs off. This is one condition in the advisory `merge-check`, and §5's
+push-guard freeze yields for it alone (`pinnedMerge` is untouched). It lands
+as P1 step 3a with AC 27, and §2/§3.7.2/§5 match.
 
 r3.3 (live false nudge on a queued request): every liveness and status
 clock now starts at the dispatch **origin**, the earliest dispatch row for
