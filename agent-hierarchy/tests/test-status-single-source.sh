@@ -31,10 +31,13 @@ defs() { grep -hE "$1" "$H"/*.mjs | wc -l | tr -d ' '; }
 # The hooks/*.mjs files with a line matching an extended regex.
 where() { grep -lE "$1" "$H"/*.mjs | xargs -n1 basename | tr '\n' ' '; }
 
-ETA_TABLE='\bsmall:[[:space:]]*[0-9]'
+ETA_TABLE='\bsmall"?:[[:space:]]*[0-9]'
 EVENT_TABLE='UserPromptSubmit:[[:space:]]*"working"'
 check "AC7: the eta threshold table is defined once in hooks/, in lib-hier" '[ "$(defs "$ETA_TABLE")" = 1 ] && [ "$(where "$ETA_TABLE")" = "lib-hier.mjs " ]'
-check "AC7: the eta fallback (thresholdFor) is defined once in hooks/, in lib-hier" '[ "$(where "function[[:space:]]+thresholdFor\b")" = "lib-hier.mjs " ]'
+check "AC7: the eta fallback (thresholdFor) is defined once in hooks/, in lib-hier" '[ "$(defs "function[[:space:]]+thresholdFor\b")" = 1 ] && [ "$(where "function[[:space:]]+thresholdFor\b")" = "lib-hier.mjs " ]'
+# `import … from "./lib-hier.mjs"` or a bare `import "./lib-hier.mjs"`; the dynamic `import("./lib-hier.mjs")` matches neither.
+STATIC_LIB_HIER='from[[:space:]]*.\./lib-hier\.mjs|^[[:space:]]*import[[:space:]]+.\./lib-hier\.mjs'
+check "AC7: stream-label has no static import from ./lib-hier.mjs" '! grep -qE "$STATIC_LIB_HIER" "$H/stream-label.mjs" && grep -q "import(\"./lib-hier.mjs\")" "$H/stream-label.mjs"'
 check "AC7: the hook-event→self-state table is defined once in hooks/, in lib-hier" '[ "$(defs "$EVENT_TABLE")" = 1 ] && [ "$(where "$EVENT_TABLE")" = "lib-hier.mjs " ]'
 check "AC7: no hook restates the self-state values as a list" '[ "$(defs "\"working\",[[:space:]]*\"idle\",[[:space:]]*\"blocked\"")" = 0 ]'
 check "AC7/AC24: reportStatus is defined once in hooks/, in lib-hier" '[ "$(defs "function[[:space:]]+reportStatus\b")" = 1 ] && [ "$(where "function[[:space:]]+reportStatus\b")" = "lib-hier.mjs " ]'

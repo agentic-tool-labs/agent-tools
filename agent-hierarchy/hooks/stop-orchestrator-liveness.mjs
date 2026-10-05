@@ -44,7 +44,6 @@ function block(reason) {
   process.exit(0);
 }
 
-
 /**
  * §5.3 (r4): open exchanges THIS session dispatched on the peer route — a
  * dispatch record for the exchange's id exists among this session's own

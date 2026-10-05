@@ -17,12 +17,13 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
-import { SELF_STATE } from "./lib-hier.mjs";
 
 try {
   const pane = process.env.HERDR_PANE_ID;
   const teamFile = process.env.AH_TEAM_FILE;
   if (pane && teamFile) {
+    // Loaded only past the early exit: a static import would add lib-hier's load time to every session.
+    const { SELF_STATE } = await import("./lib-hier.mjs");
     const input = await readHookInput();
     const state = input && SELF_STATE[input.hook_event_name];
     if (state && !isSubagent(input)) {

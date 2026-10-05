@@ -678,7 +678,7 @@ export function reportStatus(path, id) {
   }
   const fm = parseFrontmatter(text);
   if (!fm || fm.fields.id !== id) return "malformed-report";
-  return hasAuthoredContent(text.split("\n").slice(fm.end).join("\n")) ? "reported" : "no-report";
+  return hasAuthoredContent(bodyAfterFrontmatter(text)) ? "reported" : "no-report";
 }
 
 /**
