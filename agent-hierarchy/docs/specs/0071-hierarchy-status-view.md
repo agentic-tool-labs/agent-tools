@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.21. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.22. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1680,6 +1680,33 @@ mapping above:
 - If a later client documents an error key, `bad` moves to it. That is a
   one-row change.
 
+**Formats and ordering (r3.22).** The Implementor's mockup-derived
+defaults G1–G17 (P3 step-2 report) are adopted as pinned, with one
+addition (G3). These are what `vectors.ts` freezes.
+
+| # | Item | Pinned |
+|---|---|---|
+| G1 | `{bar}` | 10 cells, `█` filled and `░` empty; filled = floor(pct / 10) |
+| G2 | `{pct}` | elapsed / eta_ms × 100, floored, clamped to 0–100 |
+| G3 | `eta {eta}` | `{T}m`, as in the band. Added: when `eta_ms` is not a positive number (the schema always sets it, but the file is untrusted, §12), the row shows `eta —` with no bar or pct, the band's working item drops ` of {T}m`, and nothing is ever `NaN` |
+| G4 | `{m:ss}` | minutes unbounded, seconds two digits, floored; a negative elapsed is `0:00` |
+| G5 | durations (`{over}`, the toast's reported_at − sent_at) | `{s}s` under a minute, else `{m}m {s}s`; minutes unbounded, no hours |
+| G6 | `{age}` (now − activity_at) | `{s}s` under 60 s, `{m}m` under 60 m, else `{h}h`, floored |
+| G7 | check-in phrase | `1 check-in unanswered`, `{n} check-ins unanswered` |
+| G8 | Pane headings and empty states | heading rows `Hierarchy`, `Team`, `Dispatches`; `No pipeline run.` when no pipeline item is open; `None outstanding.` |
+| G9 | several live teams | one Pane whose sections span all teams in doc order. With more than one live team, each heading carries ` {team ?? 'default'}` (`Team agent-tools`, and so on) |
+| G10 | row tones | members: working → work, blocked → warn, idle, gone and unknown → idle. Dispatches: working → work, blocked → warn, overdue and stalled → bad, reported and unknown → idle. Headings → idle; pipeline lines → work; `N decisions waiting for you` → warn |
+| G11 | band subject ties | dispatches: oldest `sent_at` first. Blocked members: oldest `activity_at`, then team doc order |
+| G12 | `+{k} more` | k = the non-working items (stalled or overdue dispatches, blocked members) other than the subject. A dispatch in state `blocked` counts through its member, not again |
+| G13 | band working list | working dispatches, oldest `sent_at` first. The first is the subject; each further one is appended only while the whole line fits `bodyColumns` uncut |
+| G14 | dispatch rows | every dispatch whose state at now is not `expired`, newest `sent_at` first |
+| G15 | "slugs and names are cut first" | after the width fallback, cut the slug (dispatch rows) or the name (member rows) with `…`, down to 8 characters, then cut the whole row with `…` |
+| G16 | `{member name}` in "… is gone" | the dispatch's `member`, else `to_name`, else `label` |
+| G17 | the band's blocked subject | a member whose activity is `blocked`. The wording follows that member's `route`: `pane` → "through the Orchestrator", anything else → "in its pane" |
+
+None of these is a user question. They follow the approved mockup, and
+where it is silent they are display detail, not product behaviour.
+
 **`/hierarchy-pane`.**
 - `session.start` calls `$.command.register({ name: 'hierarchy-pane',
   description: … })` before `next(e)` (R:158-163). A reload registers it
@@ -2552,6 +2579,11 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.22 (P3 step 2 was blocked on 17 unpinned display formats): the
+Implementor's mockup-derived defaults G1–G17 are adopted and pinned in
+the §6.7 table. G3 adds one guard: an `eta_ms` that is not a positive
+number shows `eta —`, with no bar or pct and no `NaN`.
 
 r3.21 (E15 at P3 step 0):
 
