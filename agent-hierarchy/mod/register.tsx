@@ -6,12 +6,12 @@ export const register: Register = (on, options) => {
   const statusEntry = options?.status_entry !== false
 
   on('session.start', async ($, e, next) => {
-    const sessionId = await $.session.id()
     let cwd: string | undefined
     let file: string | null = null
     let seenMtime: number | undefined
     let doc: Doc | null = null
-    let shown: string | undefined
+    // null until the first tick, so a fresh environment always sets the entry, clearing any left by the last one.
+    let shown: string | undefined | null = null
 
     // The status file of the git checkout holding `dir`: the first ancestor with a `.git` entry, the way
     // ah's writer finds it. ponytail: AGENT_HIERARCHY_DIR and ah's non-git fallback dir are not followed.
@@ -41,7 +41,8 @@ export const register: Register = (on, options) => {
         doc = null
         seenMtime = undefined
       }
-      const text = statusText(doc, await $.clock.now(), sessionId, statusEntry)
+      // The id is read every tick: /clear keeps this environment but starts a new session.
+      const text = statusText(doc, await $.clock.now(), await $.session.id(), statusEntry)
       if (text !== shown) { shown = text; $.ui.status(text) }
     }
 

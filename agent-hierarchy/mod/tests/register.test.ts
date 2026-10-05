@@ -64,7 +64,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const clock = mock.clock(on, { now: NOW })
     await start($, w, surface)
     await clock.advance(4000)
-    expect(w.shown).toEqual([])
+    expect(w.shown).toEqual([undefined])
     expect(w.reads).toBe(0)
   })
 
@@ -73,7 +73,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     stage(on, w)
     mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(w.shown).toEqual([])
+    expect(w.shown).toEqual([undefined])
     expect(w.reads).toBe(0)
   })
 
@@ -105,7 +105,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     mock.clock(on, { now: NOW })
     await start($, w, surface)
     expect(w.reads).toBe(0)
-    expect(w.shown).toEqual([])
+    expect(w.shown).toEqual([undefined])
   })
 
   test(`${surface}: a cwd change finds the other checkout's file`, async ($, on) => {
@@ -127,15 +127,25 @@ for (const surface of ['terminal', 'desktop'] as const) {
     stage(on, w)
     mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(w.shown).toEqual([])
+    expect(w.shown).toEqual([undefined])
   })
 
-  test(`${surface}: status_entry false keeps the entry cleared`, { options: { status_entry: false } }, async ($, on) => {
+  test(`${surface}: a session whose id becomes a member's hides the entry at the next tick`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures['member-session'], mtimeMs: 1 } } })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    w.id = 'sess-demo-reviewer'
+    await clock.advance(2000)
+    expect(w.shown).toEqual(['1 live · 1 out', undefined])
+  })
+
+  test(`${surface}: status_entry false clears the entry at once, so a reload with it off leaves no old line`, { options: { status_entry: false } }, async ($, on) => {
     const w = world()
     stage(on, w)
     mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(w.shown).toEqual([])
+    expect(w.shown).toEqual([undefined])
   })
 
   test(`${surface}: status_entry true shows the entry`, { options: { status_entry: true } }, async ($, on) => {
