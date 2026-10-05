@@ -27,16 +27,23 @@ the coming `ah` mod to show.
 - **Activity records.** A Claude role session records its own activity in
   `<hier>/activity/` from its UserPromptSubmit, Stop and permission-prompt
   events. A new PostToolUse hook on every tool call, registered async, marks it
-  working again after a permission prompt. Each hook run loads `ah`'s libraries
-  (tens of milliseconds) but doesn't delay the next tool. Pane members are
-  recorded by `deliver`, `answer`, spawn, `dismiss` and `disband`.
+  working again after a permission prompt. Each run of that hook loads `ah`'s
+  libraries (tens of milliseconds) but doesn't delay the next tool. The
+  UserPromptSubmit, Stop and permission-prompt hooks run in line. In any session
+  of a repo that has a hierarchy directory, role or not, UserPromptSubmit and
+  Stop also rewrite status.json: about 6 ms warm and 13 ms cold at p95, measured
+  on a live pool. Every `ah` hook now loads the full library set, which adds up
+  to about 3 ms per hook process at p95. Pane members are recorded by `deliver`,
+  `answer`, spawn, `dismiss` and `disband`.
 
 ### Changed
 
 - **A member's exchange stays open until its response holds a report.** A
-  skeleton response stub addressed to a member no longer closes the exchange.
-  Exchanges addressed to the Orchestrator, which includes every `/pipeline` run
-  record, still close on any response.
+  skeleton response stub addressed to a member no longer closes the exchange,
+  and `msg.mjs sweep` no longer archives such a pair. A response over 4 KB
+  counts as a report without being read. Exchanges addressed to the
+  Orchestrator, which includes every `/pipeline` run record, still close on any
+  response.
 
   After upgrading, older unfilled stubs of member exchanges show as open again in
   `msg.mjs list`, and their roles count as busy. To clear one that was
