@@ -17,7 +17,7 @@ Probes only. No product code was changed. Scratch root used below:
 | E8 | **engine cancels** | After a hot reload, the old environment's `every` timer stops. No module-side cancel is needed. |
 | E9 | **Branch A** | Both plugin.json forms load the classic hooks file and the `{modules}` file together (`classic.ok` and `mod.ok` both present). Also, one hooks.json holding both keys works. |
 | E10 | **both shown → toggle** | A configured statusLine does not hide `$.ui.status`. The engine renders it as `⚠ <plugin>: <text>` on its own line, above the statusLine output. |
-| E11 | read done; suite deferred to P1 | Push guard: no new merge block on the three item slugs. But the pipeline closes `pipeline-run-anchor` with a stub, which the §3.7.1 rule would leave open (see below). |
+| E11 | read done; suite run at P1 step 2: only intended failures (see E11) | Push guard: no new merge block on the three item slugs. But the pipeline closes `pipeline-run-anchor` with a stub, which the §3.7.1 rule would leave open (see below). |
 
 ## Spec assumptions broken
 
@@ -173,7 +173,12 @@ Probes only. No product code was changed. Scratch root used below:
   | `<tag>-i<N>-x` | open gives `exception` (:782) | a stub-closed `-x` reads open | only after run end, when mergeCheck already exits `no-run` at :768 |
   | `pipeline-run-anchor` | via `liveRun` | — | **yes**: see "Spec assumptions broken" #5 |
 
-- Suite run: deferred to P1.
+- Suite run (P1 step 2). The full `ah` bash suite ran with §3.7.1 and the orchestrator-address exemption in place, before any test edits. It ran from a cwd outside any git repo, so `pipelineRunLive(process.cwd())` (roster.mjs:654) could not see the live run. Result: 97 files, 95 pass, 2 fail. Both failures are the intended change in the §3.7.2 rows: a bodyless response to a **member**-addressed request no longer closes the exchange.
+  - `test-msg-cli.sh`: 5 assertions failed: `list` default/`--closed` after a bodyless response to an `implementor` request, and `sweep --days 0` / `sweep --plain`, whose "closed" pairs were bodyless responses to `implementor` and `reviewer` requests. Updated under §3.7.7 by writing a content line into those two responses. No assertion changed.
+  - `test-roster-stream.sh`: G3b, G6 and T2 failed. The `respond` helper answered `implementor`/`architect` requests bodyless, and `stream-label`/`stream-status` (through `openExchanges`) still saw them open. Updated under §3.7.7: `respond` now writes a content line into the response. No assertion changed.
+  - No other failure. These pass unedited: `test-pipeline-decisions.sh`, `test-push-guard.sh`, and every pre-existing `test-pipeline-merge.sh` case (its `-ok` and `-x` records are orchestrator-addressed, so they still close on a bodyless response).
+  - `merge-check` against the open rule (AC 22, new cases in `test-pipeline-merge.sh`): an Architect-addressed `-ok` with a skeleton response gives `not-signed-off`; the same response filled gives none; a `-x` record closed bodyless gives no `exception`.
+  - After the updates: 98 files, 98 pass (with the new `test-exchange-open.sh`).
 
 ## Side effects outside scratch (for the user)
 - **`~/.claude/settings.json` was rewritten by the user's own verb-themes plugin** during the two E9 r2 runs. Those runs load full user settings, as r2 prescribes, and verb-themes `rotate.py:217` swaps the spinner pack on each SessionStart. File mtime: 22:47:55. It rotated twice. The runs' output named Star Trek, then James Bond, and the session had started on Doctor Strangelove. It was not reverted, because the brief forbids settings edits. `/verb-themes` restores it. Every other probe used `--setting-sources local|project,local` to avoid this.

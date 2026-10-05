@@ -9,7 +9,8 @@
  *
  * Message files live at `<dir>/msgs/<id>--<to>--<slug>--<type>.md` with a
  * flat YAML frontmatter and `## [N] key` section anchors; a request and its
- * response share the id, and the response's existence closes the exchange.
+ * response share the id, and the response closes the exchange (for a
+ * member-addressed request, only once it holds a report — `listExchanges`).
  * `peers.jsonl` and `gates.jsonl` are append-only JSONL, latest-per-key on
  * read, exactly like `lib-peer.mjs`.
  *
@@ -403,7 +404,13 @@ export function responseFrontmatter(fields, now = new Date()) {
   return frontmatterText({ ...fields, created: localIso(now) });
 }
 
-/** Pair requests with responses by id: `[{id, request, response, meta}]`, newest id first. */
+/**
+ * Pair requests with responses by id: `[{id, request, response, open, to, slug}]`, newest id first.
+ * Open iff there is no response, or the request is addressed to a member (not `orchestrator`) and
+ * its response holds no report. An orchestrator-addressed exchange (the pipeline's own run
+ * records, a role's request to the Orchestrator) closes on any response: nobody owes the
+ * Orchestrator a report on those, so a bodyless response there is a close marker.
+ */
 export function listExchanges(dir) {
   const byId = new Map();
   for (const f of requestFiles(dir)) {
@@ -414,7 +421,11 @@ export function listExchanges(dir) {
   return [...byId.values()]
     .filter((e) => e.request)
     .sort((a, b) => (a.id < b.id ? 1 : -1))
-    .map((e) => ({ ...e, open: !e.response, to: e.request.meta.to, slug: e.request.meta.slug }));
+    .map((e) => {
+      const to = e.request.meta.to;
+      const open = !e.response || (to !== "orchestrator" && reportStatus(e.response.path, e.id) === "no-report");
+      return { ...e, open, to, slug: e.request.meta.slug };
+    });
 }
 
 /**
@@ -534,7 +545,7 @@ export function sweep(dir, days = SWEEP_DAYS, now = Date.now()) {
   const cutoff = now - days * 86400 * 1000;
   let moved = 0;
   for (const e of listExchanges(dir)) {
-    if (!e.response) continue;
+    if (e.open) continue;
     if (createdMs(e.response.path) > cutoff) continue;
     mkdirSync(archiveDir(dir), { recursive: true });
     for (const f of [e.request, e.response]) renameSync(f.path, join(archiveDir(dir), basename(f.path)));

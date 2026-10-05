@@ -181,9 +181,10 @@ tab_label() { node -e 'const s=JSON.parse(require("fs").readFileSync(process.arg
 request() { # <to role> <to_name> <from_name> -> prints the request path
   HOME="$FAKEHOME" node "$H/msg.mjs" new --to "$1" --from orchestrator --slug s --to-name "$2" --from-name "$3" --team myrepo --cwd "$PROJ" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).path))'
 }
-respond() { # <request path> <the request's to role>
+respond() { # <request path> <the request's to role>: a filled response, which closes a member's exchange
   local id; id=$(basename "$1" | cut -d- -f1-3)
-  HOME="$FAKEHOME" node "$H/msg.mjs" new --type response --id "$id" --to orchestrator --from "$2" --slug s --team myrepo --req "$1" --cwd "$PROJ" >/dev/null
+  local resp; resp=$(HOME="$FAKEHOME" node "$H/msg.mjs" new --type response --id "$id" --to orchestrator --from "$2" --slug s --team myrepo --req "$1" --cwd "$PROJ" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).path))')
+  printf -- '- done: reported\n' >> "$resp"
 }
 setup_roster() { # repo roster: one architect and one reviewer, both peers
   HOME="$FAKEHOME" node "$H/roster.mjs" init --level repo --route peer --cwd "$PROJ" >/dev/null

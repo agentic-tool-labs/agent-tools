@@ -418,6 +418,19 @@ check "C1 no Architect sign-off → not-signed-off" 'has_reason not-signed-off'
 item_run; record ab12-i5-x "exception: red-build failing tests"
 mc
 check "C1 an open exception record → exception" 'has_reason exception'
+close_record "$ID" ab12-i5-x
+mc
+check "C1 an exception record closed by a bodyless response → no exception" '[ "$RC" = 0 ] && ! has_reason exception'
+# The sign-off as the pipeline dispatches it: a request to the Architect, whose response must hold a report.
+anchor yes; record ab12-i5 "issue: 5" "branch: ah/issue-5" "depends-on: none"
+OK_ID=$(jout "$(node "$MSG" new --to architect --from orchestrator --slug ab12-i5-ok --team at --cwd "$REPO")" o.id)
+OK_RESP=$(jout "$(node "$MSG" new --type response --id "$OK_ID" --to orchestrator --from architect --slug ab12-i5-ok --team at --cwd "$REPO")" o.path)
+printf '%s' "$BASE_VIEW" > "$FIX/view-12.json"; printf '%s' "$BASE_THREADS" > "$FIX/threads-12.json"
+mc
+check "C1 an Architect -ok answered by a skeleton response → not-signed-off" 'has_reason not-signed-off'
+printf -- '- signed off: review and evidence hold\n' >> "$OK_RESP"
+mc
+check "C1 the same -ok once its response holds a report → no not-signed-off" '[ "$RC" = 0 ] && [ -n "$OK_RESP" ] && ! has_reason not-signed-off'
 item_run
 mc 'v.state = "CLOSED"'
 check "C1 a closed PR → closed" 'has_reason closed'
