@@ -5,6 +5,52 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.112.0]
+
+The `ah` mod now shows the hierarchy's status as a band above the prompt, a
+Pane, and toasts. See
+[The band, the Pane and toasts](./README.md#the-band-the-pane-and-toasts).
+
+### Added
+
+- **The band.** One line above the prompt while dispatches are out or a member
+  is blocked. It names the most severe item: a stalled dispatch, then an
+  overdue one, then a blocked member. With none of those, it lists the working
+  dispatches and their elapsed time. It is drawn above whatever else shows
+  there, never in its place, and it steps aside while a survey is up. It
+  appears on the terminal and desktop only.
+- **The Pane and `/hierarchy-pane`.** The Pane lists the pipeline, the team's
+  members and the outstanding dispatches. It opens on its own once per
+  session, the first time there is status to show. The engine places an
+  unasked Pane from 144 columns, or from 110 once you have opened it yourself;
+  below that it waits until the terminal is wide enough. `/hierarchy-pane`
+  opens it at any width. Closing the Pane by hand keeps it closed for the
+  session, until `/hierarchy-pane`.
+- **Toasts.** One toast when a dispatch reports, when a member is blocked, and
+  when a dispatch stalls. Each shows at most once per session, also across a
+  reload. The first status a session sees toasts nothing, so old events are
+  not replayed.
+- Team members' own sessions see none of this. `/hierarchy-pane` there opens
+  nothing and says the view is hidden in member sessions.
+
+### Changed
+
+- **The mod's read-only guard** allows the `ui.close` hook only with the exact
+  matcher `{ id: 'ah-status' }`.
+
+### Known risks
+
+- **A close by hand is checked only by hand.** The plugin test kit cannot
+  raise a close by a person, so no automated test shows that closing the Pane
+  by hand keeps it closed. The manual check in the spec (P3 AC 4) covers it.
+- **Drawing is not tested.** The tests check the trees the mod returns, not
+  how a surface paints or places them, so the width floors and placement are
+  also covered only by that manual check.
+- **The same client risk as 0.111.0.** The mod needs Claude Code 2.1.289 or
+  later. An older client may reject the mod file outright, and whether the
+  command hooks still load then is untested. The mod has been tested only with
+  `--plugin-dir`, not yet as an installed marketplace copy.
+
 ## [0.111.0]
 
 `ah` now carries a small read-only mod that shows the hierarchy's status in
