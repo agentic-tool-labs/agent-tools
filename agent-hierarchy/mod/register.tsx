@@ -1,5 +1,10 @@
 import type { Register } from 'claude-code'
-import { parseDoc, SIZE_CAP, statusText, type Doc } from './view.ts'
+import { bandLine, paneRows, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
+
+// The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
+// any tone not named here draws dim.
+const toneProps = (tone: string) =>
+  tone === 'bad' ? { color: 'warning', bold: true } : tone === 'warn' ? { color: 'warning' } : tone === 'work' ? {} : { dimColor: true }
 
 export const register: Register = (on, options) => {
   // Only an explicit false turns the entry off; a missing option counts as on.
@@ -42,12 +47,44 @@ export const register: Register = (on, options) => {
         seenMtime = undefined
       }
       // The id is read every tick: /clear keeps this environment but starts a new session.
-      const text = statusText(doc, await $.clock.now(), await $.session.id(), statusEntry)
+      const now = await $.clock.now()
+      const id = await $.session.id()
+      // Written only on change, since every write redraws the band and the Pane. Compared with the held value,
+      // not a closure copy, because the state outlives a reload of this module.
+      const view = viewModel(doc, now, id)
+      const held = await $.state.get({ plugin: 'ah', key: 'view' })
+      if (JSON.stringify(held.value) !== JSON.stringify(view)) await $.state.set({ plugin: 'ah', key: 'view' }, view)
+      const text = statusText(doc, now, id, statusEntry)
       if (text !== shown) { shown = text; $.ui.status(text) }
     }
 
     await tick()
     $.clock.every(2000, () => tick())
     return next(e)
+  })
+
+  // The band goes above whatever the rest of the chain draws there, never in its place, and yields to a survey.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const { value } = await $.state.get({ plugin: 'ah', key: 'view' })
+    const line = bandLine(value ?? null, e.props.bodyColumns)
+    if (line === null) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Text {...toneProps(line.tone)}>{line.text}</Text>
+        {await next(e)}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e) => {
+    const { value } = await $.state.get({ plugin: 'ah', key: 'view' })
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        {paneRows(value ?? null, e.props.bodyColumns).map((r) => <Text {...toneProps(r.tone)}>{r.text}</Text>)}
+      </Box>
+    )
   })
 }

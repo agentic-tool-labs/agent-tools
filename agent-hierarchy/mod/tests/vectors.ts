@@ -55,7 +55,7 @@ export const vectors: Readonly<Record<string, Vector>> = {
     pane: [
       { text: 'Hierarchy', tone: 'idle' },
       { text: 'round 2/3 · reviewer', tone: 'work' },
-      { text: '1 decisions waiting for you', tone: 'warn' },
+      { text: '1 decision waiting for you', tone: 'warn' },
       { text: 'Team', tone: 'idle' },
       { text: 'demo-architect · codex · pane · idle 35m', tone: 'idle' },
       { text: 'demo-reviewer · codex · pane · working 30m', tone: 'work' },

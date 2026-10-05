@@ -251,11 +251,12 @@ test('Pane, dispatches: expired rows hidden, reported kept, newest first, state 
   ])
 })
 
-test('Pane: pipeline lines, waiting decisions, and No pipeline run. when no item is open', async () => {
+test('Pane: pipeline lines, waiting decisions, and No pipeline run. whenever no item is open', async () => {
   const pipe = (items: unknown[], waiting = 0) => [team({ pipeline: { anchor_id: 'a', started: at(-600000), round_cap: 3, waiting_on_user: waiting, items } })]
   expect(rows(pipe([{ slug: 's', rounds: 2, open: true, to: 'reviewer' }, { slug: 't', rounds: 1, open: false, to: 'architect' }], 2)).slice(0, 3))
     .toEqual(['Hierarchy', 'round 2/3 · reviewer', '2 decisions waiting for you'])
   expect(rows(pipe([{ slug: 't', rounds: 1, open: false, to: 'architect' }])).slice(0, 2)).toEqual(['Hierarchy', 'No pipeline run.'])
+  expect(rows(pipe([], 1)).slice(0, 3)).toEqual(['Hierarchy', 'No pipeline run.', '1 decision waiting for you'])
 })
 
 test('Pane: with more than one live team, each heading names its team, null as default', async () => {

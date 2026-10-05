@@ -1,5 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
+import { vectors } from './vectors.ts'
 import { utf8Bytes } from '../view.ts'
 
 const NOW = Date.parse('2026-01-01T12:00:00.000Z')
@@ -155,4 +156,132 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await start($, w, surface)
     expect(w.shown).toEqual(['1 live · 1 out'])
   })
+
+  // ---- the band and the Pane, drawn through the module's ui.render hooks
+  for (const [name, v] of Object.entries(vectors)) {
+    test(`${surface}: ${name} draws its band above the chain's answer and its Pane rows, Box, Text and engine only`, async ($, on) => {
+      const w = world({ id: v.sessionId, files: { [FILE]: { text: fixtures[name], mtimeMs: 1 } } })
+      stage(on, w)
+      beneath(on)
+      mock.clock(on, { now: Date.parse(v.now) })
+      await start($, w, surface)
+      const band = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })).drawn()
+      expect(walk(band)).toEqual([])
+      expect(texts(band)).toEqual(v.band === null ? [CORE_LINE] : [{ text: v.band.text, props: TONE[v.band.tone] }, CORE_LINE])
+      const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
+      expect(walk(pane)).toEqual([])
+      expect(texts(pane)).toEqual(v.pane.map((r) => ({ text: r.text, props: TONE[r.tone] })))
+    })
+  }
+
+  test(`${surface}: the band yields to the chain during a survey`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.bad, mtimeMs: 1 } } })
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: Date.parse(vectors.bad.now) })
+    await start($, w, surface)
+    const band = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps({ hasSurvey: true }), viewport: VIEWPORT })).drawn()
+    expect(band).toMatchObject(CORE)
+    expect(texts(band)).toEqual([CORE_LINE])
+  })
+
+  test(`${surface}: a view change redraws a mounted band, and its going leaves the chain's answer`, async ($, on) => {
+    const w = world()
+    stage(on, w)
+    beneath(on)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    const ui = await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
+    expect(texts(await ui.drawn())[0].text).toBe('1 out · architect 1:00 of 5m')
+    await clock.advance(2000)
+    expect(texts(await ui.drawn())[0].text).toBe('1 out · architect 1:02 of 5m')
+    delete w.files[FILE]
+    await clock.advance(2000)
+    expect(texts(await ui.drawn())).toEqual([CORE_LINE])
+  })
+
+  test(`${surface}: the tick writes the view only when it changed`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+    const writes: unknown[] = []
+    on('state.set', async (_$: any, e: any, next: any) => { writes.push(e); return next(e) })
+    stage(on, w)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(writes.length).toBe(1)
+    await clock.advance(4000)
+    expect(writes.length).toBe(1)
+    w.files[FILE] = { text: fixtures.work, mtimeMs: 2 }
+    await clock.advance(2000)
+    expect(writes.length).toBe(2)
+  })
+
+  for (const [name, now, text, props] of [
+    ['bad', Date.parse(vectors.bad.now), vectors.bad.band?.text, { color: 'warning', bold: true }],
+    ['warn', Date.parse(vectors.warn.now), vectors.warn.band?.text, { color: 'warning' }],
+    ['work', NOW, '1 out · architect 1:00 of 5m', {}],
+  ] as const) {
+    test(`${surface}: the ${name} band's Text props are ${JSON.stringify(props)}`, async ($, on) => {
+      const w = world({ files: { [FILE]: { text: fixtures[name], mtimeMs: 1 } } })
+      stage(on, w)
+      beneath(on)
+      mock.clock(on, { now })
+      await start($, w, surface)
+      const band = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })).drawn()
+      expect(texts(band)[0]).toEqual({ text, props })
+    })
+  }
+
+  test(`${surface}: a tone the table does not name draws dim`, async ($, on) => {
+    const odd = { band: { tone: 'odd', head: 'odd band', tail: [] }, pane: [{ row: 'text', tone: 'odd', text: 'odd row' }], toasts: [] }
+    on('state.get', async (_$: any, e: any, next: any) => (e.key === 'view' ? { value: { value: odd, version: 1 } } : next(e)))
+    const w = world()
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    const band = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })).drawn()
+    expect(texts(band)[0]).toEqual({ text: 'odd band', props: { dimColor: true } })
+    const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
+    expect(texts(pane)).toEqual([{ text: 'odd row', props: { dimColor: true } }])
+  })
+
+  test(`${surface}: another component, and another Pane, pass through`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.bad, mtimeMs: 1 } } })
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: Date.parse(vectors.bad.now) })
+    await start($, w, surface)
+    const other = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'other', props: paneProps(), viewport: VIEWPORT })).drawn()
+    expect(other).toMatchObject(CORE)
+    expect(texts(other)).toEqual([CORE_LINE])
+  })
+}
+
+// What the chain beneath the module answers for the band, and for any Pane but the module's.
+const CORE = { type: 'Text', children: ['core'] }
+const CORE_LINE = { text: 'core', props: {} }
+function beneath(on: any) {
+  on('ui.render', { component: 'AbovePrompt' }, () => CORE)
+  on('ui.render', { component: 'Pane' }, () => CORE)
+}
+const VIEWPORT = { columns: 125, rows: 40 }
+const bandProps = (over: Record<string, unknown> = {}): any =>
+  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {}, ...over })
+const paneProps = (): any => ({ title: 'Hierarchy', isFocused: false, bodyColumns: 120, placement: 'inline', scroll: { offset: 0, bodyRows: 20 }, view: {} })
+// The Text props each tone draws with, as the spec's table pins them.
+const TONE: Record<string, Record<string, unknown>> = { bad: { color: 'warning', bold: true }, warn: { color: 'warning' }, work: {}, idle: { dimColor: true } }
+
+// Every Text in the tree, in document order, with its props.
+function texts(n: any): { text: string; props: Record<string, unknown> }[] {
+  if (typeof n !== 'object' || n === null) return []
+  if (n.type === 'Text') return [{ text: (n.children ?? []).join(''), props: n.props ?? {} }]
+  return (n.children ?? []).flatMap(texts)
+}
+// What a drawn tree holds that a status view may not: an element other than Box, Text or core's engine, or a
+// node carrying a press, client or raster key.
+function walk(n: any): string[] {
+  if (typeof n !== 'object' || n === null) return []
+  const found = ['Box', 'Text', 'engine'].includes(n.type) ? [] : [`element ${n.type}`]
+  for (const key of ['press', 'client', 'raster']) if (key in n) found.push(`${n.type} has ${key}`)
+  return [...found, ...(n.children ?? []).flatMap(walk)]
 }

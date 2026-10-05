@@ -193,16 +193,12 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
   const pane: PaneRow[] = []
   for (const t of teams) {
     pane.push(heading('Hierarchy', t))
-    const lines: PaneRow[] = []
-    if (t.pipeline !== null) {
-      const cap = count(t.pipeline.round_cap)
-      for (const item of records(t.pipeline.items)) {
-        if (item.open === true) lines.push({ row: 'text', tone: 'work', text: `round ${count(item.rounds)}/${cap} · ${str(item.to)}` })
-      }
-      const waiting = count(t.pipeline.waiting_on_user)
-      if (waiting > 0) lines.push({ row: 'text', tone: 'warn', text: `${waiting} decisions waiting for you` })
-    }
-    pane.push(...(lines.length ? lines : [{ row: 'text', tone: 'idle', text: 'No pipeline run.' } as PaneRow]))
+    const open = t.pipeline === null ? [] : records(t.pipeline.items).filter((item) => item.open === true)
+    const cap = t.pipeline === null ? 0 : count(t.pipeline.round_cap)
+    if (!open.length) pane.push({ row: 'text', tone: 'idle', text: 'No pipeline run.' })
+    for (const item of open) pane.push({ row: 'text', tone: 'work', text: `round ${count(item.rounds)}/${cap} · ${str(item.to)}` })
+    const waiting = t.pipeline === null ? 0 : count(t.pipeline.waiting_on_user)
+    if (waiting > 0) pane.push({ row: 'text', tone: 'warn', text: `${waiting} ${waiting === 1 ? 'decision' : 'decisions'} waiting for you` })
   }
   for (const t of teams) {
     pane.push(heading('Team', t))
