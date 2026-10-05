@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.5, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.6, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -99,8 +99,18 @@ mockup, it says so.
   caller and lib-status import.
   - `hierarchyDir`, `listExchanges`, `attributedRoster`/`recordLiveness`
     (claude-member liveness), the team-file readers and the existing team
-    liveness rule (the rule `roster.mjs teams` uses), `pipelineRunLive`,
-    `openRunAnchor`, `decisionSummary`, and `resolveConfig().enabled`.
+    liveness rule, `pipelineRunLive`, `openRunAnchor`, `decisionSummary`,
+    and `resolveConfig().enabled`.
+  - r3.6: the team liveness rule is lib-roster's `teamIsLive(t, null)`:
+    pid alive and age ≤ 24 h, with **no invoker**. Passing an invoker
+    would make the pool-wide document depend on which session wrote it.
+    (`roster.mjs teams` computes no live flag, so r3's pointer to it was
+    wrong.)
+  - r3.6: `memberIsLive` (roster.mjs:4060) is an entry-point function, so
+    it moves into lib-hier as one exported function that returns the
+    member's attributed peers row together with its liveness; lib-status
+    uses both (`session_id`, `live`), and roster.mjs's `memberIsLive`
+    calls it with behaviour unchanged.
   - `reportStatus` (roster.mjs:5124). Move it into `lib-hier.mjs`, which
     `listExchanges` lives in, so there is no import cycle. Its skeleton test
     becomes `hasAuthoredContent` (lib-hier.mjs:643), so the codebase keeps
@@ -221,7 +231,7 @@ character.
   "enabled": true,                            // resolveConfig().enabled
   "member_sessions": ["<session id>", "..."], // session ids of live claude members across all live teams
   "teams": [{
-    "team": "agent-tools",
+    "team": "agent-tools",                     // null for the default team (team.json), §4.1
     "members": [{
       "name": "agent-tools-architect", "role": "architect", "label": "architect",
       "kind": "claude", "route": "peer",       // from the team file; kind defaults to "claude"
@@ -353,6 +363,22 @@ roster.mjs status [--plain] [--now <ISO>] --cwd <abs>
   with `teams: []`, and writes nothing.
 - Add a row to `docs/cli-tools.md`.
 
+**Shared fixtures (r3.6).** `agent-hierarchy/tests/fixtures/status/` holds
+status **documents only**. Each consumer adds its own expected-output
+vectors next to its own tests (§6.6 for the mod, §7.6 for claude-tui-line).
+
+- One `<case>.json` per case: `idle` (live members, nothing out), `work`
+  (one dispatch whose timeline runs working → overdue → stalled), `warn` (a
+  blocked member), `bad` (overdue and stalled dispatches), `hidden`
+  (disabled config, every entry `visible:false`), `pipeline` (an open run
+  with items and a parked decision), and `member-session` (a non-empty
+  `member_sessions`).
+- Each is the exact output of `roster.mjs status --now <fixed ISO>` against
+  a pool staged by a test script. A bash drift test regenerates every case
+  and fails unless each is byte-identical to the committed file.
+- Fixtures contain no absolute paths, real session ids or real names.
+- `docs/status-file.md` lists the cases and what each shows.
+
 ### 3.6 Cost per read
 
 - A consumer's read is one `stat` plus a read of a file that is usually
@@ -450,7 +476,11 @@ needs a test. Rows marked "unchanged" need one test proving it (§8 P1 AC 23).
    §"Dispatching to a `route: pane` member" prescribes:
    - `blocked` → relay through AskUserQuestion and `answer`;
    - `not-live` → surface it to the user;
-   - `busy` or `timeout` → it is still working.
+   - `busy` or `timeout` → it is still working;
+   - (r3.6) `no-report` → the member is idle with no report: re-deliver
+     the brief or ping it;
+   - (r3.6) `not-sent` → the brief never arrived: send it with `deliver`;
+   - (r3.6) any other status → act as the returned `message` says.
 
    Before writing this line, the Implementor confirms by reading `deliver`
    that `--wait-only` sends nothing to the member. If it does send
@@ -571,8 +601,10 @@ sign-off". The rule:
 ### 4.1 Members
 
 The document's `teams` list holds exactly the **live** teams in the pool,
-and the member set is every member of those teams. Team liveness uses the
-existing rule. The orchestrator is excluded.
+and the member set is every member of those teams. Team liveness is
+`teamIsLive(t, null)` (§3.1). The orchestrator is excluded. The default
+team (`<hier>/team.json`) has `team: null`, the same value an untagged
+request maps to (r3.6); consumers display a null team as `default`.
 
 `live`:
 
@@ -620,6 +652,9 @@ file's mtime.
 
 **Member.** Look up `to_name` among the team's members. Failing that, use
 the single member whose `role == to`. Failing that, `null`.
+
+**`label`.** The member's `label` (§4.1). With no member, `to_name`, else
+`to` (r3.6).
 
 **`states`** (the first rule that matches decides the whole list):
 
@@ -1088,6 +1123,9 @@ commit whole (§3.7.8). The ACs each step must satisfy are in brackets.
    in `merge-check`, the `test-pipeline-merge.sh` `-ok` fixture change, and
    the negative case. Its own commit, landed after step 3 and before
    step 4; independent of both. [AC 27, 22; AC 14]
+3b. **Pane-line statuses (r3.6).** §3.7.4 item 2's three added status
+   mappings in the Stop hook's pane line, plus an AC 20 assertion for
+   `no-report`. Its own commit, any time before step 7.
 4. **Producer and verb.** `lib-status.mjs`, `roster.mjs status`,
    `tests/fixtures/status/`, `docs/status-file.md`, the `docs/cli-tools.md`
    row. No write triggers yet; tests stage activity files directly.
@@ -1179,8 +1217,10 @@ live pool.
     - the same pool after the anchor gets a bodyless response →
       `pipeline: null`;
     - two open anchors for `t` → `pipeline: null`.
-13. **Docs:** `docs/status-file.md` documents the schema, §4's rules and the
-    fixture vectors. `docs/cli-tools.md` has a `status` row.
+13. **Docs and fixtures:** `docs/status-file.md` documents the schema,
+    §4's rules and the fixture cases. `docs/cli-tools.md` has a `status`
+    row. The §3.5 fixture set exists, and its drift test passes; changing
+    any rule that alters a fixture makes that test fail.
 14. **Full suite:** every existing test passes.
 15. **Version:** bumped in plugin.json and the root marketplace.json
     together.
@@ -1358,6 +1398,18 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.6 (four gaps at P1 step 4, plus a step-3 review nit). The Implementor's
+default was accepted for each, with additions:
+- G1: §3.5 "Shared fixtures": status documents only, seven named cases,
+  generated by `roster.mjs status --now`, guarded by a regenerate-and-compare
+  drift test. AC 13 is updated.
+- G2: team liveness is `teamIsLive(t, null)` (§3.1, §4.1).
+- G3: the default team's `team` is `null`; consumers show `default`.
+- G4: a dispatch with no member is labelled `to_name`, else `to` (§4.2).
+- `memberIsLive` moving into lib-hier is acknowledged (§3.1).
+- The pane line maps `no-report` and `not-sent` and falls back to
+  `message` (§3.7.4); it lands as step 3b.
 
 r3.5 (spec conflict at P1 step 3): AC 7's "existing liveness tests pass
 unchanged" contradicted the r3.3 origin, because those tests backdate the
