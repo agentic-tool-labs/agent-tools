@@ -285,6 +285,26 @@ export function dispatchRecordsFor(sessionId) {
 }
 
 /**
+ * A request's dispatch origin: the `created` of the earliest dispatch row for `requestId`, from any
+ * session, or null when it has none. Every liveness clock starts here, not at the request file's
+ * own `created`, so a request written early and sent later is not charged for its queue time; the
+ * earliest row wins so that a re-send cannot reset the clock. When the request has rows but none
+ * with a parseable `created`, `requestCreated` (the request file's `created`) is the origin, so a
+ * corrupt row cannot hide a dispatch.
+ */
+export function dispatchOrigin(requestId, requestCreated = null) {
+  let origin = null;
+  let rows = 0;
+  for (const r of readPeerRecords()) {
+    if (!r || r.type !== "dispatch" || r.request_id !== requestId) continue;
+    rows++;
+    const t = Date.parse(r.created);
+    if (Number.isFinite(t) && (origin === null || t < Date.parse(origin))) origin = r.created;
+  }
+  return origin !== null ? origin : rows > 0 ? requestCreated : null;
+}
+
+/**
  * True when a SendMessage `to` target satisfies a pending record: it matches
  * the recorded `from` (the delivery envelope's socket address), the recorded
  * `from_name`, or — for an explicit third-party reply-to — the `reply_to`

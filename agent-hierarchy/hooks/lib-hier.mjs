@@ -38,6 +38,12 @@ export const ETA_THRESHOLD_SEC = { small: 5 * 60, medium: 10 * 60, large: 20 * 6
 export function thresholdFor(eta) {
   return ETA_THRESHOLD_SEC[eta] || ETA_THRESHOLD_SEC.small;
 }
+/**
+ * Check-in gaps in multiples of a dispatch's eta threshold T: the first check-in falls due T after
+ * the dispatch origin, the second T/2 after the first, and every later one T after the previous
+ * (the last entry repeats).
+ */
+export const CHECKIN_CADENCE = [1, 0.5, 1];
 /** The activity state a session's own hook event signals. */
 export const SELF_STATE = { UserPromptSubmit: "working", Stop: "idle", Notification: "blocked" };
 export const REQUEST_KEYS = ["tldr", "goal", "context", "constraints", "files", "acceptance", "want_back"];

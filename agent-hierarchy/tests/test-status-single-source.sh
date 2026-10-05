@@ -39,6 +39,18 @@ check "AC7: the eta fallback (thresholdFor) is defined once in hooks/, in lib-hi
 STATIC_LIB_HIER='from[[:space:]]*.\./lib-hier\.mjs|^[[:space:]]*import[[:space:]]+.\./lib-hier\.mjs'
 check "AC7: stream-label has no static import from ./lib-hier.mjs" '! grep -qE "$STATIC_LIB_HIER" "$H/stream-label.mjs" && grep -q "import(\"./lib-hier.mjs\")" "$H/stream-label.mjs"'
 check "AC7: the hook-event→self-state table is defined once in hooks/, in lib-hier" '[ "$(defs "$EVENT_TABLE")" = 1 ] && [ "$(where "$EVENT_TABLE")" = "lib-hier.mjs " ]'
+check "AC7: the check-in cadence is defined once in hooks/, in lib-hier" '[ "$(defs "CHECKIN_CADENCE[[:space:]]*=")" = 1 ] && [ "$(where "CHECKIN_CADENCE[[:space:]]*=")" = "lib-hier.mjs " ]'
+# Hooks other than lib-hier with a line that scales the eta threshold by a cadence number of their own.
+cadence_leaks() {
+  local f
+  for f in "$H"/*.mjs; do
+    [ "$(basename "$f")" = lib-hier.mjs ] && continue
+    grep -E "thresholdFor|ETA_THRESHOLD_SEC" "$f" | grep -qE '0?\.5\b|1\.5\b|/[[:space:]]*2\b' && basename "$f"
+  done
+}
+check "AC7: the cadence numbers exist only in the shared lib" '[ -z "$(cadence_leaks)" ]'
+check "AC7: the dispatch-origin function is defined once in hooks/, in lib-peer" '[ "$(defs "function[[:space:]]+dispatchOrigin\b")" = 1 ] && [ "$(where "function[[:space:]]+dispatchOrigin\b")" = "lib-peer.mjs " ]'
+check "AC7: only lib-peer selects dispatch rows from the peer records" '[ "$(where "type[[:space:]]*===[[:space:]]*\"dispatch\"")" = "lib-peer.mjs " ]'
 check "AC7: no hook restates the self-state values as a list" '[ "$(defs "\"working\",[[:space:]]*\"idle\",[[:space:]]*\"blocked\"")" = 0 ]'
 check "AC7/AC24: reportStatus is defined once in hooks/, in lib-hier" '[ "$(defs "function[[:space:]]+reportStatus\b")" = 1 ] && [ "$(where "function[[:space:]]+reportStatus\b")" = "lib-hier.mjs " ]'
 check "AC24: no byte comparison against the response skeleton remains in hooks/" '[ "$(defs "responseSkeleton")" = 0 ]'

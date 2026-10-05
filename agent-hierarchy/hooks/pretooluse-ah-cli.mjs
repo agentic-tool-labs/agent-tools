@@ -26,10 +26,27 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { logHookError, readHookInput } from "./lib-config.mjs";
+import { isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
 import { isCloseCommand, isTrustCommit, parseAhCommand, scriptUnderRoot } from "./lib-ah-cli.mjs";
 
 const OWN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+/**
+ * A `roster.mjs deliver <name> --req <path>` that is not `--wait-only` sends a brief to a pane
+ * member: record it as this session's dispatch, the same row a SendMessage dispatch gets, so the
+ * Orchestrator's Stop-hook check-ins cover pane work. Written before the command runs; a deliver
+ * that then refuses leaves an open exchange that is still owed either way. The libs load only for
+ * a deliver, since this hook runs on every Bash call.
+ */
+async function recordDeliver(input, parsed) {
+  if (isSubagent(input) || parsed.script !== "roster" || parsed.verb !== "deliver") return;
+  if (typeof parsed.flags.req !== "string" || parsed.flags["wait-only"] === true) return;
+  const sessionId = typeof input.session_id === "string" ? input.session_id : "";
+  const { parseMsgFilename } = await import("./lib-hier.mjs");
+  const { appendDispatchRecord } = await import("./lib-peer.mjs");
+  const meta = parseMsgFilename(parsed.flags.req);
+  if (sessionId && meta && meta.type === "request") appendDispatchRecord(sessionId, meta.id, meta.to);
+}
 
 try {
   const input = await readHookInput();
@@ -41,6 +58,12 @@ try {
   // A role-pack trust commit gets the roster skill gate's `ask` (or `deny`) alone.
   if (isTrustCommit(parsed)) process.exit(0);
   if (!scriptUnderRoot(parsed.scriptPath, OWN_ROOT)) process.exit(0);
+
+  try {
+    await recordDeliver(input, parsed);
+  } catch (err) {
+    logHookError("pretooluse-ah-cli.mjs", err);
+  }
 
   process.stdout.write(
     JSON.stringify({
