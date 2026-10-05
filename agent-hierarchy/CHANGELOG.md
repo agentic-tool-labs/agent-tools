@@ -5,6 +5,32 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.111.0]
+
+`ah` now carries a small read-only mod that shows the hierarchy's status in
+the session. See
+[The status entry: the team at a glance](./README.md#the-status-entry-the-team-at-a-glance).
+
+### Added
+
+- **The status entry.** The engine shows a `⚠ ah: …` line, such as
+  `2 live · 1 out · 1 blocked`, read from `<hier>/status.json` every two seconds.
+  It shows in the Orchestrator's and other non-member sessions, and is hidden in
+  team members' own sessions. Nothing shows when there is no status file or it
+  has expired.
+- **The `status_entry` option.** It is on by default. Turn it off with `/config`
+  or `claude plugin configure` (user scope only) to hide the line, for example
+  when claude-tui-line's `ah` item already shows the counts.
+- **Minimum client version.** The mod half of `ah` needs Claude Code 2.1.289 or
+  later. The command hooks work as before on older clients.
+
+### Fixed
+
+- **A Claude member with `route: pane` is treated as a Claude session.** In the
+  status file it is attributed by its session and hidden like any member
+  session, and it gets the Claude check-in wording. Spawning it no longer
+  records pane activity for it.
+
 ## [0.110.0]
 
 `ah` keeps one status file describing the live hierarchy, for status lines and
