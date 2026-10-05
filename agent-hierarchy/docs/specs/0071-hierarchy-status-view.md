@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.6, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
+Status: r3.7, build-ready for P1. §10 records the user's decisions (Q1–Q6, the
 stub bug) and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this
 file. E9 picked Branch A and E10 required the toggle, so P2b has no open
 gates left; it starts with two small API checks (E12, E13). P1 has one
@@ -71,7 +71,7 @@ mockup, it says so.
 | stream-label maps UserPromptSubmit→working, Stop→idle and Notification(permission_prompt)→blocked, but only for open streams with a pane. | `hooks/stream-label.mjs:24-33` (`SELF_STATE`) |
 | Notification(`permission_prompt`) fires in an `--agent` role session, ~6–8 s after the dialog shows. Its `message` is always `"Claude needs your permission"`; there is no tool name and no `title`. UserPromptSubmit fires on a cross-session SendMessage: within 1 s for an idle peer, at the next tool boundary for a busy one. | evidence E3, E4 |
 | A plugin command hook with `"async": true` is honoured (it no longer delays the next tool). A sync no-op node hook costs 32–36 ms per tool call. An async hook still running when a `claude -p` session exits is killed. | evidence E2 |
-| The enabled flag comes from `resolveConfig().enabled`. It is written outside hook code, by the `/hierarchy` skill. | `lib-config.mjs:1426,1491` |
+| The enabled flag comes from `resolveConfig().enabled`. It is written outside hook code: the `/hierarchy` command (`commands/hierarchy.md`, not a skill) has the model write it with the Write tool. | `lib-config.mjs:1426,1491`; `commands/hierarchy.md:144-151,185-195` |
 | Mod API (Claude Code 2.1.289): `$.fs` has `read/stat/exists/list`. `$.clock.every`. `$.session.cwd()/id()`. `$.ui.status/toast/open`. `$.state` lives for the session and survives reloads; `$.store` survives across sessions. An unasked Pane seats at ≥144 columns, an asked one at any width. AbovePrompt has no width threshold and gives `bodyColumns`. After a hot reload the engine drops the old environment's timers. | plugin-authoring `reference.md:11-71,77,88-90`; `types/claude-code.d.ts:9713-9814`; evidence E8 |
 | One plugin can carry its classic command hooks and a `{modules}` hooks file together: with plugin.json `"hooks": "./mod/hooks.json"`, the standard `hooks/hooks.json` still loads on its own and both fire. (The reference says one hooks.json holds only one kind; a single file with both keys also worked, but this spec does not rely on it.) Tested with `--plugin-dir` only, not an installed marketplace copy. | evidence E9 |
 | `$.ui.status(text)` renders as `⚠ <plugin name>: <text>` on its own line **above** a configured statusLine; the statusLine does not hide it. `ah`'s plugin name is `ah`, so the mod's entry reads `⚠ ah: <text>`. | evidence E10; `agent-hierarchy/.claude-plugin/plugin.json` |
@@ -83,7 +83,7 @@ mockup, it says so.
 
 | Repo / plugin | Kind | Files |
 |---|---|---|
-| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-peer.mjs` (the dispatch-origin function, §3.1), `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `skills/hierarchy/SKILL.md` (the on/off path refreshes status), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. `hooks/pretooluse-push-guard.mjs` (one `merge-check` sign-off condition only, §3.7.9). **Not changed:** `hooks/msg.mjs`. |
+| `agent-tools/agent-hierarchy` (`ah`), P1 | changed + new | new `hooks/lib-status.mjs`, new `hooks/activity.mjs`, `hooks/hooks.json`, `hooks/roster.mjs` (new verb `status`; `deliver`/`answer`/spawn record activity; `reportStatus` moves to lib-hier), `hooks/lib-hier.mjs` (`reportStatus` lands here on `hasAuthoredContent`; `ETA_THRESHOLD_SEC`, `thresholdFor`, `SELF_STATE` and the step-3 cadence constant land here, §3.1; `listExchanges` open rule; `sweep`, §3.7), `hooks/lib-roster.mjs`, `hooks/lib-peer.mjs` (the dispatch-origin function, §3.1), `hooks/lib-decisions.mjs` (trigger only), `hooks/sessionstart.mjs`, `hooks/sessionend-roster.mjs`, `hooks/stop-orchestrator-liveness.mjs` (constants move to lib-hier; second check-in at T/2; reason text for pane members, §3.7), `hooks/pretooluse-ah-cli.mjs` (writes a dispatch row for `deliver`, §3.7), `hooks/stream-label.mjs` (imports `SELF_STATE` from lib-hier); `hooks/roster.mjs` also derives `STREAM_SELF_STATES` from `SELF_STATE`, `commands/hierarchy.md` (the `on`/`off`/`init` steps refresh status, §3.4 item 8), `skills/autonomous-pipeline/SKILL.md` (record wording only, §3.7.6), new `docs/status-file.md`, `docs/cli-tools.md`, new `tests/test-status*.sh`, new `tests/test-exchange-open*.sh`, new `tests/fixtures/status/`, existing tests whose assertions encode "a bodyless response closes a member exchange" (§3.7.7), `.claude-plugin/plugin.json` (0.110.0), root `.claude-plugin/marketplace.json`. `hooks/pretooluse-push-guard.mjs` (one `merge-check` sign-off condition only, §3.7.9). **Not changed:** `hooks/msg.mjs`. |
 | `agent-tools/agent-hierarchy` (`ah`), P2b/P3 | new code | `agent-hierarchy/mod/`, plus `hooks`, `types` and `userConfig` keys in ah's plugin.json (§6.1). |
 | `claude-tui-line` | new items | §7 |
 
@@ -337,15 +337,57 @@ status.json is recomputed and written after each of the following:
    sessions and a disabled hierarchy, as long as `<hier>` exists. A reboot or
    crash then self-heals at the next session in the repo.
 7. `roster.mjs status` (§3.5).
-8. The `/hierarchy` skill's on and off steps call `roster.mjs status --cwd …`
-   once they have changed the config. This is a prose step in
-   `skills/hierarchy/SKILL.md`.
+8. The `/hierarchy` command's config-changing steps refresh the file
+   (r3.7: the flow is the command file `agent-hierarchy/commands/hierarchy.md`,
+   not a skill). That file has the model write `"enabled"` with the Write
+   tool: `on`/`off` (:185-195) and `init` step 5 (:144-151). So the trigger
+   is one prose step in each, placed after the config write and before the
+   resolved-table echo: run
+   `node <AH_ROOT>/hooks/roster.mjs status --plain --cwd <abs cwd>`, in the
+   same form the file already uses for `roster.mjs doctor` (:94, :152). Its
+   one-line output need not be shown. No other step of the command changes,
+   and no code writes `enabled`. If the model skips the step, the next
+   session start rewrites the file anyway (item 6).
 9. Every `liveness-nudge` append to gates.jsonl (at `appendGate`), so
    `checkins` stays current.
 
 Layering is the Implementor's call: put each trigger at the lowest shared
-write helper without an import cycle. No call site may be missed in a way
-that a new caller of that helper would also miss.
+write helper. No call site may be missed in a way that a new caller of that
+helper would also miss.
+
+**How the helpers reach lib-status (r3.7).** The helpers (`appendRosterRecord`,
+`createMessage`, `appendGate` in lib-hier; `writeTeam`/`clearTeam` in
+lib-roster; `appendDecision`/`appendMergeRecord` in lib-decisions) import
+lib-status **statically**, which closes an ESM import cycle with it. This
+replaces r3's "without an import cycle". The alternatives each fail a
+requirement:
+
+- an async `import()` loses the write in any process that exits right after
+  the helper (the Stop hook exits straight after `appendGate`);
+- `require(esm)` throws on Node older than 20.19/22.12, and the swallowed
+  error would silently mean no status file;
+- triggers at entry points miss new callers, and item 2 would need msg.mjs
+  edits (§5);
+- a registration module only works in processes that also import
+  lib-status, which is the entry-point problem again.
+
+The cycle is safe under these conditions, and P1 must keep them:
+
+- **No top-level reads across the cycle.** No module in the cycle reads a
+  binding imported from another cycle member while it is being evaluated.
+  Every use is inside a function that runs after loading. A lib-status
+  constant derived from an imported value is computed on first use, not at
+  module top level. The codebase already relies on this for lib-config ↔
+  lib-roster.
+- **No re-entry.** A status write never calls a triggering helper. A
+  trigger that arrives while a write is already running in the same
+  process is ignored, so a future read helper that writes cannot loop.
+- **Load-order test.** One test, part of AC 5, imports each of
+  `lib-status`, `lib-hier`, `lib-roster`, `lib-decisions`, `lib-peer` and
+  `lib-config` **first**, each in a fresh `node` process. Every one must
+  load without error, and a status write from each must succeed.
+- **Cost.** Every process that imports lib-hier now also loads lib-status.
+  E1 measures that load delta along with the write cost.
 
 ### 3.5 Verb `roster.mjs status`
 
@@ -1130,13 +1172,16 @@ commit whole (§3.7.8). The ACs each step must satisfy are in brackets.
    `tests/fixtures/status/`, `docs/status-file.md`, the `docs/cli-tools.md`
    row. No write triggers yet; tests stage activity files directly.
    [AC 1, 2, 3, 4, 10, 11, 12, 13]
-5. **Write triggers.** §3.4 items 1–9 at the shared helpers, with write
-   isolation. From this commit on, the live pool gets a `status.json`.
-   [AC 5, 6]
+5. **Write triggers.** §3.4 items 1–4 and 6–9 at the shared helpers (the
+   static cycle, with its conditions, §3.4 r3.7), with write isolation.
+   From this commit on, the live pool gets a `status.json`. [AC 5 for
+   those items + the load-order test, 6]
 6. **Activity.** `activity.mjs` and its `hooks/hooks.json` registrations
    (PostToolUse async); SessionEnd removal; pane-member recording in
-   `deliver`/`answer`/spawn/dismiss/disband; `msg.mjs sweep` deletes
-   activity files past its cutoff. [AC 8, 9]
+   `deliver`/`answer`/spawn/dismiss/disband; §3.4 item 5 (an
+   activity-record change writes status); `msg.mjs sweep` deletes activity
+   files past its cutoff, through lib-hier's `sweep`, so msg.mjs itself is
+   untouched (§5). [AC 8, 9, and AC 5 for item 5]
 7. **Release.** Version 0.110.0 in plugin.json and the root marketplace.json
    together; release text with the §3.7.5 note; run E1. [AC 15, 16, 14]
 
@@ -1173,8 +1218,13 @@ live pool.
    - a gone member → `stalled` with `member-gone`;
    - a blocked member → `blocked` that wins over time;
    - after unblocking, the next write applies rule 4.
-5. **Triggers:** each trigger in §3.4 advances `written_at`. Test at least
-   items 1–6. A missed trigger fails its test.
+5. **Triggers:** each trigger in §3.4 advances `written_at`, and a missed
+   trigger fails its test.
+   - Step 5 tests items 1, 2, 3, 4, 6, 7 and 9. Item 8 is a prose step,
+     checked by a grep of its file.
+   - Step 6 tests item 5 (r3.7: activity records have no writer before
+     step 6).
+   - Step 5 also adds the §3.4 load-order test.
 6. **Write isolation:** if status.json cannot be written (read-only
    `<hier>`), the triggering `msg.mjs new` still succeeds, with unchanged
    output and exit code.
@@ -1399,6 +1449,20 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
 
+r3.7 (two step-5 questions):
+- §3.4 item 8 targets `commands/hierarchy.md` (`on`/`off` and `init`
+  step 5) with one prose step running `roster.mjs status --plain`. r1 named
+  a `skills/hierarchy/SKILL.md` that does not exist; §1 and §2 are
+  corrected.
+- §3.4 layering: the trigger helpers import lib-status statically, an
+  allowed ESM cycle. The conditions are: no top-level reads across the
+  cycle, no re-entry, a load-order test, and E1 measuring the load delta.
+  An async import loses Stop-hook writes, `require(esm)` depends on the
+  Node version, and entry-point triggers miss new callers.
+- Item 5's trigger and test move to step 6. AC 5 and §8 steps 5–6 are
+  updated, and step 6's activity-file sweep goes through lib-hier's
+  `sweep`, so msg.mjs stays frozen.
+
 r3.6 (four gaps at P1 step 4, plus a step-3 review nit). The Implementor's
 default was accepted for each, with additions:
 - G1: §3.5 "Shared fixtures": status documents only, seven named cases,
@@ -1478,7 +1542,7 @@ and E13 (P2b start).
 
 | # | Run or measure | Decides |
 |---|---|---|
-| E1 | **Open (P1 step 7).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). r3.3: also copy `~/.claude/agent-hierarchy.peer-pending.jsonl` to `$T/home/.claude/` and run with `HOME=$T/home`, because the status write now reads dispatch rows from that global, append-only file; report its size. Report p50 and p95 for each. | Status write p95 ≤ 15 ms → ship as is. Over 15 ms → add write coalescing (skip a write if the last one was under 1 s ago, plus one trailing write), and amend the spec. `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
+| E1 | **Open (P1 step 7).** Once P1 is built: time the status write path 50×, and `listExchanges` alone 50×, against a copy of the live `agent-tools` `.claude/hierarchy` (copy into `T=$(mktemp -d)`, check `T` is non-empty, and run with `AGENT_HIERARCHY_DIR=$T/hierarchy`). r3.3: also copy `~/.claude/agent-hierarchy.peer-pending.jsonl` to `$T/home/.claude/` and run with `HOME=$T/home`, because the status write now reads dispatch rows from that global, append-only file; report its size. r3.7: also report `node -e 'await import("<hooks>/lib-hier.mjs")'` wall time (p50/p95, 20 runs) on the pre-step-5 commit and on the final P1 commit, since every lib-hier importer now loads lib-status; a delta over 10 ms returns to the Architect. Report p50 and p95 for each. | Status write p95 ≤ 15 ms → ship as is. Over 15 ms → add write coalescing (skip a write if the last one was under 1 s ago, plus one trailing write), and amend the spec. `listExchanges` p95 over 5 ms → add the size pre-check from §3.7.1. |
 | E2 | **Done: async honoured; sync = 32–36 ms per call; async killed at `-p` exit.** Does Claude Code 2.1.289 honour `"async": true` on a command hook in a plugin's hooks.json? Measure the added wall-clock per tool call for PostToolUse(`*`) with and without it. | Async works → register it async. It does not → measure sync cost; over 50 ms per call → escalate Q5 to the user with the number. |
 | E3 | **Done: fires ~6–8 s late; `message` is a constant → `note: null`.** In an `--agent` peer session under a test team in a temp git repo, trigger a permission prompt. Does Notification(`permission_prompt`) fire, and what does its `message` field contain? | Fires → design holds, and `blocked_note` = message. Does not fire → Claude-peer blocked detection has no event source; return to the Architect. |
 | E4 | **Done: yes (idle ≤ 1 s; busy at next tool boundary).** Does UserPromptSubmit fire in a peer when a cross-session `SendMessage` brief arrives? | Yes → `working` is immediate. No → the first PostToolUse sets it, and docs/status-file.md says so. No design change. |
