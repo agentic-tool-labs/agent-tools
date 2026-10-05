@@ -3,8 +3,9 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.11. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
-has its step list. §10 records the user's decisions (Q1–Q6, the stub bug)
+Status: r3.13. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
+adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
 E12 kept userConfig as §6.4 has it; E13 moved the mod's fixtures into an
 embedded module with a drift test (§6.6). P2b's first step is one
@@ -219,7 +220,8 @@ it.
 
 **Versioning:** fields may be added without bumping `schema`. Removing or
 redefining a field means `schema: 2`. Consumers render nothing for any
-`schema` other than 1.
+`schema` other than 1. r3.12: adding a value to an enumerated field is
+also additive, because consumers fall back on unknown values (§4.4 step 4).
 
 **Strings:** before writing, strip C0/C1 control characters (including ESC)
 from every string that came from a file. Cap the lengths: names and labels
@@ -232,12 +234,12 @@ character.
   "written_at": "2026-10-05T02:20:00.000Z",   // ISO-8601 UTC, ms precision
   "expires_at": "2026-10-06T02:20:00.000Z",   // written_at + 24 h; consumers treat the doc as absent after it
   "enabled": true,                            // resolveConfig().enabled
-  "member_sessions": ["<session id>", "..."], // session ids of live claude members across all live teams
+  "member_sessions": ["<session id>", "..."], // session ids of live claude members (every member that is not pane-driven, §4.1 r3.13, whatever its route) across all live teams
   "teams": [{
     "team": "agent-tools",                     // null for the default team (team.json), §4.1
     "members": [{
       "name": "agent-tools-architect", "role": "architect", "label": "architect",
-      "kind": "claude", "route": "peer",       // from the team file; kind defaults to "claude"
+      "kind": "claude", "route": "peer",       // kind from the team file, default "claude"; r3.13: route = how ah reaches it: "pane" iff pane-driven (§4.1), else "peer" (a claude+pane member reads "peer")
       "session_id": "…" | null,                // claude member attributed through attributedRoster
       "live": true | false | null,             // §4.1
       "activity": "working" | "idle" | "blocked" | "unknown",
@@ -702,13 +704,46 @@ and the member set is every member of those teams. Team liveness is
 team (`<hier>/team.json`) has `team: null`, the same value an untagged
 request maps to (r3.6); consumers display a null team as `default`.
 
+**r3.13, the one predicate.** "Pane-driven" means a member that `ah`
+reaches through its pane (`deliver`/`answer`), with its activity in
+`pane-<name>.json`.
+
+- The predicate is pretooluse-route-gate.mjs's existing `isPaneMember`:
+  `resolveKind(m) !== KIND_DEFAULT && m.route === "pane"`.
+- It moves, unchanged, into `hooks/lib-config.mjs` beside `resolveKind`,
+  `KIND_DEFAULT` and `routeHasPane`, and is exported. The route gate
+  imports it. It has exactly one definition.
+- Every site that decides "pane-driven" uses it, not `route` alone.
+- A `kind: claude` member with `route: pane` is valid (lib-roster.mjs only
+  forces non-Claude kinds onto `pane`). It is **not** pane-driven:
+  - it is spawned with the same `claude --agent ah:<role>` command as a
+    peer;
+  - `deliver` refuses Claude kinds;
+  - the route gate already treats it as a Claude session.
+- "Has a pane" (layout, spawn, `transport_id`) is a different question
+  and stays on `routeHasPane`. A claude+pane member does have a pane.
+- Rejected alternative: forbidding claude+pane in the validator. That
+  would change `add`/`spawn-ad-hoc` behaviour and need a migration for
+  existing team files, for no gain.
+
 `live`:
 
-- Claude (`route: peer`): the existing `recordLiveness` result for the
-  member's attributed peers row. With no attributed row, `false`.
-- Pane (`route: pane`): `false` if its activity record says `unknown` because
-  `deliver` saw `agent_not_found`. `true` if it has any other activity
-  record. `null` if it has none.
+- Claude (every member that is not pane-driven, whatever its `route`):
+  the existing `recordLiveness` result for the member's attributed peers
+  row. With no attributed row, `false`.
+  - r3.13, attribution needs nothing new. A claude+pane session's
+    SessionStart writes its `up` row (`session_id`; `pane_id` from
+    `HERDR_PANE_ID`; `role` from `--agent`).
+  - `attributedRoster` names it by matching `pane_id` to the member's
+    `transport_id` plus its role, exactly as for a peer in a pane.
+  - So it gets `session_id`, `activity` from `<session_id>.json`, and a
+    place in `member_sessions`.
+  - Ceiling: one started by hand without `--agent ah:<role>` writes no
+    row. It is not attributed and shows the view, the same limit as for
+    any Claude member.
+- Pane-driven (the predicate): `false` if its activity record says
+  `unknown` because `deliver` saw `agent_not_found`. `true` if it has any
+  other activity record. `null` if it has none.
 
 `activity`: from the member's activity record; `unknown` if there is none.
 A member with `live === false` shows `activity` as recorded, but consumers
@@ -842,11 +877,40 @@ Consumers take these steps:
 
 1. Treat the doc as absent if the file is missing, unreadable, over 256 KB,
    not JSON, `schema ≠ 1`, or `now ≥ expires_at`.
+   - r3.12: 256 KB means 262,144 bytes. A file whose size is greater than
+     that is absent; one of exactly 262,144 bytes is read. The size is
+     checked before parsing.
+   - r3.12, malformed shape: the doc is also absent when a field the
+     consumer reads is missing, has the wrong JSON type, or, for a
+     timestamp, does not parse as an ISO-8601 instant. The fields are:
+     - `expires_at`;
+     - `member_sessions` (an array of strings);
+     - `timeline` (a non-empty array, with every entry's `at`
+       parseable);
+     - in the picked entry: `visible` (a boolean), `tone`, `text` and
+       `short` (strings).
+
+     A missing `member_sessions` is therefore absent, not empty, so a
+     malformed doc fails toward showing nothing. A consumer does not
+     check fields it does not read, and it ignores unknown fields.
 2. Pick the entry that is current at `now`: the last element with
    `at ≤ now`. If `now` is before the first element, use the first.
 3. Render nothing if the entry has `visible: false`, or if the viewing
    session's id is in `member_sessions`. The second condition gives the
    Orchestrator-only view (user decision Q3).
+   - r3.12: precisely, the view is hidden in **member sessions** and shown
+     in every other session in the checkout: the Orchestrator's, plain
+     sessions, and `--agent` sessions on no team. `ah` has no record of
+     which session is "the Orchestrator", and the doc does not name one.
+     `member_sessions` is the only signal.
+   - Consumers must not add a heuristic of their own, such as hiding on
+     the session's agent name. That would also hide an Orchestrator
+     launched with `--agent ah:orchestrator`, and it re-derives
+     membership.
+4. r3.12, enumerated values are open under `schema: 1`. A producer may
+   add a value with a doc update. A consumer falls back and never rejects:
+   an unknown `tone` string renders in the `idle` colour. A `tone` that is
+   not a string is malformed (step 1).
 
 Consumers never re-derive eta, stall, liveness, counts or the status text.
 
@@ -952,6 +1016,13 @@ The rest of §6 calls the mod's folder `<mod>` = `agent-hierarchy/mod`.
 2. The file is `<that dir>/.claude/hierarchy/status.json`.
 3. Resolve the path again when `cwd` changes.
 4. With no `.git` anywhere up the tree, there is no file.
+
+r3.12: this is exactly the rule `ah`'s writer uses (`hierarchyDir` →
+`findGitRoot` in `hooks/lib-config.mjs`). In a linked worktree, both find
+the worktree's own `.git` **file**, so a worktree is its own pool and its
+`status.json` is `<worktree>/.claude/hierarchy/status.json`. A worktree
+with no pool has no file, and the reader shows nothing. The writer never
+falls back to the main checkout.
 
 Ceiling (`ponytail:` comment): this ignores `AGENT_HIERARCHY_DIR` and `ah`'s
 non-git fallback dir. claude-tui-line uses the same rule (§7.2).
@@ -1232,6 +1303,12 @@ Changes to make:
 
 - **Absent cases:** missing file, malformed JSON, `schema: 2`, expired doc,
   over 256 KB, `visible:false`, member session. Each must yield null.
+  r3.12 adds:
+  - exactly 262,144 bytes is read, and 262,145 is absent;
+  - a malformed shape is null (§4.4 step 1): one case each for
+    `expires_at` unparseable, `member_sessions` missing, `timeline`
+    empty, an unparseable `at`, and `visible` missing;
+  - an unknown `tone` string renders in the `idle` colour.
 - **Timeline pick:** before the first entry, at an exact `at`, between
   entries, after the last.
 - **Tones:** each tone maps to its colour.
@@ -1520,6 +1597,27 @@ Every commit passes the full `ah` bash suite and
    whose `session.start` only returns `next(e)`. Add the read-only guard
    test. This commit isolates the riskiest change, the hooks key, so a
    bisect lands on it alone. [AC 2(a), 3, 4, 7]
+
+1a. **Pane-driven predicate (r3.13).** An `ah` producer fix, with no mod
+   code. Its own commit, after step 1 and before step 3.
+   - Move `isPaneMember` into lib-config.mjs and export it. The route gate
+     imports it.
+   - Use it at the three sites that 0071 P1 keyed on `route` alone:
+     - `describeMembers` in lib-status.mjs: the branch choice, the `route`
+       it reports, and the `member_sessions` filter (now: live, not
+       pane-driven, has a `session_id`);
+     - the post-launch idle seed in `layoutAndLaunch` (roster.mjs ~:4042);
+     - `paneMemberName` in stop-orchestrator-liveness.mjs (~:90), so a
+       claude+pane member gets the Claude wording.
+   - Also check the other "pane member" sites from 0071 (§3.3's
+     deliver/answer/dismiss/disband recording, §3.7.3–3.7.4). Each one that
+     decides pane-driven uses the predicate. Sites that decide "has a
+     pane" keep `routeHasPane`.
+   - List any pre-0071 `route === "pane"` site that decides pane-driven in
+     the step report, and do **not** change it. That is a follow-up, not
+     this spec.
+
+   [AC 12, 4]
 2. **Embedded fixtures and drift test.** Generate `mod/tests/fixtures.ts`,
    extend the fixture-regeneration command to cover it, and add the bash
    drift test with its one-time failure demonstration (§6.6 r3.11).
@@ -1545,14 +1643,29 @@ Every commit passes the full `ah` bash suite and
      `claude plugin configure`, at user scope only, because project and
      local settings cannot set it;
    - the fresh-install "not yet set" line is informational.
+
+   r3.12: in the same commit, `docs/status-file.md` catches up with §4.4:
+   - "Reading it": the exact byte cap, the malformed-shape rule, and the
+     unknown-`tone` fallback;
+   - "Reading it": who sees the view. Replace line 25's "Only the
+     Orchestrator's sessions see the view" with "member sessions see
+     nothing; every other session in the checkout sees the view";
+   - "Schema": enumerated values may be added under `schema: 1`;
+   - one line on location: a linked worktree is its own pool (§6.2
+     r3.12);
+   - r3.13: the member `route` field means how `ah` reaches the member
+     (`pane` only when it is pane-driven), and `member_sessions` holds
+     every live Claude member, whatever its route.
+
    [AC 10, 4]
 5. **Release.** Bump to 0.111.0 in plugin.json and in the root
    marketplace.json, so the two agree. Add a CHANGELOG [0.111.0] entry
    (Added: the mod's status entry and the `status_entry` option; the
    minimum client version). [AC 11, 4]
 
-If the user decides to ship P2b together with P3 (§8 header), step 5 moves
-to the end of P3, and P3's version is used instead.
+r3.12, decision d1: P2b ships alone as 0.111.0. This was decided for the
+user by the Reviewer and is flagged for the user's review at the end of the
+run. Step 5 stays at the end of P2b.
 
 **ACs.**
 
@@ -1577,7 +1690,8 @@ to the end of P3, and P3's version is used instead.
    - matches `vectors.ts` for all seven cases;
    - every case has a vector and every vector names a case;
    - the absent cases clear it: missing, unparseable, over 256 KB,
-     `schema: 2`, expired, `visible: false`;
+     `schema: 2`, expired, `visible: false`, and r3.12's malformed shapes
+     (§4.4 step 1, the same five cases as §7.6);
    - it does not render in a member session;
    - its text has no `ah · ` prefix;
    - control characters are stripped.
@@ -1600,9 +1714,24 @@ to the end of P3, and P3's version is used instead.
 9. The drift test fails unless `fixtures.ts` is byte-identical to a fresh
    generation, and it has been seen to fail once, on a one-byte edit in a
    temp copy.
-10. The README carries the four step-4 points.
+10. The README carries the four step-4 points, and `docs/status-file.md`
+    carries the four r3.12 points and the r3.13 point.
 11. plugin.json and the root marketplace.json both say 0.111.0, and the
-    CHANGELOG has the [0.111.0] entry.
+    CHANGELOG has the [0.111.0] entry. r3.13: the entry includes a Fixed
+    line for step 1a: a Claude member with `route: pane` is treated as a
+    Claude session.
+12. r3.13 (step 1a), in `ah`'s bash suite:
+    - Claude+pane: a team with a `kind: claude, route: pane` member whose
+      `up` row's `pane_id` and role match its `transport_id` and role. The
+      doc gives it `session_id`, `route: "peer"`, activity from
+      `<session_id>.json`, and a place in `member_sessions`. The launch
+      seeds no `pane-<name>.json` for it. A stalled request addressed to
+      it gets the Claude nudge wording, not the `deliver` wording.
+    - Non-Claude pane member: unchanged. It has `pane-<name>.json`, no
+      `session_id`, is not in `member_sessions`, and keeps the pane
+      wording.
+    - A grep check: `isPaneMember` is defined once, in lib-config.mjs.
+    - The §3.5 fixtures do not change.
 
 ### P3: band, pane, toasts
 
@@ -1688,6 +1817,47 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.13 (Reviewer spec-defect, from r3.12's NEEDS-CHECK): §4.1 and §3.2
+equated "pane member" with `route: pane`. A valid claude+pane member
+therefore took the pane branch. It got no `session_id`, missed
+`member_sessions` (so its own session would show the view, against Q3),
+got a stale idle `pane-<name>.json` seed, and got `deliver` wording in
+nudges that `deliver` refuses.
+
+- Fix: one predicate, the route gate's `isPaneMember`, moves to
+  lib-config.mjs and is used at every pane-driven decision.
+- Attribution needs nothing new: the SessionStart `up` row plus
+  `attributedRoster`'s pane-id match already name the session.
+- The doc's `route` now means how `ah` reaches the member.
+- New P2b step 1a and AC 12.
+- Both sites the Reviewer named (roster.mjs ~:4042 and the Stop hook
+  ~:90) came from 0071 P1, in steps 6 and 3, so they are in scope.
+  Pre-0071 sites are listed, not changed.
+- No claude-tui-line impact: P2a reads neither `route` nor members, and
+  `member_sessions` keeps its documented meaning.
+
+r3.12 (claude-tui-line's P2a contract questions CQ1–CQ6, answered from the
+contract as built at 64ad0f4; no producer change):
+
+- §4.4 now states:
+  - 256 KB = 262,144 bytes, checked before parsing;
+  - the malformed-shape rule; a missing `member_sessions` is absent, not
+    empty;
+  - who sees the view: member sessions are hidden and every other session
+    is shown;
+  - no consumer heuristics;
+  - enumerated values are open (an unknown `tone` uses the `idle`
+    colour).
+- §3.2 matches §4.4. §6.2 confirms the writer and reader share the walk-up
+  rule, so a worktree is its own pool.
+- §7.6 and P2b AC 5 gain the new absent cases.
+- E7's method is now direct `hyperfine` with an A/A check and a live,
+  visible 20 KB doc. Over the bound returns to the Architect, because an
+  in-process cache may not apply to a per-render process.
+- P2b step 4 brings `docs/status-file.md` up to date.
+- Decision d1 (Reviewer, for the user, flagged for review): P2b ships
+  alone as 0.111.0.
 
 r3.11 (E12, E13 in; P2b made build-ready):
 
@@ -1832,7 +2002,7 @@ was within every bound: write p95 warm 5.63 ms and cold 13.40 ms;
 | E3 | **Done: fires ~6–8 s late; `message` is a constant → `note: null`.** In an `--agent` peer session under a test team in a temp git repo, trigger a permission prompt. Does Notification(`permission_prompt`) fire, and what does its `message` field contain? | Fires → design holds, and `blocked_note` = message. Does not fire → Claude-peer blocked detection has no event source; return to the Architect. |
 | E4 | **Done: yes (idle ≤ 1 s; busy at next tool boundary).** Does UserPromptSubmit fire in a peer when a cross-session `SendMessage` brief arrives? | Yes → `working` is immediate. No → the first PostToolUse sets it, and docs/status-file.md says so. No design change. |
 | E5 | **Done: tests answer every `$` call; `mock.clock` drives `every` (§6.6).** `claude plugin test`: how does a test stage `$.fs.stat/read` content (a `mock`, or a real file under the test's cwd), and does the mocked clock drive `$.clock.every`? | Shapes the register.tsx tests. view.ts tests do not depend on it. |
-| E7 | **Open (P2a).** claude-tui-line `bench/bench.sh` with `ah` placed, against a 20 KB status file, before and after. | Added p95 > 1 ms → cache the parsed doc by mtime in-process. Otherwise nothing. |
+| E7 | **Open (P2a).** claude-tui-line `bench/bench.sh` with `ah` placed, against a 20 KB status file, before and after. **r3.12, method replaced (CQ6).** `bench.sh` is publish/-only and reports medians only, so run `hyperfine` directly on a Release build made outside `publish/`. (1) A/A: the baseline config twice. Its |Δp95| must be < 0.5 ms, or add runs until it is, or report the run as inconclusive. (2) Baseline vs. the same config with `ah` and `ah-short` placed. Use ≥ 200 runs per arm with warm-up. The status file is ~20 KB, schema 1, and generated for the run so that `expires_at` is in the future, the current entry is `visible: true`, and the bench session id is not in `member_sessions`. The stdin `cwd` must walk up to it. Otherwise the run only times the early-absent path. Report p50 and p95 per arm, and the A/A. | Added p95 ≤ 1 ms → nothing. Over → **return to the Architect** with the split between read, parse and render, before adding anything. r3.12: the r2 remedy (an in-process mtime cache) helps only if one process serves more than one render, so it is not applied blind. |
 | E8 | **Done: the engine cancels it.** After a hot reload, is a `$.clock.every` timer started in the old `session.start` cancelled by the engine? | No → the module must cancel it (`session.end`, or a guard). |
 | E9 | **Done: Branch A, both forms load both files (§6.1).** Can one plugin carry both a classic command-hooks file and a `{modules:[…]}` hooks file? Steps: (1) In `T=$(mktemp -d)`, checked non-empty, build plugin `$T/p`. `hooks/hooks.json` holds a classic SessionStart command hook that writes `$T/classic.ok`. `mod/hooks.json` is `{"modules":["./register.ts"]}`, and its `session.start` hook does `$.fs.write("$T/mod.ok","1")`, path baked in, then `next(e)`. (2) Try each plugin.json form in turn: `"hooks": "./mod/hooks.json"`, and `"hooks": ["./hooks/hooks.json","./mod/hooks.json"]`. (3) For each form, run `claude plugin validate $T/p`, then `timeout 90 claude --plugin-dir $T/p -p "reply ok"` from `$T/repo` (`git -C "$T/repo" init`). Record which markers appear. (4) Check `pgrep -fl claude` and kill anything this probe started. | Both markers under some form, and validate clean → **Branch A**, using that form. Otherwise → **Branch B**. If `mod.ok` never appears under `-p` even in a lone-module control plugin, repeat the run interactively, as in E10. |
 | E10 | **Done: both render (`⚠ <plugin>: …` above the statusLine) → toggle (§6.4).** Note for any rerun: the 2.1.289 folder-trust dialog defaults to "No, exit"; accept with `Down` then `Enter`. Does a configured `statusLine` command hide `$.ui.status` output? Steps: (1) In `T=$(mktemp -d)`, checked non-empty, run `git -C "$T/repo" init`. Write `$T/repo/.claude/settings.json` with `{"statusLine":{"type":"command","command":"echo E10-STATUSLINE"}}`. (2) Build mod plugin `$T/m`. Its `session.start` calls `$.ui.status("E10-PROBE")` and writes `$T/m.ok`. (3) Run `tmux new-session -d -s e10-$$ -x 200 -y 50 -c "$T/repo" "claude --plugin-dir $T/m"`. If the folder-trust dialog shows in `tmux capture-pane -p`, accept it with `send-keys Enter`. Wait ≤ 30 s, until `$T/m.ok` exists. (4) Run `tmux capture-pane -p -t e10-$$ > $T/screen.txt`, then grep it for both strings. (5) Run `tmux kill-session -t e10-$$`, then check `pgrep -fl claude` and kill what this probe started. | STATUSLINE shown and PROBE absent → no toggle (§6.4). Both shown → `status_entry` toggle, default on. STATUSLINE absent, or `m.ok` absent → the probe is invalid; fix it and rerun. Never guess. |
