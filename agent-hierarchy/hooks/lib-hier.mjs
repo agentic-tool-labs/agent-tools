@@ -916,6 +916,15 @@ export function recordLiveness(rec, now = Date.now()) {
 }
 
 /**
+ * One named team member's attributed peers row (from an `attributedRoster` result) and whether it
+ * is live: no row, or a `down` one, is not live; otherwise `recordLiveness` decides.
+ */
+export function attributedLiveness(roster, name) {
+  const rec = roster.find((r) => r.name === name) || null;
+  return { rec, live: Boolean(rec) && rec.status !== "down" && recordLiveness(rec).live };
+}
+
+/**
  * Spec 0040 §1.2 + 0046 §2.2/§2.4: the not-down peers.jsonl records attributed to `team` (null =
  * default team), each with recordLiveness() applied — the enumeration disband/dismiss fall
  * back to when no team.json exists, and disband's source of extra non-team peers when one

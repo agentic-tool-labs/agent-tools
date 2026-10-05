@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "written_at": "2026-01-01T12:00:00.000Z",
+  "expires_at": "2026-01-02T12:00:00.000Z",
+  "enabled": true,
+  "member_sessions": [],
+  "teams": [
+    {
+      "team": "demo",
+      "members": [
+        {
+          "name": "demo-architect",
+          "role": "architect",
+          "label": "architect",
+          "kind": "codex",
+          "route": "pane",
+          "session_id": null,
+          "live": true,
+          "activity": "idle",
+          "activity_at": "2026-01-01T11:45:00.000Z",
+          "blocked_by": null,
+          "blocked_note": null
+        },
+        {
+          "name": "demo-reviewer",
+          "role": "reviewer",
+          "label": "reviewer",
+          "kind": "codex",
+          "route": "pane",
+          "session_id": null,
+          "live": true,
+          "activity": "working",
+          "activity_at": "2026-01-01T11:50:00.000Z",
+          "blocked_by": null,
+          "blocked_note": null
+        }
+      ],
+      "dispatches": [
+        {
+          "id": "20260101-115000-p002",
+          "slug": "ac-1",
+          "to": "reviewer",
+          "to_name": "demo-reviewer",
+          "member": "demo-reviewer",
+          "label": "reviewer",
+          "eta": "large",
+          "eta_ms": 1200000,
+          "created": "2026-01-01T11:50:00.000Z",
+          "sent_at": "2026-01-01T11:50:00.000Z",
+          "checkins": 0,
+          "reported_at": null,
+          "states": [
+            {
+              "at": "2026-01-01T11:50:00.000Z",
+              "state": "working"
+            },
+            {
+              "at": "2026-01-01T12:10:00.000Z",
+              "state": "overdue"
+            },
+            {
+              "at": "2026-01-01T12:20:00.000Z",
+              "state": "stalled",
+              "reason": "no-report"
+            }
+          ]
+        }
+      ],
+      "dispatches_truncated": 0,
+      "pipeline": {
+        "anchor_id": "20260101-113000-p000",
+        "started": "2026-01-01T11:30:00.000Z",
+        "round_cap": 3,
+        "waiting_on_user": 1,
+        "items": [
+          {
+            "slug": "ac-1",
+            "rounds": 2,
+            "open": true,
+            "to": "reviewer"
+          }
+        ]
+      }
+    }
+  ],
+  "timeline": [
+    {
+      "at": "2026-01-01T12:00:00.000Z",
+      "visible": true,
+      "tone": "work",
+      "live": 2,
+      "out": 1,
+      "blocked": 0,
+      "overdue": 0,
+      "stalled": 0,
+      "text": "2 live · 1 out",
+      "short": "2/1"
+    },
+    {
+      "at": "2026-01-01T12:10:00.000Z",
+      "visible": true,
+      "tone": "bad",
+      "live": 2,
+      "out": 1,
+      "blocked": 0,
+      "overdue": 1,
+      "stalled": 0,
+      "text": "2 live · 1 out · 1 overdue",
+      "short": "2/1 1o"
+    },
+    {
+      "at": "2026-01-01T12:20:00.000Z",
+      "visible": true,
+      "tone": "bad",
+      "live": 2,
+      "out": 1,
+      "blocked": 0,
+      "overdue": 0,
+      "stalled": 1,
+      "text": "2 live · 1 out · 1 stalled",
+      "short": "2/1 1s"
+    }
+  ]
+}

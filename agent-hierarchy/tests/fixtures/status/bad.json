@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "written_at": "2026-01-01T12:00:00.000Z",
+  "expires_at": "2026-01-02T12:00:00.000Z",
+  "enabled": true,
+  "member_sessions": [],
+  "teams": [
+    {
+      "team": null,
+      "members": [
+        {
+          "name": "demo-architect",
+          "role": "architect",
+          "label": "architect",
+          "kind": "codex",
+          "route": "pane",
+          "session_id": null,
+          "live": true,
+          "activity": "working",
+          "activity_at": "2026-01-01T11:54:00.000Z",
+          "blocked_by": null,
+          "blocked_note": null
+        },
+        {
+          "name": "demo-reviewer",
+          "role": "reviewer",
+          "label": "reviewer",
+          "kind": "codex",
+          "route": "pane",
+          "session_id": null,
+          "live": true,
+          "activity": "working",
+          "activity_at": "2026-01-01T11:50:00.000Z",
+          "blocked_by": null,
+          "blocked_note": null
+        }
+      ],
+      "dispatches": [
+        {
+          "id": "20260101-115000-b002",
+          "slug": "review-step",
+          "to": "reviewer",
+          "to_name": "demo-reviewer",
+          "member": "demo-reviewer",
+          "label": "reviewer",
+          "eta": "small",
+          "eta_ms": 300000,
+          "created": "2026-01-01T11:50:00.000Z",
+          "sent_at": "2026-01-01T11:50:00.000Z",
+          "checkins": 1,
+          "reported_at": null,
+          "states": [
+            {
+              "at": "2026-01-01T11:50:00.000Z",
+              "state": "working"
+            },
+            {
+              "at": "2026-01-01T11:55:00.000Z",
+              "state": "overdue"
+            },
+            {
+              "at": "2026-01-01T11:57:30.000Z",
+              "state": "stalled",
+              "reason": "no-report"
+            }
+          ]
+        },
+        {
+          "id": "20260101-115400-b001",
+          "slug": "build-step",
+          "to": "architect",
+          "to_name": "demo-architect",
+          "member": "demo-architect",
+          "label": "architect",
+          "eta": "small",
+          "eta_ms": 300000,
+          "created": "2026-01-01T11:54:00.000Z",
+          "sent_at": "2026-01-01T11:54:00.000Z",
+          "checkins": 0,
+          "reported_at": null,
+          "states": [
+            {
+              "at": "2026-01-01T11:54:00.000Z",
+              "state": "working"
+            },
+            {
+              "at": "2026-01-01T11:59:00.000Z",
+              "state": "overdue"
+            },
+            {
+              "at": "2026-01-01T12:01:30.000Z",
+              "state": "stalled",
+              "reason": "no-report"
+            }
+          ]
+        }
+      ],
+      "dispatches_truncated": 0,
+      "pipeline": null
+    }
+  ],
+  "timeline": [
+    {
+      "at": "2026-01-01T12:00:00.000Z",
+      "visible": true,
+      "tone": "bad",
+      "live": 2,
+      "out": 2,
+      "blocked": 0,
+      "overdue": 1,
+      "stalled": 1,
+      "text": "2 live · 2 out · 1 overdue · 1 stalled",
+      "short": "2/2 1o 1s"
+    },
+    {
+      "at": "2026-01-01T12:01:30.000Z",
+      "visible": true,
+      "tone": "bad",
+      "live": 2,
+      "out": 2,
+      "blocked": 0,
+      "overdue": 0,
+      "stalled": 2,
+      "text": "2 live · 2 out · 2 stalled",
+      "short": "2/2 2s"
+    }
+  ]
+}

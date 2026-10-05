@@ -85,6 +85,8 @@
  *                       [--cwd <path>]
  *                       Re-renders one stream's tab label; what hooks/stream-label.mjs runs.
  *   roster.mjs teams   [--cwd <path>] [--orchestrator-pid <pid>]
+ *   roster.mjs status  [--plain] [--now <ISO>] [--cwd <path>]
+ *                       Computes the hierarchy status document, writes <hier>/status.json, prints it.
  *   roster.mjs reap    [--commit] [--cwd <path>]
  *                       (bare: lists orphaned team records — dead/null orchestrator pid,
  *                       age never a factor — and deletes nothing; --commit removes them.)
@@ -159,9 +161,10 @@ import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
-import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
+import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
+import { plainStatus, writeStatus } from "./lib-status.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
@@ -4058,8 +4061,7 @@ function warnMixedPrefixSpawnOne(dir, member) {
 /** Spec 0009 §6.3 step 4: the same up/pid, seen|briefed/freshness liveness rule `roster()`
     (lib-hier.mjs) applies per-record, applied here to one named team member. */
 function memberIsLive(dir, name) {
-  const rec = attributedRoster(dir).find((r) => r.name === name);
-  return Boolean(rec) && rec.status !== "down" && recordLiveness(rec).live;
+  return attributedLiveness(attributedRoster(dir), name).live;
 }
 
 /**
@@ -6695,6 +6697,20 @@ try {
       team.orchestrator = { ...(team.orchestrator || {}), pid: suppliedPid };
       writeTeam(dir, team, teamFile);
       out({ adopted: true, team_id: team.team_id, orchestrator: team.orchestrator });
+      break;
+    }
+
+    case "status": {
+      // The hierarchy status document (docs/status-file.md): computed, written to <hier>/status.json,
+      // printed. --now evaluates it as of that instant, for tests.
+      let nowMs = Date.now();
+      if (opts.now !== undefined) {
+        nowMs = typeof opts.now === "string" ? Date.parse(opts.now) : NaN;
+        if (!Number.isFinite(nowMs)) fail(`status: --now takes an ISO-8601 time, got ${JSON.stringify(opts.now)}`);
+      }
+      const doc = writeStatus(cwd, nowMs);
+      if (opts.plain === true) process.stdout.write(plainStatus(doc, nowMs) + "\n");
+      else out(doc);
       break;
     }
 
