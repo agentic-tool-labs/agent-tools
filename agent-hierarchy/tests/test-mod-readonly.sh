@@ -25,7 +25,7 @@ check() {
 # RETURN_KEYS plus every element type not in DRAWABLE.
 ALLOWED_CALLS="session.cwd session.id fs.stat fs.read fs.exists clock.every clock.now state.get state.set ui.status ui.toast ui.open ui.resolve command.register"
 ALLOWED_EVENTS="session.start ui.close command.run ui.render"
-MATCHERS="command.run:command=hierarchy-pane ui.render:component=Pane,requestId=ah-status ui.render:component=AbovePrompt"
+MATCHERS="command.run:command=hierarchy-pane ui.render:component=Pane,requestId=ah-status ui.render:component=AbovePrompt ui.close:id=ah-status"
 RENDER_ELEMENTS="Box Text engine Button Input Select Link Code Markdown Client Svg Raster Image"
 DRAWABLE="Box Text engine"
 RETURN_KEYS="context exitCode press client raster deny"
@@ -327,6 +327,10 @@ on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => h
 on('session.start', async ($, e, next) => { const { Button } = $.ui.resolve(e); return next(e) })
 on('command.run', { command: 'hierarchy-pane' }, ($, e, next) => ({ text: 'ok', [`context`]: ['x'] }))
 on('ui.close', ($, e, next) => ({ deny: 'x' }))
+on('ui.close', ($, e, next) => next(e))
+on('ui.close', { id: 'other' }, ($, e, next) => next(e))
+import { update } from 'claude-code'
+on('ui.render', { component: 'Pane', requestId: 'other' }, ($, e, next) => next(e))
 EOF
 
 # The import rule closes a helper kept outside the scan: mod/types/ is not scanned, so a value import from
@@ -357,9 +361,10 @@ p3() {
 p3 "on('session.start', (\$, e, next) => next(e))" \
    "on('command.run', { command: 'hierarchy-pane' }, (\$, e, next) => ({ text: 'ok' }))" \
    "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, (\$, e, next) => next(e))" \
-   "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))"
+   "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))" \
+   "on('ui.close', { id: 'ah-status' }, (\$, e, next) => next(e))"
 OUT="$(violations "$SANDBOX/p3/mod")$(valnet "$SANDBOX/p3")"
-check "a register with both ui.render matchers and the command.run matcher passes the lexer and the validate net" '[ -z "$OUT" ]'
+check "a register with the ui.close matcher, both ui.render matchers and the command.run matcher passes the lexer and the validate net" '[ -z "$OUT" ]'
 p3 "on('session.start', (\$, e, next) => next(e))" "on('ui.render', (\$, e, next) => next(e))"
 OUT=$(valnet "$SANDBOX/p3")
 check "the validate net rejects ui.render printed with no matcher" 'printf "%s" "$OUT" | grep -q "needs one of its matchers"'
