@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.25. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.26. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1350,8 +1350,11 @@ on a hot reload (E8). The module adds no cancel or guard.
   - A key toasts at most once per session.
   - The seen set lives in `$.state`, so it survives reloads.
   - Prune keys whose subject is no longer in the doc.
-- **Seeding.** On the first tick of a session where the seen set does not
-  exist yet, add every current key **without toasting**. A new session does
+- **Seeding.** On the first tick whose `view` is non-null (§6.7) while
+  the seen set has never been written, add every current key **without
+  toasting**. r3.26: a tick with a `null` view neither seeds nor prunes
+  (§6.7). An early empty seed would make the first real doc replay as
+  toasts. A new session does
   not replay old events, and neither does a mod first loaded mid-session.
 - **Where.** Toasts only in non-member sessions (Q3). No chime: the mockup's
   "could join" is not taken (YAGNI).
@@ -2614,6 +2617,10 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.26 (step-5 review, non-blocking): §6.5's seeding now says what the
+code does and what §6.7 implies. It seeds on the first tick with a
+non-null `view`, and a `null` view neither seeds nor prunes.
 
 r3.25 (K1 from P3 step 4): `claude plugin test` cannot raise a close
 by a person, because the engine stamps `origin` and refuses a rewrite.
