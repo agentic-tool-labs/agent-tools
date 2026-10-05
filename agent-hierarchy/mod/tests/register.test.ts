@@ -13,7 +13,7 @@ type World = {
   cwd: string
   id: string
   git: string[]
-  files: Record<string, { text: string; mtimeMs: number }>
+  files: Record<string, { text: string; mtimeMs: number; kind?: string; isLink?: boolean; size?: number }>
   shown: (string | undefined)[]
   reads: number
   registered: unknown[]
@@ -34,7 +34,7 @@ const stage = (on: any, w: World) => {
   on('fs.exists', (_$: any, e: any) => ({ value: w.git.some((d) => e.path === d + '/.git') }))
   on('fs.stat', (_$: any, e: any) => {
     const f = w.files[e.path]
-    return f ? { value: { kind: 'file', size: utf8Bytes(f.text), mtimeMs: f.mtimeMs, isLink: false } } : { deny: 'no such file' }
+    return f ? { value: { kind: f.kind ?? 'file', size: f.size ?? utf8Bytes(f.text), mtimeMs: f.mtimeMs, isLink: f.isLink ?? false } } : { deny: 'no such file' }
   })
   on('fs.read', (_$: any, e: any) => {
     const f = w.files[e.path]
@@ -120,6 +120,29 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await clock.advance(2000)
     expect(w.reads).toBe(2)
     expect(w.shown).toEqual(['1 live · 1 out', '2 live · 0 out'])
+  })
+
+  const notRead = (label: string, over: { kind?: string; isLink?: boolean; size?: number }) =>
+    test(`${surface}: ${label} is absent and not read`, async ($, on) => {
+      const w = world({ files: { [FILE]: { text: fixtures.work, mtimeMs: 1, ...over } } })
+      stage(on, w)
+      mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      expect(w.reads).toBe(0)
+      expect(w.shown).toEqual([undefined])
+    })
+  notRead('a symbolic link', { isLink: true })
+  notRead('a FIFO or device', { kind: 'other' })
+  notRead('a directory', { kind: 'dir' })
+  notRead('an empty file', { size: 0 })
+
+  test(`${surface}: a regular non-empty file is shown`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.work, mtimeMs: 1, kind: 'file', isLink: false } } })
+    stage(on, w)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(w.reads).toBe(1)
+    expect(w.shown).toEqual(['1 live · 1 out'])
   })
 
   test(`${surface}: a file over 262,144 bytes is not read`, async ($, on) => {

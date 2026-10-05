@@ -13,7 +13,7 @@
  * a process, calls herdr or takes a lock.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { hierarchyDir, isPaneMember, resolveConfig } from "./lib-config.mjs";
@@ -52,10 +52,49 @@ function clean(value, cap) {
 
 const iso = (ms) => new Date(ms).toISOString();
 
+const ACTIVITY_CAP = 4096;
+
+/** lstat that does not follow a final link; null when the path is missing or unreadable. */
+function lstatOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `<dir>/activity` when it is a real directory, else null. A link or file there is never followed,
+ * swept or replaced: the sweep deletes, and a link would aim it at another directory.
+ */
+function activityDirOf(dir) {
+  const path = join(dir, "activity");
+  return lstatOrNull(path)?.isDirectory() ? path : null;
+}
+
+/**
+ * Create `path` exclusively, after removing whatever is there. A link at a predictable temp name
+ * is unlinked rather than followed, and `wx` fails on anything that appears in between.
+ */
+function writeTempExclusive(path, text) {
+  try {
+    unlinkSync(path);
+  } catch (err) {
+    if (err?.code !== "ENOENT") throw err;
+  }
+  writeFileSync(path, text, { flag: "wx" });
+}
+
 function readActivity(dir, file) {
   if (file.includes("/") || file.includes("\\")) return null;
   try {
-    const rec = JSON.parse(readFileSync(join(dir, "activity", file), "utf8"));
+    const activityDir = activityDirOf(dir);
+    if (!activityDir) return null;
+    const path = join(activityDir, file);
+    // ponytail: lstat then read by path; a live local process could swap the path between them. A committed file cannot race. Open with O_NOFOLLOW|O_NONBLOCK and fstat if that ever matters.
+    const st = lstatOrNull(path);
+    if (!st || !st.isFile() || st.size === 0 || st.size > ACTIVITY_CAP) return null;
+    const rec = JSON.parse(readFileSync(path, "utf8"));
     return rec && typeof rec === "object" && !Array.isArray(rec) ? rec : null;
   } catch {
     return null;
@@ -79,10 +118,11 @@ export function recordActivity(dir, subject, { activity, blocked_by = null, note
   const current = readActivity(dir, file);
   if (current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note) return false;
   try {
-    const activityDir = join(dir, "activity");
-    mkdirSync(activityDir, { recursive: true });
+    if (lstatOrNull(join(dir, "activity")) === null) mkdirSync(join(dir, "activity"), { recursive: true });
+    const activityDir = activityDirOf(dir);
+    if (!activityDir) return false;
     const tmp = join(activityDir, `${file}.${process.pid}.tmp`);
-    writeFileSync(tmp, JSON.stringify({ activity, at: new Date().toISOString(), blocked_by, note }) + "\n");
+    writeTempExclusive(tmp, JSON.stringify({ activity, at: new Date().toISOString(), blocked_by, note }) + "\n");
     renameSync(tmp, join(activityDir, file));
   } catch {
     return false;
@@ -107,7 +147,8 @@ export function clearActivity(dir, subject) {
 export function sweepActivity(dir, cutoffMs) {
   let removed = 0;
   try {
-    const activityDir = join(dir, "activity");
+    const activityDir = activityDirOf(dir);
+    if (!activityDir) return 0;
     for (const f of readdirSync(activityDir)) {
       if (!f.endsWith(".json")) continue;
       try {
@@ -362,7 +403,7 @@ export function saveStatus(dir, doc) {
   try {
     if (dir && existsSync(dir)) {
       const tmp = join(dir, `status.json.${process.pid}.tmp`);
-      writeFileSync(tmp, JSON.stringify(doc) + "\n");
+      writeTempExclusive(tmp, JSON.stringify(doc) + "\n");
       // ponytail: two writers racing leave the last rename, possibly one event behind; the next write fixes it. Coalesce writes if that ever shows.
       renameSync(tmp, join(dir, "status.json"));
     }

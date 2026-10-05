@@ -42,7 +42,8 @@ export const register: Register = (on, options) => {
         if (file === null) doc = null
         else {
           const st = await $.fs.stat(file)
-          if (st.kind !== 'file' || st.size > SIZE_CAP) { doc = null; seenMtime = undefined }
+          // ponytail: stat then read by path; a live local process could swap the path between the two calls. A committed file cannot race, and read's own cap bounds a swapped file. Close it if $.fs gains a handle or no-follow read.
+          if (st.isLink || st.kind !== 'file' || st.size === 0 || st.size > SIZE_CAP) { doc = null; seenMtime = undefined }
           else if (st.mtimeMs !== seenMtime) { seenMtime = st.mtimeMs; doc = parseDoc(await $.fs.read(file)) }
         }
       } catch {

@@ -10,7 +10,7 @@ is spec [0071](specs/0071-hierarchy-status-view.md).
   `<worktree>/.claude/hierarchy/status.json`, and a worktree with no pool has no file. Nothing
   falls back to the main checkout's.
 - **Who writes it:** only `hooks/lib-status.mjs`. `roster.mjs status` computes it, writes it and
-  prints it. A write is atomic (a per-process temp file, then a rename). Nothing is written when the
+  prints it. A write is atomic (a per-process temp file, then a rename; the temp file is created exclusively, after anything already at its name is removed, so a write never goes through a link). Nothing is written when the
   hierarchy dir does not exist, and the dir is never created. A failed write never changes the
   outcome of the command or hook that triggered it.
 - **Cost to read:** one `stat`, a read of a file usually under 8 KB, one JSON parse.
@@ -20,9 +20,17 @@ is spec [0071](specs/0071-hierarchy-status-view.md).
 Every reader follows the same four steps.
 
 1. Treat the document as absent if the file is missing, unreadable, over 256 KB, not JSON, has a
-   `schema` other than `1`, or `now ≥ expires_at`.
+   `schema` that is not the integer `1` (see Schema), or `now ≥ expires_at`.
    - 256 KB is 262,144 bytes. A larger file is absent; a file of exactly 262,144 bytes is read.
      Check the size before parsing.
+   - "Unreadable" means the path is not a non-empty regular file: it is
+     itself a symbolic link (even one leading to a regular file), a
+     directory, a FIFO, a socket or a device, or it is empty; or opening
+     or reading it fails. Check with a stat that does not follow a final
+     symbolic link, before opening the file, and never open a path that
+     fails: opening a FIFO blocks, and a link can lead to a terminal. A
+     reader that holds an open handle may check the handle instead. Only
+     the last path component is checked.
    - It is also absent when a field the reader reads is missing, has the wrong JSON type, or, for a
      timestamp, does not parse as an ISO-8601 instant. The fields are `expires_at`;
      `member_sessions` (an array of strings); `timeline` (a non-empty array, every entry's `at`
@@ -53,7 +61,7 @@ which today's readers treat as absent.
 
 | Field | Meaning |
 |---|---|
-| `schema` | `1` |
+| `schema` | the JSON integer `1`, the only spelling `ah` writes. A reader that sees the number's text treats `1.0`, `1e0` or any other spelling as a different schema, so the document is absent. A JavaScript reader cannot tell them apart (`JSON.parse` gives the same number) and accepts them. The two differ only on a hand-made file. |
 | `written_at` | when the document was computed (ISO-8601 UTC, ms) |
 | `expires_at` | `written_at` + 24 h |
 | `enabled` | the hierarchy's `enabled` setting |

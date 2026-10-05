@@ -5,6 +5,15 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.112.1]
+
+The status file's readers no longer open anything but a non-empty regular
+file. A symbolic link, FIFO, directory or device at `status.json` or
+`activity/<x>.json` counts as absent, a linked `activity/` directory is
+never swept, and the temp files `ah` writes are created exclusively so a
+committed link at a temp name can no longer redirect a write. See
+[Reading it](./docs/status-file.md#reading-it).
+
 ## [0.112.0]
 
 The `ah` mod now shows the hierarchy's status as a band above the prompt, a
