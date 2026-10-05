@@ -256,6 +256,15 @@ export function routeHasPane(route) {
 }
 
 /**
+ * True when `ah` drives the member through its pane (`deliver`/`answer`) rather than as a Claude
+ * session: a non-Claude kind on `route: pane`. A Claude member on `route: pane` has a pane
+ * (routeHasPane) but is not pane-driven. Every pane-driven decision asks this.
+ */
+export function isPaneMember(m) {
+  return Boolean(m) && resolveKind(m) !== KIND_DEFAULT && m.route === "pane";
+}
+
+/**
  * Herdr's agent-name rule (spec 0043 §1.7, F6): `[a-z][a-z0-9_-]{0,31}`,
  * i.e. at most 32 characters. Returns `{ok: true}` or `{ok: false, why}`.
  *

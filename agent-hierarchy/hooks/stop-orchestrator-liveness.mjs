@@ -34,7 +34,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { hierarchyDir, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
+import { hierarchyDir, isPaneMember, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
 import { appendGate, CHECKIN_CADENCE, etaOf, openExchanges, readGates, readMsgFile, thresholdFor } from "./lib-hier.mjs";
 import { dispatchOrigin, dispatchRecordsFor, pendingFor } from "./lib-peer.mjs";
 import { readTeam, teamMemberByName } from "./lib-roster.mjs";
@@ -82,12 +82,12 @@ function outstandingDispatches(dir, resolved, sessionId, now) {
   return out;
 }
 
-/** The name of the `route: pane` member a request is addressed to (by to_name, then by role), else null. */
+/** The name of the pane-driven member a request is addressed to (by to_name, then by role), else null. */
 function paneMemberName(dir, fm, role) {
   const team = fm.team || null;
   const t = readTeam(dir, team);
   const member = teamMemberByName(dir, fm.to_name, team) || (t ? t.members.find((m) => m && m.role === role) : null);
-  return member && member.route === "pane" ? member.name : null;
+  return isPaneMember(member) ? member.name : null;
 }
 
 /**

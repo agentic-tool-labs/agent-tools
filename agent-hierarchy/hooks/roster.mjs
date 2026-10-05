@@ -160,7 +160,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, isPaneMember, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
@@ -3988,7 +3988,7 @@ async function launchMember(member, transport) {
  * transport, assign each member's `transport_id`, then launch+retry each with `launchMember`.
  * Mutates `peerMembers` in place (`transport_id`); returns launch results aligned to `peerMembers`.
  * Shared by `createSpawn` (spec 0005) and `spawn-one` (spec 0009 §6) — one implementation. Every
- * `route: pane` member it launches is recorded idle in `dir`'s activity records.
+ * pane-driven member (isPaneMember) it launches is recorded idle in `dir`'s activity records.
  */
 async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, callerLabel, layoutOpts = {}) {
   // Spec 0043 §1.4/§4.3: a refused member has nothing shelled for it — and a pane IS something
@@ -4039,7 +4039,7 @@ async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, calle
 
   const settled = await Promise.allSettled(peerMembers.map((m) => launchMember(m, transport)));
   settled.forEach((r, i) => {
-    if (r.status === "fulfilled" && r.value.launch_status !== "failed" && peerMembers[i].route === "pane") recordActivity(dir, `pane-${peerMembers[i].name}`, { activity: "idle" });
+    if (r.status === "fulfilled" && r.value.launch_status !== "failed" && isPaneMember(peerMembers[i])) recordActivity(dir, `pane-${peerMembers[i].name}`, { activity: "idle" });
   });
   const launched = settled.map((r, i) => (r.status === "fulfilled" ? r.value : { ...peerMembers[i], launch_status: "failed", launch_result: null, retried: false, error: String(r.reason) }));
   // Results stay aligned to the caller's original array so an index-keyed caller still lines up.

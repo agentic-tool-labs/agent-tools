@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { hierarchyDir, resolveConfig } from "./lib-config.mjs";
+import { hierarchyDir, isPaneMember, resolveConfig } from "./lib-config.mjs";
 import { decisionLogPath, decisionSummary, openRunAnchor, readDecisions } from "./lib-decisions.mjs";
 import { attributedRoster, CHECKIN_CADENCE, etaOf, listExchanges, attributedLiveness, readGates, readMsgFile, SELF_STATE, thresholdFor } from "./lib-hier.mjs";
 import { dispatchOrigin } from "./lib-peer.mjs";
@@ -129,7 +129,7 @@ export function sweepActivity(dir, cutoffMs) {
 
 function describeMembers(dir, team, roster) {
   const members = (Array.isArray(team.members) ? team.members : []).filter((m) => m && typeof m.name === "string").map((m) => {
-    const route = m.route === "pane" ? "pane" : "peer";
+    const route = isPaneMember(m) ? "pane" : "peer";
     let live, sessionId = null, rec;
     if (route === "pane") {
       rec = readActivity(dir, `pane-${m.name}.json`);
@@ -348,7 +348,7 @@ export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd)) 
     written_at: iso(nowMs),
     expires_at: iso(nowMs + EXPIRES_AFTER_MS),
     enabled,
-    member_sessions: allMembers.filter((m) => m.route === "peer" && m.live === true && m.session_id).map((m) => m.session_id),
+    member_sessions: allMembers.filter((m) => !isPaneMember(m) && m.live === true && m.session_id).map((m) => m.session_id),
     teams,
     timeline: buildTimeline(nowMs, allMembers, allDispatches, enabled, teams.some((t) => t.pipeline !== null)),
   };

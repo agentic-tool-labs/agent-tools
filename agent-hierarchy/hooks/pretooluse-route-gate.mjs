@@ -55,7 +55,7 @@
  * independent.
  */
 
-import { chainRoles, classProp, hierarchyRoleOf, HOOK_ERROR_LOG, isSubagent, KIND_DEFAULT, logHookError, ownedTeamConfigs, packAgentRefs, readHookInput, resolveConfig, resolvedPeerTargets, resolveKind, ROLE_LABELS, roleLabel, ROSTER_CLI, roleFromName, rosterMemberFor, teamPrefix, tierOf } from "./lib-config.mjs";
+import { chainRoles, classProp, hierarchyRoleOf, HOOK_ERROR_LOG, isPaneMember, isSubagent, logHookError, ownedTeamConfigs, packAgentRefs, readHookInput, resolveConfig, resolvedPeerTargets, resolveKind, ROLE_LABELS, roleLabel, ROSTER_CLI, roleFromName, rosterMemberFor, teamPrefix, tierOf } from "./lib-config.mjs";
 import {
   appendGate,
   describeInstance,
@@ -191,8 +191,6 @@ function paneLine(resolved, member, cwd) {
 function paneSendReason(member, text, cwd) {
   return `ah: \`${member.name}\` runs in \`${resolveKind(member)}\` and cannot receive SendMessage. Brief it with \`${deliverCommand(member.name, extractMsgToken(text), cwd)}\`, run in the background.`;
 }
-
-const isPaneMember = (m) => Boolean(m) && resolveKind(m) !== KIND_DEFAULT && m.route === "pane";
 
 function renamedReason(to, member) {
   return `${to} is not in your team; its ${label(member.role)} is ${member.name}. SendMessage "${member.name}". To reach the other session on purpose, address it with its [ref].`;

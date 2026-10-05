@@ -571,6 +571,13 @@ check "K3 Part 1: create --spawn writes the same instructions as spawn-one" '[ "
 check "AC9: create --spawn records a pane member idle" '[ "$(activity_of myrepo-architect a.activity)" = idle ]'
 check "K3 Part 1: spawnShape and launchMember both generate through standingInstructions(member), the only caller of the adapter" '[ "$(grep -c "standingInstructions(member)" "$H/roster.mjs")" -eq 3 ] && [ "$(grep -c "harnessAdapter(" "$H/roster.mjs")" -eq 2 ]'
 
+# a Claude member on route pane has a pane but is not pane-driven: the launch seeds no pane activity record for it
+rm -rf "$HIER"; reset_state
+roster_cfg '[{"role":"reviewer","kind":"claude","route":"pane","model":"sonnet"}]'
+mkdir -p "$HIER"  # a Claude spawn writes no instructions file; without the dir no activity record could be written at all
+r "HERDR_ENV=1" create --spawn
+check "AC12: create --spawn launches a Claude member on route pane and seeds no pane activity record for it" '[ "$RC" -eq 0 ] && [ "$(jo "o.members[0].name + \" \" + (o.members[0].launch_status !== \"failed\")")" = "myrepo-reviewer true" ] && [ "$(activity_of myrepo-reviewer a.activity)" = none ]'
+
 # a kind with no mapping, every class it can launch: generic action limits, Part 1's exec text, the unavailable paragraph
 rm -rf "$HIER"; reset_state
 roster_cfg '[{"role":"architect","kind":"pi","route":"pane"},{"role":"reviewer","kind":"pi","route":"pane"},{"role":"implementor","kind":"pi","route":"pane"}]'

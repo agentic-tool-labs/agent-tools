@@ -98,7 +98,7 @@ check "AC19: a SendMessage dispatch whose response is still a stub, past T, bloc
 ID=20260101-000000-a020
 REQ="$HD/msgs/$ID--architect--a20--request.md"
 write_request "$ID" architect a20 "$(ago 60)" proj-architect
-printf '{"members":[{"role":"architect","name":"proj-architect","route":"pane","kind":"claude","transport_id":"w1:p1"}]}\n' > "$HD/team.json"
+printf '{"members":[{"role":"architect","name":"proj-architect","route":"pane","kind":"codex","transport_id":"w1:p1"}]}\n' > "$HD/team.json"
 ahcli() { node -e 'process.stdout.write(JSON.stringify({session_id:"o20",cwd:process.argv[1],tool_name:"Bash",tool_input:{command:process.argv[2]}}))' "$PROJ" "$1" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/pretooluse-ah-cli.mjs" 2>&1; }
 OUT=$(ahcli "node $H/roster.mjs deliver proj-architect --req $REQ --wait-only --timeout 10 --cwd $PROJ")
 check "AC20: deliver --wait-only is allowed and writes no dispatch row" 'echo "$OUT" | grep -q "\"permissionDecision\":\"allow\"" && ! grep -q "\"request_id\":\"$ID\"" "$PENDING"'
@@ -111,6 +111,17 @@ REASON=$(node -e 'try { process.stdout.write(JSON.parse(process.argv[1]).reason 
 check "AC20: past T with a stub response, Stop blocks with the pane wording, paths quoted" 'is_block && echo "$REASON" | grep -qF "node \"$H/roster.mjs\" deliver proj-architect --req \"$REQ\" --wait-only --timeout 10 --cwd \"$PROJ\"" && echo "$REASON" | grep -q "AskUserQuestion" && echo "$REASON" | grep -q "not-live"'
 check "AC20: the pane line maps no-report, not-sent and any other status" 'echo "$REASON" | grep -qF "\`no-report\` → the member is idle with no report: re-deliver the brief or ping it" && echo "$REASON" | grep -qF "\`not-sent\` → the brief never arrived: send it with \`deliver\`" && echo "$REASON" | grep -qF "any other status → act as the returned \`message\` says"'
 check "AC20: a pane-only check-in names neither ListAgents nor SendMessage" '! echo "$OUT" | grep -qE "ListAgents|SendMessage"'
+rm -f "$HD/team.json"
+
+# ---------------------------------------------------------------- AC 12: a Claude member on route pane
+ID=20260101-000000-a012
+write_request "$ID" reviewer a12 "$(ago 400)" proj-reviewer
+printf '{"members":[{"role":"reviewer","name":"proj-reviewer","route":"pane","kind":"claude","transport_id":"w1:p2"}]}\n' > "$HD/team.json"
+stub "$ID"
+dispatch_row "$ID" reviewer o12 "$(ago 301)"
+stop o12
+REASON=$(node -e 'try { process.stdout.write(JSON.parse(process.argv[1]).reason || "") } catch {}' "$OUT")
+check "AC12: a stalled request to a Claude member on route pane gets the Claude wording, not deliver" 'is_block && echo "$REASON" | grep -q "$ID" && echo "$REASON" | grep -qE "ListAgents|SendMessage" && ! echo "$REASON" | grep -q "deliver"'
 rm -f "$HD/team.json"
 
 # ---------------------------------------------------------------- AC 21: cadence T, T/2, T
