@@ -3,8 +3,10 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.27. Built and released in `agent-tools`: P1 (`ah` 0.110.0),
-P2b (0.111.0) and P3 (0.112.0). The whole-branch review passed. P2a is not
+Status: r3.28. Built and released in `agent-tools`: P1 (`ah` 0.110.0),
+P2b (0.111.0) and P3 (0.112.0). The whole-branch review passed. r3.28
+(§13, not yet built) hardens every reader and writer of `status.json` and
+`activity/*.json` against non-regular files, as `ah` 0.112.1. P2a is not
 built here: it is claude-tui-line's SPEC-106, with §7 and §4.4 as its
 contract. The user still checks three things by hand:
 - P2b AC 2(b), before the merge;
@@ -895,6 +897,24 @@ Consumers take these steps:
      A missing `member_sessions` is therefore absent, not empty, so a
      malformed doc fails toward showing nothing. A consumer does not
      check fields it does not read, and it ignores unknown fields.
+   - r3.28, **unreadable** means the path is not a non-empty regular
+     file: it is itself a symbolic link (even one that leads to a regular
+     file), a directory, a FIFO, a socket or a device, or its size is 0;
+     or opening or reading it fails. The check uses a stat that does not
+     follow a final symbolic link and is made **before the file is
+     opened**; a path that fails it is never opened, because opening a
+     FIFO blocks and a link can lead to a terminal. A consumer that holds
+     an open handle may check the handle instead (claude-tui-line also
+     requires it to be seekable). Only the final path component is
+     checked; a symlinked parent directory is followed. §13 names every
+     site.
+   - r3.28, `schema` is the JSON integer `1`, and `ah` only ever writes
+     that spelling. A consumer that sees the number's text treats `1.0`,
+     `1e0` and every other spelling as `schema ≠ 1` (claude-tui-line
+     does). A JavaScript consumer cannot tell them apart, since
+     `JSON.parse` yields the same number, so it accepts them. The two
+     disagree only on a hand-made file, and neither runs anything from
+     the file, so the gap is accepted, not closed.
 2. Pick the entry that is current at `now`: the last element with
    `at ≤ now`. If `now` is before the first element, use the first.
 3. Render nothing if the entry has `visible: false`, or if the viewing
@@ -1048,7 +1068,7 @@ non-git fallback dir. claude-tui-line uses the same rule (§7.2).
 | Event | Behaviour |
 |---|---|
 | `session.start` | Register command `hierarchy-pane`. Start `$.clock.every(2000, tick)` and run one tick at once. Return `next(e)`. |
-| tick | 1. `stat` the file. 2. Re-read and parse it only if `mtimeMs` changed. r3.11: a file over 256 KB (§7.2's cap) is not read, and it, an unreadable file and unparseable text all count as no doc. 3. Build the view model with `$.clock.now()`. 4. Update state only if the view model changed. 5. Call `$.ui.status(...)` (§6.4). r3.18, P2b: the "state" in step 4 is the tick closure's last text, and `$.state` is not used until P3's readers need it. Step 5 runs only when the text changed, except that the first tick after `session.start` always calls `$.ui.status`, to set or clear the entry, so an entry left by a module before a reload never stays stale. 6. Raise the toasts (§6.5). 7. Auto-open the Pane (below). |
+| tick | 1. `stat` the file. 2. Re-read and parse it only if `mtimeMs` changed. r3.11: a file over 256 KB (§7.2's cap) is not read, and it, an unreadable file and unparseable text all count as no doc. r3.28: the stat's `isLink` true, a `kind` other than `file`, or a `size` of 0 also count as no doc, and the file is then not read (§13.2). 3. Build the view model with `$.clock.now()`. 4. Update state only if the view model changed. 5. Call `$.ui.status(...)` (§6.4). r3.18, P2b: the "state" in step 4 is the tick closure's last text, and `$.state` is not used until P3's readers need it. Step 5 runs only when the text changed, except that the first tick after `session.start` always calls `$.ui.status`, to set or clear the entry, so an entry left by a module before a reload never stays stale. 6. Raise the toasts (§6.5). 7. Auto-open the Pane (below). |
 | `command.run` `{command:'hierarchy-pane'}` | `$.ui.open({id:'ah-status', title:'Hierarchy'})`, which places at any width. Clears the "closed by person" flag. Returns `{text}`. |
 | `ui.render` `{component:'Pane', requestId:'ah-status'}` | Draws §6.4 Pane at `e.props.bodyColumns`. |
 | `ui.render` `{component:'AbovePrompt'}` | Returns `next(e)` when `e.props.hasSurvey`, or when there is no band. Otherwise draws one line (§6.4). r3.20: the line is drawn above what `next(e)` answers, never in its place (§6.7). |
@@ -3014,7 +3034,9 @@ All probes must be sandbox-safe:
   - control characters are stripped by the producer, which a hostile file
     can skip, so consumers must escape anyway;
   - there is a size cap;
-  - the mod never runs anything named in the file.
+  - the mod never runs anything named in the file;
+  - r3.28: a path that is not a non-empty regular file is absent and
+    never opened, and the writers never write through a link (§13).
 - **Mod API version.** The mod needs Claude Code ≥ 2.1.289. Say so in the
   `ah` README, through docs-writer, together with the `⚠ ah:` rendering and
   the `status_entry` toggle.
@@ -3035,3 +3057,225 @@ All probes must be sandbox-safe:
 - **Spec 0028.** As of r2, the Stop hook follows §5.7.2's half-threshold
   second check-in. §5.7.3's `/loop` timer prose in `agents/orchestrator.md`
   is not touched.
+
+## 13. r3.28 — non-regular files (reader hazard)
+
+Found by claude-tui-line SPEC-106 §J. A repo can commit
+`.claude/hierarchy/status.json` or `.claude/hierarchy/activity/<x>.json`
+with `git add -f` as a symbolic link (to `/dev/tty`, say), a FIFO, a
+directory or a device. A reader that opens such a path can hang (a FIFO
+with no writer) or read the person's keystrokes (a link to a terminal). The
+rule (§4.4 step 1, r3.28): **only a non-empty regular file, not itself a
+symbolic link, is read; anything else counts as absent and is never
+opened.**
+
+Worktree `/Users/jimcline/git/repos/agent-tools-0071`, branch
+`ah/pipeline-0071-hierarchy-status-view`, from HEAD `5d00b1f`. Never touch
+the main checkout `/Users/jimcline/git/repos/agent-tools` (the live `ah`
+root). Do not push.
+
+### 13.1 Every site that touches these paths
+
+From a full grep of `hooks/`, `mod/` and `scripts/` for `status.json`,
+`activity/` and their readers:
+
+| Site | Today | r3.28 |
+|---|---|---|
+| `mod/register.tsx:44-46`, the tick | `$.fs.stat`, rejects `kind ≠ file` and size > cap, then `$.fs.read`. A FIFO, device, dir or dangling link is already rejected (`kind` `other`/`dir`). Gaps: a link to a regular file is read; size 0 is read. | §13.2 |
+| `hooks/lib-status.mjs:55-63`, `readActivity` (called by `recordActivity` at :79 and the status compute at :135, :141) | `readFileSync` with no check. A FIFO hangs the hook process; a link to a terminal reads it. | §13.3 |
+| `hooks/lib-status.mjs:76-89`, `recordActivity` write | temp file, then rename. | §13.4 |
+| `hooks/lib-status.mjs:107-128`, `sweepActivity` | `readdirSync` of `activity/`, then `statSync` + `unlinkSync` of each old `*.json`. `statSync` opens nothing, so no hang. Hazard: if `activity` is itself a link to another directory, the sweep **deletes old `*.json` files in that directory**. | §13.3 |
+| `hooks/lib-status.mjs:361-372`, `saveStatus` | temp file, then rename. | §13.4 |
+| `hooks/roster.mjs`, `hooks/activity.mjs` | No read of either path; they call `computeStatus`, `saveStatus` and `recordActivity` only. | none |
+
+Nothing in `hooks/` reads `status.json`; only the mod and claude-tui-line
+(P2a, which already applies the rule) do.
+
+### 13.2 Mod reader (`mod/register.tsx`)
+
+What `$.fs` in Claude Code 2.1.289 can check (from the plugin-authoring
+`claude-code.d.ts`, `FsStat`): `kind` (`file` | `dir` | `other`) of what
+the path leads to, with a link followed and a dangling one `other`;
+`isLink`, true when the path itself is a symbolic link; `size`; `mtimeMs`.
+There is no handle API and no way to open without following, so the
+"seekable handle" check is not available.
+
+Required:
+
+- The tick treats the doc as absent, and does not call `$.fs.read`, when
+  `isLink` is true, `kind` is not `file`, `size` is 0, or `size` is over
+  `SIZE_CAP`. The absent branch is the existing one: `doc = null`,
+  `seenMtime` cleared.
+- A regular, non-empty file within the cap is read exactly as today.
+  `parseDoc` and `view.ts` do not change.
+
+Known limit, stated in a `ponytail:` comment at the check: the stat and the
+read are two calls by path, so a live local process could swap the path
+between them. A committed file cannot race, and a live process with write
+access to the checkout already has the person's privileges. `$.fs.read`'s
+own 4 MiB cap still bounds a swapped regular file. Close it if `$.fs` ever
+gains a handle or no-follow read.
+
+### 13.3 Hooks readers (`hooks/lib-status.mjs`)
+
+**Activity records.** Before `readActivity` opens a record, it checks the
+path with a stat that does not follow a final link (`lstatSync`). The
+record is absent (the function's existing `null`) unless the path is a
+regular file whose size is greater than 0 and at most 4,096 bytes. Records
+are under 300 bytes; the cap only bounds a hostile file. Absent here means
+exactly what a missing record means today, at all three callers.
+`recordActivity` then writes a fresh record, whose rename replaces the
+link or FIFO (§13.4).
+
+Decision: check-before-open with `lstatSync`, not
+`openSync(O_NOFOLLOW | O_NONBLOCK)` + `fstatSync`. The threat is committed
+content, which cannot race the check; `lstatSync` is portable, and it
+matches the mod's stat-then-read shape. The same race as §13.2 is the
+ceiling; say so in a `ponytail:` comment.
+
+**The activity directory.** `<dir>/activity` is used only when a stat that
+does not follow it says it is a real directory. Otherwise:
+- `sweepActivity` removes nothing and returns 0;
+- `recordActivity` writes nothing and returns false;
+- `readActivity` returns `null`.
+
+The check never removes or replaces what is there. One check serves all
+three, not three copies of it. If a `hooks/lib-*.mjs` already exports an
+equivalent no-follow regular-file or directory check, reuse it; otherwise
+it lives in `lib-status.mjs`.
+
+### 13.4 Writers
+
+**The rename is safe.** `renameSync(tmp, <final>)` replaces the final name's
+directory entry and never follows it. A link, FIFO or device at
+`status.json` or `activity/<x>.json` is replaced by the new regular file,
+and its target is untouched. A directory at the final name makes the
+rename fail; the existing catch already makes that a skipped write, and
+the reader treats the directory as absent. No change.
+
+**The temp write is not safe today: fix it.** `writeFileSync(tmp, …)` (both
+`saveStatus` and `recordActivity`) opens with create + truncate and
+**follows a link at the temp path**. The temp names are predictable
+(`status.json.<pid>.tmp`, `<file>.<pid>.tmp`), and pids top out under
+100,000. A repo that commits a link at every such name pointing at a file
+of the person's makes `ah` truncate that file and overwrite it with JSON.
+That is data loss, not just a hang.
+
+Required, for both temp writes:
+- Any existing entry at the temp path is first removed, never followed
+  (unlinking a link removes the link). "Not there" is not an error.
+- The temp file is then created exclusively: creation fails if anything
+  exists at the path (Node's `flag: "wx"`, that is `O_CREAT | O_EXCL`,
+  which POSIX says fails on a link whatever it points at).
+- If either step fails, the write is skipped through the existing catch.
+  Both functions still never throw, and nothing else about them changes.
+
+Removing first also clears a temp left by a crashed process whose pid has
+come round again, so exclusive creation never wedges a pid.
+
+### 13.5 Out of scope, with the gap named
+
+- **A symlinked parent.** If `.claude` or `.claude/hierarchy` is itself a
+  link, every `ah` read and write, including `msgs/`, `teams/` and
+  `peers.jsonl`, lands in the target. `activity/` is guarded (§13.3)
+  because its sweep deletes; the hierarchy dir is not.
+- **Other files under `<hier>`.** A FIFO committed at `peers.jsonl`,
+  `teams/*.json` or a `msgs/*.md` would hang the hook that reads it, which
+  is the same hazard.
+
+Both need a hierarchy-wide rule, which is a separate spec. It is
+NEEDS-ARCHITECT for the Orchestrator to schedule; the user decides whether
+to schedule it.
+
+### 13.6 Docs: `docs/status-file.md`
+
+The Implementor makes these changes; the wording below is the contract and
+must not be weakened.
+
+1. **"Reading it", step 1.** Change "has a `schema` other than `1`" to
+   "has a `schema` that is not the integer `1` (see Schema)". Add this
+   sub-bullet after the 256 KB bullet:
+
+   > - "Unreadable" means the path is not a non-empty regular file: it is
+   >   itself a symbolic link (even one leading to a regular file), a
+   >   directory, a FIFO, a socket or a device, or it is empty; or opening
+   >   or reading it fails. Check with a stat that does not follow a final
+   >   symbolic link, before opening the file, and never open a path that
+   >   fails: opening a FIFO blocks, and a link can lead to a terminal. A
+   >   reader that holds an open handle may check the handle instead. Only
+   >   the last path component is checked.
+
+2. **Schema table, the `schema` row.** Replace its meaning `1` with:
+
+   > the JSON integer `1`, the only spelling `ah` writes. A reader that
+   > sees the number's text treats `1.0`, `1e0` or any other spelling as
+   > a different schema, so the document is absent. A JavaScript reader
+   > cannot tell them apart (`JSON.parse` gives the same number) and
+   > accepts them. The two differ only on a hand-made file.
+
+3. **The "Who writes it" bullet.** After "a per-process temp file, then a
+   rename", add: "the temp file is created exclusively, after anything
+   already at its name is removed, so a write never goes through a
+   link".
+
+### 13.7 Tests
+
+Each new test must be shown to **fail against `5d00b1f`** before the fix
+makes it pass; report each red→green. A case that would hang on the old
+code (any FIFO case) runs with a bound, such as a child process under a
+timeout, so a regression fails instead of hanging the suite. No test opens
+`/dev/tty`. Put hooks tests in the existing `ah` suite next to whatever
+covers `lib-status.mjs` (find it by grep), each case in its own
+`mktemp -d` that is checked to be non-empty.
+
+Hooks (`lib-status.mjs`, through its exported functions):
+
+| # | Setup in the temp hierarchy dir | Expect | Red on `5d00b1f`? |
+|---|---|---|---|
+| H1 | `activity/<sid>.json` is a link to a valid record elsewhere | the member's activity reads as if no record existed | yes (the link is read) |
+| H2 | `activity/<sid>.json` is a FIFO | same as H1, and the call returns | yes (it hangs, so the bound fails it) |
+| H3 | `activity/<sid>.json` is a directory | same as H1 | no (regression guard) |
+| H4 | `activity/<sid>.json` is empty | same as H1 | no (regression guard) |
+| H5 | `activity/<sid>.json` is a 4,097-byte regular file | same as H1 | yes |
+| H6 | `activity/<sid>.json` is a valid regular record | read as today (control) | no |
+| H7 | `activity` is a link to another dir holding an old `x.json` | `sweepActivity` returns 0, `x.json` still exists; `recordActivity` returns false and writes nothing there | yes (the file is deleted) |
+| W1 | a link at `status.json.<pid>.tmp` (`pid` = the process that calls `saveStatus`) to a file with known bytes | that file's bytes unchanged; `status.json` is a regular file holding the doc | yes (the file is overwritten) |
+| W2 | the same at `activity/<sid>.json.<pid>.tmp`, for `recordActivity` | target unchanged; the record written | yes |
+| W3 | `status.json` is a link to a file with known bytes | after `saveStatus`, `status.json` is a regular file (by `lstat`); the old target is unchanged | no (rename is already safe; guards it) |
+| W4 | `status.json` is a FIFO | after `saveStatus` (bounded), `status.json` is a regular file | no (guard) |
+| W5 | a stale regular file at `status.json.<pid>.tmp` | `saveStatus` still writes `status.json` | no (guards the remove-first step) |
+
+Mod (`mod/tests/register.test.ts`). The fake `fs.stat` handler at :35-38
+always answers `kind: 'file'`, `isLink: false`. Let a staged file override
+`kind`, `isLink` and `size`. For each case, assert the doc is absent, as
+the existing no-file tests do, **and** that `w.reads` did not grow:
+
+| # | Stat answers | Red on `5d00b1f`? |
+|---|---|---|
+| M1 | `kind: 'file'`, `isLink: true`, valid text | yes (it is read and shown) |
+| M2 | `kind: 'other'` (a FIFO or device) | no (guard) |
+| M3 | `kind: 'dir'` | no (guard) |
+| M4 | `kind: 'file'`, `size: 0` | yes (`w.reads` grows) |
+| M5 | `kind: 'file'`, `isLink: false`, valid text | shown as today (control) |
+
+### 13.8 Implementor order
+
+1. `hooks/lib-status.mjs`: §13.3 and §13.4, with H1–H7 and W1–W5 red
+   first.
+2. `mod/register.tsx`: §13.2, with M1–M5 red first.
+3. `docs/status-file.md`: §13.6, exactly.
+4. Release `ah` **0.112.1**. Bump every place that declares `ah`'s version
+   (`agent-hierarchy/.claude-plugin/plugin.json`, the `ah` entry of the
+   root `.claude-plugin/marketplace.json` if it carries a version; grep
+   for `0.112.0`), and add a `[0.112.1]` CHANGELOG entry. It is a patch,
+   not folded into 0.112.0: 0.112.0 is committed as its own release
+   (`40e332f`), and a plugin cache keyed by version would keep a stale
+   0.112.0 for anyone who installed it from this branch.
+5. Run the full `ah` suite and `claude plugin test` for the mod. Capture
+   output to a file, give every headless run a timeout, and afterwards
+   check `pgrep -fl claude` and `pgrep -fl node` for anything left
+   running. Report the exit codes and the red→green list.
+
+Must not change: `parseDoc`, `view.ts`, the doc schema, `computeStatus`'s
+output for regular files, the never-throw contracts, and anything in
+§13.5.
