@@ -220,10 +220,15 @@ while the hierarchy is off (`/hierarchy off`).
   the line. It never sends a message, answers a prompt, or runs anything named
   in the file.
 - **Turning it off.** The `status_entry` option is on by default. Turn it off
-  with `/config`, or with `claude plugin configure` from a shell, for example
-  when claude-tui-line's `ah` item already shows the same counts. It is a
-  user setting: project and local settings files can't set it, so it applies
-  to you in every repo.
+  with `/config`, or from a shell:
+
+  ```
+  echo '{"status_entry":"false"}' | claude plugin configure ah@agent-tools --values-stdin
+  ```
+
+  Restart Claude Code afterwards. Turn it off when claude-tui-line's `ah` item
+  already shows the same counts, for example. It is a user setting: project
+  and local settings files can't set it, so it applies to you in every repo.
 - **"1 userConfig option not yet set".** A fresh install prints this once. It
   is informational: the default (on) still applies. An upgrade prints nothing.
 - **Claude Code 2.1.289 or later.** The mod API needs it. The mod ships inside
