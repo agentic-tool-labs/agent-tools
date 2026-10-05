@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.20. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.21. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1657,6 +1657,29 @@ from that list, and the step report names the mapping:
 
 No raw colours, because they ignore the theme.
 
+r3.21 (E15(b): the reference lists no theme keys, and the only key it
+names is `warning`, at :8109). Use only documented props, and let bold
+carry the difference between bad and warn. This table replaces the
+mapping above:
+
+| Tone | `Text` props |
+|---|---|
+| bad | `color: 'warning'`, `bold: true` |
+| warn | `color: 'warning'` |
+| work | none (the default text colour) |
+| idle, and any unknown tone (§4.4 step 4) | `dimColor: true` |
+
+- No undocumented key such as `error`, and no raw colour. Nothing
+  documents how an unknown key draws, and a refused tree would lose the
+  band.
+- The words themselves carry the severity ("stalled", "past its eta",
+  "waiting on a prompt"), so bad stays readable without colour.
+- The band and every Pane row use this one table, held once in the
+  module. The drawing layer returns tone names, and the table turns them
+  into props.
+- If a later client documents an error key, `bad` moves to it. That is a
+  one-row change.
+
 **`/hierarchy-pane`.**
 - `session.start` calls `$.command.register({ name: 'hierarchy-pane',
   description: … })` before `next(e)` (R:158-163). A reload registers it
@@ -2375,7 +2398,11 @@ r3.20: the step list. P3 starts after P2b's step 5 has released 0.111.0
      band;
    - a `view` change redraws a mounted band;
    - the Pane draws its rows, and draws the `null` line;
-   - another component passes through.
+   - another component passes through;
+   - r3.21: the band `Text` for a stalled case has `color: 'warning'`
+     and `bold`, for a blocked case `color: 'warning'` without `bold`,
+     and for a working case no `color`. An unknown tone draws with
+     `dimColor`.
 
    Also the §6.6 tree walk: only `Box`, `Text` and `engine` nodes.
    [AC 1, 5]
@@ -2525,6 +2552,18 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.21 (E15 at P3 step 0):
+
+- **E15(a):** a literal `StateRef` (`{ plugin, key }`), so the guard
+  does not change.
+- **E15(b):** no theme keys are documented, and `warning` is the only
+  one named. So tones use only documented props: bad = `warning` plus
+  bold, warn = `warning`, work = none, idle or unknown = `dimColor`
+  (§6.7 table). No undocumented `error` key and no raw colour.
+- Step 3 gains a tone-props test.
+- AC 10's "four" step-4 points is corrected to five, folded in from
+  r3.20.
 
 r3.20 (the Orchestrator asked for P3 to be made build-ready):
 
@@ -2830,7 +2869,7 @@ was within every bound: write p95 warm 5.63 ms and cold 13.40 ms;
 | E11 (P1) | **Done.** The read part found NEEDS-ARCHITECT #5, resolved in §3.7.1. The suite run at P1 step 2 showed only the intended failures. **Suite run (P1 step 2):** with §3.7.1 in place, run the full `ah` bash suite. | Green after only the §3.7.7 updates → done. Any other failure → return it to the Architect before step 2 lands. |
 | E12 (P2b start) | **Done: readable from `register`'s `options` (defaults filled in), no blocking prompt on update, enable or start → userConfig as in §6.4 (r3.11 read path and scope there).** Read the plugin-authoring reference (load the `plugin-authoring` skill) and, if it is not explicit, probe: how does a module read a plugin `userConfig` value, and does adding a `userConfig` key to an installed plugin's plugin.json prompt the user on update or enable? Probe sandbox-safely as in E9 (`T=$(mktemp -d)`, checked non-empty; `--plugin-dir`; `--setting-sources local`; timeout; `pgrep -fl claude` afterwards). | Readable and no prompt, or a prompt with the default pre-filled → userConfig as in §6.4. Not readable by a module → return to the Architect (the fallback is a `$.store` flag set by a mod command). A blocking prompt for every `ah` user → return to the Architect; it becomes a user decision. |
 | E13 (P2b start) | **Done: no; any `.json` import is refused, and a `.ts` module that embeds the JSON loads → `fixtures.ts` plus the drift test (§6.6 r3.11).** Can a `claude plugin test` test file under `<mod>/tests/` import a JSON file under `agent-hierarchy/tests/fixtures/status/` (a static `import … with { type: "json" }`, or a plain import)? One-test probe in a scratch copy of the plugin. | Yes → tests read fixtures in place. No → the embedded fixtures module plus the bash drift check (§6.6). |
-| E15 (P3 step 0, read only, r3.20) | **Open.** Answer from the plugin-authoring reference only; run nothing. (a) How is a `StateRef` for `$.state.get/set` written: a literal at the call, or a value import from `'claude-code'` (which name)? (b) Which theme keys does a `Text` `color` accept? | (a) Literal: no guard change. Import: §6.3 item 5 allows exactly that name, done in P3 step 1. (b) The Implementor maps bad, warn and work by name to the error key, the warning key and an in-progress or suggestion key (else no colour), and idle to `dimColor` (§6.7). |
+| E15 (P3 step 0, read only, r3.20) | **Done (r3.21): (a) a literal `{ plugin, key }`, so no guard change; (b) no theme keys are documented and only `warning` is named, so tones follow the §6.7 r3.21 table.** Answer from the plugin-authoring reference only; run nothing. (a) How is a `StateRef` for `$.state.get/set` written: a literal at the call, or a value import from `'claude-code'` (which name)? (b) Which theme keys does a `Text` `color` accept? | (a) Literal: no guard change. Import: §6.3 item 5 allows exactly that name, done in P3 step 1. (b) The Implementor maps bad, warn and work by name to the error key, the warning key and an in-progress or suggestion key (else no colour), and idle to `dimColor` (§6.7). |
 | E14 (P2b step 0, read only, r3.11) | Answer from the plugin-authoring reference only; run nothing. (a) Can a `claude plugin test` test supply `options` (userConfig values) to `register`? (b) Does the reference name a type check for module code that runs with no new dependency in the repo? `ah` has no package.json, and `tsc` is not installed. | (a) Yes → add a register-level toggle test. No → the view.ts toggle test alone carries P2b AC 6. (b) Yes → AC 3 runs it. No → AC 3 is `validate` only, and `ah` gains no node toolchain. Ceiling: type errors that the tests do not exercise go unseen. |
 
 All probes must be sandbox-safe:
