@@ -54,6 +54,9 @@ Nothing breaks; you just don't get herdr's pane placement. It's been checked
 against herdr 0.8.2. See herdr's own install instructions for getting it on
 your `PATH`.
 
+The [status entry](#the-status-entry-the-team-at-a-glance) needs Claude Code
+2.1.289 or later.
+
 ## The flow
 
 Trivial edits (a typo, a config value) skip the chain entirely. A request
@@ -190,6 +193,43 @@ separate columns. A cache-read token is about 10× cheaper, and lumping them
 together would make the numbers meaningless. If the report says
 `(N transcripts not found)`, the collector's path logic broke. That's a bug to
 report, not something you did wrong.
+
+## The status entry: the team at a glance
+
+While a team is up, `ah` shows one line above your prompt:
+
+```
+⚠ ah: 3 live · 1 out · 1 blocked
+```
+
+It counts the live members and the dispatches still out, and adds blocked
+members, overdue dispatches and stalled dispatches when there are any. It shows
+while something is live or out, or a `/pipeline` run is open, and stays hidden
+while the hierarchy is off (`/hierarchy off`).
+
+- **Who sees it.** Every session in the checkout except the team's members:
+  the Orchestrator, plain sessions, and `--agent` sessions on no team. A
+  member, including a Claude member running in a pane, sees nothing. A linked
+  worktree is its own pool, so a session there shows that worktree's teams,
+  not the main checkout's.
+- **The `⚠ ah:` part** is drawn by Claude Code, on its own line above any
+  status line. `ah` supplies only the text after it, and the `⚠` glyph is
+  Claude Code's and can't be changed.
+- **Read-only.** The entry is a Claude Code mod, in `mod/`. It reads
+  `.claude/hierarchy/status.json` ([format](./docs/status-file.md)) and draws
+  the line. It never sends a message, answers a prompt, or runs anything named
+  in the file.
+- **Turning it off.** The `status_entry` option is on by default. Turn it off
+  with `/config`, or with `claude plugin configure` from a shell, for example
+  when claude-tui-line's `ah` item already shows the same counts. It is a
+  user setting: project and local settings files can't set it, so it applies
+  to you in every repo.
+- **"1 userConfig option not yet set".** A fresh install prints this once. It
+  is informational: the default (on) still applies. An upgrade prints nothing.
+- **Claude Code 2.1.289 or later.** The mod API needs it. The mod ships inside
+  `ah` rather than as a separate plugin, so an older client that rejects the
+  mod file is a known risk, accepted with that choice; `ah` neither detects
+  nor works around it.
 
 ## Durable agents (retired)
 
@@ -369,6 +409,11 @@ under [docs/specs/](./docs/specs/). Good places to start:
 [0013](./docs/specs/0013-agent-hierarchy-mcp-server.md) (MCP server),
 [0026](./docs/specs/0026-downstream-dispatch-visibility-and-orchestrator-only-route-gate.md) (route gate),
 [0028](./docs/specs/0028-orchestrator-conduit-and-liveness.md) (conduit and liveness).
+
+The bash suite in `tests/` needs the `claude` CLI on `PATH`. The mod's
+read-only guard checks the module with `claude plugin validate`, and the mod's
+own tests run through `claude plugin test`. Without `claude`, both fail rather
+than pass.
 
 ## What's new
 
@@ -651,6 +696,7 @@ agents/          one contract per role (frontmatter pins model + tool denies)
 hooks/           hooks and the libraries they share
 commands/        the /hierarchy and /pipeline commands
 skills/          agent-roster, agent-team, agent-role, autonomous-pipeline
+mod/             the status entry (a Claude Code mod) and its tests
 docs/specs/      per-feature design records
 tests/           HOME-redirected; real config untouched
 ```

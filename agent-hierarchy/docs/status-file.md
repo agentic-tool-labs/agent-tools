@@ -6,7 +6,9 @@ items, the `ah` mod) read it and show it. They never work anything out for thems
 is spec [0071](specs/0071-hierarchy-status-view.md).
 
 - **Where:** `<hier>/status.json`, beside `msgs/` and `peers.jsonl`. The hierarchy dir's own
-  `.gitignore` covers it.
+  `.gitignore` covers it. A linked worktree is its own pool: its file is
+  `<worktree>/.claude/hierarchy/status.json`, and a worktree with no pool has no file. Nothing
+  falls back to the main checkout's.
 - **Who writes it:** only `hooks/lib-status.mjs`. `roster.mjs status` computes it, writes it and
   prints it. A write is atomic (a per-process temp file, then a rename). Nothing is written when the
   hierarchy dir does not exist, and the dir is never created. A failed write never changes the
@@ -15,14 +17,29 @@ is spec [0071](specs/0071-hierarchy-status-view.md).
 
 ## Reading it
 
-Every reader follows the same three steps.
+Every reader follows the same four steps.
 
 1. Treat the document as absent if the file is missing, unreadable, over 256 KB, not JSON, has a
    `schema` other than `1`, or `now ≥ expires_at`.
+   - 256 KB is 262,144 bytes. A larger file is absent; a file of exactly 262,144 bytes is read.
+     Check the size before parsing.
+   - It is also absent when a field the reader reads is missing, has the wrong JSON type, or, for a
+     timestamp, does not parse as an ISO-8601 instant. The fields are `expires_at`;
+     `member_sessions` (an array of strings); `timeline` (a non-empty array, every entry's `at`
+     parseable); and, in the entry picked in step 2, `visible` (a boolean) and `tone`, `text` and
+     `short` (strings). A missing `member_sessions` is therefore absent, not empty, so a malformed
+     document shows nothing. A reader does not check fields it does not read, and ignores unknown
+     fields.
 2. Take the `timeline` entry current at `now`: the last entry with `at ≤ now`, or the first entry
    when `now` is earlier than all of them.
 3. Show nothing if that entry has `visible: false`, or if the viewing session's id is in
-   `member_sessions`. Only the Orchestrator's sessions see the view.
+   `member_sessions`. Member sessions see nothing; every other session in the checkout sees the
+   view: the Orchestrator's, plain sessions, and `--agent` sessions on no team. The document does
+   not name an Orchestrator, and `member_sessions` is the only signal, so a reader adds no rule of
+   its own (hiding on the session's agent name, say, would also hide an Orchestrator launched with
+   `--agent ah:orchestrator`).
+4. Fall back on an enumerated value you do not know; never reject the document for one. An unknown
+   `tone` string renders in the `idle` colour. A `tone` that is not a string is malformed (step 1).
 
 A reader never re-derives eta, stall, liveness, counts or text. Changes that only depend on time
 are already in the document as scheduled `at` instants, so the file does not need rewriting just
@@ -30,7 +47,8 @@ because time has passed.
 
 ## Schema (`schema: 1`)
 
-Fields may be added without changing `schema`. Removing or redefining one makes it `schema: 2`,
+Fields may be added without changing `schema`, and so may new values of an enumerated field such
+as `tone` (readers fall back on them, step 4). Removing or redefining a field makes it `schema: 2`,
 which today's readers treat as absent.
 
 | Field | Meaning |
@@ -39,10 +57,11 @@ which today's readers treat as absent.
 | `written_at` | when the document was computed (ISO-8601 UTC, ms) |
 | `expires_at` | `written_at` + 24 h |
 | `enabled` | the hierarchy's `enabled` setting |
-| `member_sessions` | session ids of the live Claude members of every live team |
+| `member_sessions` | session ids of the live Claude members of every live team, whatever their route |
 | `teams[]` | one entry per live team |
 | `teams[].team` | the team's name; `null` for the default team (`team.json`), shown as `default` |
 | `teams[].members[]` | `name`, `role`, `label`, `kind`, `route`, `session_id`, `live`, `activity`, `activity_at`, `blocked_by`, `blocked_note` |
+| `teams[].members[].route` | how `ah` reaches the member: `pane` only for a pane-driven (non-Claude) member, else `peer`; a Claude member running in a pane reads `peer` |
 | `teams[].dispatches[]` | `id`, `slug`, `to`, `to_name`, `member`, `label`, `eta`, `eta_ms`, `created`, `sent_at`, `checkins`, `reported_at`, `states[]` |
 | `teams[].dispatches_truncated` | how many dispatches were left off the list (it holds at most 50) |
 | `teams[].pipeline` | `null`, or `{anchor_id, started, round_cap, waiting_on_user, items[]}`; an item is `{slug, rounds, open, to}` |
