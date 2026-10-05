@@ -3,14 +3,16 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.26. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
-has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
-adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
-and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
-E12 kept userConfig as §6.4 has it; E13 moved the mod's fixtures into an
-embedded module with a drift test (§6.6). P2b's first step is one
-read-only reference check (E14), and both of its outcomes are decided in
-advance.
+Status: r3.27. Built and released in `agent-tools`: P1 (`ah` 0.110.0),
+P2b (0.111.0) and P3 (0.112.0). The whole-branch review passed. P2a is not
+built here: it is claude-tui-line's SPEC-106, with §7 and §4.4 as its
+contract. The user still checks three things by hand:
+- P2b AC 2(b), before the merge;
+- P3 AC 4, including the person close (K1);
+- P2b AC 8, after release, on the installed copy.
+
+§10 records the user's decisions (Q1–Q6, the stub bug) and the changes
+r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
 
 Repos:
 
@@ -2621,6 +2623,11 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
 r3.26 (step-5 review, non-blocking): §6.5's seeding now says what the
 code does and what §6.7 implies. It seeds on the first tick with a
 non-null `view`, and a `null` view neither seeds nor prunes.
+
+r3.27 (completion gate, nit): the Status header now gives the built state.
+P1, P2b and P3 are released. P2a is claude-tui-line's SPEC-106. It also
+lists the user's three manual checks: P2b AC 2(b), P3 AC 4 and P2b AC 8.
+No contract changed.
 
 r3.25 (K1 from P3 step 4): `claude plugin test` cannot raise a close
 by a person, because the engine stamps `origin` and refuses a rewrite.
