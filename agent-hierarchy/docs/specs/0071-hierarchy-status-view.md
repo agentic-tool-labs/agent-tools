@@ -3,7 +3,7 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.19. P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
+Status: r3.20. P3 is build-ready (§6.7, §8 P3). P1 is built (`ah` 0.110.0). P2b is build-ready: §8 P2b
 has its step list. r3.12 answers P2a's contract questions (§4.4). r3.13
 adds one pane-driven predicate (§4.1) as P2b step 1a. §10 records the user's decisions (Q1–Q6, the stub bug)
 and the changes r1→r2→r3. Evidence: `0071-evidence.md` beside this file.
@@ -1049,7 +1049,7 @@ non-git fallback dir. claude-tui-line uses the same rule (§7.2).
 | tick | 1. `stat` the file. 2. Re-read and parse it only if `mtimeMs` changed. r3.11: a file over 256 KB (§7.2's cap) is not read, and it, an unreadable file and unparseable text all count as no doc. 3. Build the view model with `$.clock.now()`. 4. Update state only if the view model changed. 5. Call `$.ui.status(...)` (§6.4). r3.18, P2b: the "state" in step 4 is the tick closure's last text, and `$.state` is not used until P3's readers need it. Step 5 runs only when the text changed, except that the first tick after `session.start` always calls `$.ui.status`, to set or clear the entry, so an entry left by a module before a reload never stays stale. 6. Raise the toasts (§6.5). 7. Auto-open the Pane (below). |
 | `command.run` `{command:'hierarchy-pane'}` | `$.ui.open({id:'ah-status', title:'Hierarchy'})`, which places at any width. Clears the "closed by person" flag. Returns `{text}`. |
 | `ui.render` `{component:'Pane', requestId:'ah-status'}` | Draws §6.4 Pane at `e.props.bodyColumns`. |
-| `ui.render` `{component:'AbovePrompt'}` | Returns `next(e)` when `e.props.hasSurvey`, or when there is no band. Otherwise draws one line (§6.4). |
+| `ui.render` `{component:'AbovePrompt'}` | Returns `next(e)` when `e.props.hasSurvey`, or when there is no band. Otherwise draws one line (§6.4). r3.20: the line is drawn above what `next(e)` answers, never in its place (§6.7). |
 | `ui.close` on `ah-status` with origin `person` | Sets "closed by person" in `$.state`. No auto-reopen this session. r3.15: `ui.close` is an op event, so the handler always returns `next(e)`. |
 
 **Auto-open:** at most once per session, when a visible doc is first seen in
@@ -1114,7 +1114,7 @@ The source is the 2.1.289 types file:
    | Registration | Matcher | May return | Never returns | Types |
    |---|---|---|---|---|
    | `session.start` | none | `next(e)` | its own value | `SessionStartResult` :11145; its own value is ignored anyway (:11143) |
-   | `ui.close` (op event) | none | `next(e)`, after noting the "closed by person" flag (§6.3) | `{deny}`, `{value}` | `ValueOrDeny` :13925; `OpValueOf['ui.close']` is `void` (:6927) |
+   | `ui.close` (op event) | r3.20: exactly `{ id: 'ah-status' }` | `next(e)`, after noting the "closed by person" flag (§6.3) | `{deny}`, `{value}` | `ValueOrDeny` :13925; `OpValueOf['ui.close']` is `void` (:6927) |
    | P3 `command.run` | exactly `{ command: 'hierarchy-pane' }` | `{ text }` and no other key | `context`, `exitCode`, or a value from `next` | `CommandRunResult` :1755 |
    | P3 `ui.render` | exactly `{ component: 'Pane', requestId: 'ah-status' }`, or exactly `{ component: 'AbovePrompt' }` | `next(e)`, or a tree whose every node is `Box` or `Text`. r3.19: also the `engine` element that `next(e)` answers, which is core drawing its own component with its own props (:9165) | any other element type; any node with a `press`, `client` or `raster` key | `RenderElement` :8851 |
 
@@ -1581,6 +1581,153 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
   committed. The Implementor checks the other suite tests that walk the
   tree and applies the same file set where one would match the
   generated files.
+
+### 6.7 P3 design (r3.20)
+
+This section settles how P3 builds §6.3–6.5. "F" is the 2.1.289 types file
+(§6.3) and "R" is the plugin-authoring `reference.md` beside it.
+
+**State.** The tick is the only writer of what P3 draws, and the render
+hooks only read it.
+- `mod/types/index.d.ts` declares four values under `PluginState.ah`:
+  - `view`: the P3 view model (below). It is `null` whenever §4.4
+    renders nothing: absent, expired, invisible, or a member session.
+    `$.state` takes JSON and never `undefined` (F:3305).
+  - `seen`: the toast keys already shown (§6.5). Never written means not
+    yet seeded.
+  - `opened`: auto-open has fired this session.
+  - `closed`: the person closed the Pane this session. It is cleared by
+    `/hierarchy-pane`.
+- `$.state` is per session and survives a hot reload (F:3276). Module
+  variables do not survive one (R:90), so nothing P3 draws from lives in
+  the tick closure. P2b's closure text for the status entry stays,
+  because it only gates the `$.ui.status` call.
+- The tick writes `view` only when its JSON differs from the last
+  written value (tick step 4). A write redraws every instance that read
+  the value while drawing (F:3866, R:90). So the module never calls
+  `$.ui.invalidate`, which stays off the allow-list.
+- `$.state.set` is refused while a render hook draws (F:3303). Writes
+  happen only in the tick, the `command.run` hook and the `ui.close`
+  hook.
+- E15(a) settles how a `StateRef` is written.
+
+**View model, in two layers.** The width is known only while drawing
+(`e.props.bodyColumns`), so view.ts splits in two. Both layers are pure
+and contain no `$`.
+- **Model:** `(doc, nowMs, sessionId) → view | null`. It holds nothing
+  that depends on width:
+  - the band subject and items, with their tones;
+  - the Pane's sections as data;
+  - the toast list as `(key, text)` pairs.
+
+  Times (`m:ss`, `over`) are resolved at `nowMs`. So the model changes on
+  every tick while work is out, and the band and Pane redraw at the 2 s
+  tick rate.
+- **Drawing:** `(view, columns) → band line and tone`, and
+  `(view, columns) → Pane rows and tones`. These apply §6.4's cuts and
+  width fallback.
+- The status entry keeps its P2b function.
+
+**Band (AbovePrompt).** The hook is on `{ component: 'AbovePrompt' }`.
+- With `e.props.hasSurvey`, it returns `next(e)`: "a hook yields to it"
+  (F:9712ff).
+- When `view` is `null` or there is no band (§6.4), it returns `next(e)`.
+- Otherwise it returns a column `Box`: the band line first, as one `Text`
+  in the tone's colour cut to `e.props.bodyColumns`, then what `next(e)`
+  answered. The line never replaces that answer. `next(e)` carries core's
+  own drawing and other plugins' bands (the `engine` element, r3.19), and
+  replacing it would hide them.
+- AbovePrompt is raised on terminal and desktop only. A Pane is raised
+  on every surface.
+
+**Pane.** The hook is on `{ component: 'Pane', requestId: 'ah-status' }`.
+- It reads `view` and draws §6.4's sections at `e.props.bodyColumns`.
+- When `view` is `null`, it draws one dim line: `No hierarchy status
+  here.`
+- `Box` and `Text` come from `$.ui.resolve(e)` (F:2303); they are not
+  globals.
+
+**Tone colours.** A `Text` `color` is "a theme key or a raw color"
+(F:12013). E15(b) lists the theme keys, the Implementor maps them by name
+from that list, and the step report names the mapping:
+- bad → the theme's error key;
+- warn → its warning key;
+- work → its in-progress or suggestion key if one exists, else no colour;
+- idle and unknown tones → `dimColor`.
+
+No raw colours, because they ignore the theme.
+
+**`/hierarchy-pane`.**
+- `session.start` calls `$.command.register({ name: 'hierarchy-pane',
+  description: … })` before `next(e)` (R:158-163). A reload registers it
+  again, which replaces the old one (F:2985).
+- The `command.run` hook has the matcher exactly
+  `{ command: 'hierarchy-pane' }`.
+- In a member session it opens nothing and returns
+  `{ text: 'The hierarchy view is hidden in member sessions.' }`. This is
+  Q3; user question U-P3a below.
+- Otherwise it clears `closed` and calls `$.ui.open({ id: 'ah-status',
+  title: 'Hierarchy' })`. An open from a command is asked, so the Pane
+  is placed at any width (F:2382). The hook returns a `{text}` saying
+  whether the Pane was placed (`isPlaced`, F:13387).
+
+**Auto-open.** This refines §6.3 with F:2382 and F:7061.
+- In the tick, it fires when `view` is first non-null in a session and
+  neither `opened` nor `closed` is set. It sets `opened`, then calls
+  `$.ui.open` with the same arguments.
+- An unasked open is placed from 144 columns. The floor drops to 110
+  once the person has opened `ah-status` themselves, in this session or
+  an earlier one, until they close it by hand.
+- Below the floor, the Pane waits undrawn and is placed when the
+  terminal widens (F:2384). The module does nothing more: no retry and
+  no polling.
+- `$.ui.open` on an id that is already open retitles it and never makes
+  a second instance (F:7088).
+
+**Close.** The hook is on `ui.close` with the matcher exactly
+`{ id: 'ah-status' }`.
+- When `e.origin.kind === 'person'`, it sets `closed`.
+- It always returns `next(e)`, calling it exactly once (r3.19). A hook
+  that answers without `next` keeps the Pane open (F:7024).
+
+**Toasts.** Each one is `$.ui.toast(text)` (F:2363) with the default
+timeout. `ToastOptions` has only `timeoutMs`, with no tone.
+
+§6.5 holds, with one addition: `seen` is pruned only on a tick whose
+`view` is non-null. A `null` view leaves `seen` untouched. Otherwise an
+unreadable or expired file for one tick would empty the set, and the
+doc's return would toast everything again.
+
+**Guard.** P3 needs no new `$` call. `ui.toast`, `ui.open`, `ui.resolve`,
+`command.register` and `state.get/set` are already allowed, and
+`ui.invalidate` is not needed. The changes:
+- `ui.close` gets the exact matcher `{ id: 'ah-status' }` (§6.3 item 2
+  table).
+- If E15(a) finds that a `StateRef` needs a value import from
+  `'claude-code'`, §6.3 item 5 allows that one named import and no
+  other.
+
+**Tests.** These are additions to §6.6.
+- `vectors.ts` gains, for all seven cases: the band line and tone, the
+  Pane rows at 120 columns, and the toast `(key, text)` list.
+- Register tests on `['terminal', 'desktop']` mount the band and the
+  Pane through `$.ui.mount` (F:14321), on the AbovePrompt surfaces it
+  supports. They answer `ui.open` with a hook beneath that records the
+  arguments and answers `{ value: { isPlaced } }` (F:13401).
+- The harness has no reload helper. If a second `session.start` in one
+  test keeps `$.state`, use it as the stand-in for a reload, for toast
+  dedupe and for auto-open once. Otherwise P3 AC 3's reload clause is
+  the user's.
+- The harness cannot test paint, placement or the width floors: the kit
+  never exercises "a surface's paint" (F:14802). P3 AC 4 covers those,
+  and it is the user's check.
+
+**User question U-P3a** (not blocking; it has a default). Should
+`/hierarchy-pane` in a member session open the Pane anyway? It is an
+explicit ask, but Q3 says member sessions see nothing.
+- Default: honour Q3. Reply with text and open nothing.
+- The question has reached the user and is parked as d3. P3 builds with
+  this default.
 
 ## 7. claude-tui-line items (Phase 2a)
 
@@ -2147,7 +2294,8 @@ run. Step 5 stays at the end of P2b.
 9. The drift test fails unless `fixtures.ts` is byte-identical to a fresh
    generation, and it has been seen to fail once, on a one-byte edit in a
    temp copy.
-10. The README carries the four step-4 points, and `docs/status-file.md`
+10. The README carries the five step-4 points (r3.20: r3.16 added the
+    `claude`-on-PATH point), and `docs/status-file.md`
     carries the four r3.12 points and the r3.13 point.
 11. plugin.json and the root marketplace.json both say 0.111.0, and the
     CHANGELOG has the [0.111.0] entry. r3.13: the entry includes a Fixed
@@ -2180,16 +2328,136 @@ r3.11: E12 and E13 change P3 only through §6.6. Its vectors go into
 list when it starts. Its version is 0.112.0, or 0.111.0 if P2b ships
 with it.
 
-1. All of §6.6 passes.
-2. The auto-open rules hold: once per session, never after a person closes
-   the Pane, and never in member sessions.
-3. Toasts do not repeat across a reload. A fresh session seeds silently.
-4. A manual check by the user in a 118-column Herdr split shows:
-   - the band visible;
-   - the Pane waiting until `/hierarchy-pane`, then opening inline;
-   - the counts on exactly one line: with `status_entry` on and no
-     claude-tui-line `ah` item placed, the `⚠ ah: …` line; with the item
-     placed and `status_entry` off, the claude-tui-line item.
+r3.20: the step list. P3 starts after P2b's step 5 has released 0.111.0
+(d1). Each step is one commit unless it says otherwise. The design is in
+§6.7.
+
+0. **E15, read only, no commit.** Answer from the plugin-authoring
+   reference only, and run nothing:
+   - (a) How is a `StateRef` written for `$.state.get/set`: as a literal
+     at the call, or through a value import from `'claude-code'`? Name
+     the import if there is one.
+   - (b) Which theme keys does a `Text` `color` accept?
+
+   Both outcomes are decided in §6.7. [AC 1]
+1. **Guard for P3.** Tests only. In `tests/test-mod-readonly.sh`:
+   - give `ui.close` the exact matcher `{ id: 'ah-status' }` in the lexer
+     and in the validate canon (`ui.close{id=ah-status}`);
+   - if E15(a) needs it, allow its one named value import from
+     `'claude-code'` (§6.3 item 5).
+
+   Planted cases, each failing the lexer alone:
+   - `ui.close` with no matcher;
+   - `ui.close` with `{ id: 'other' }`;
+   - a value import from `'claude-code'` of any other name (`update`);
+   - a Pane `ui.render` with `requestId` other than `'ah-status'`.
+
+   Allowed forms, each also through validate:
+   - the `ui.close` matcher;
+   - both `ui.render` matchers;
+   - the `command.run` matcher.
+
+   The P2b module still passes. [AC 5]
+2. **State contract and view model.** In `mod/types/index.d.ts`, the four
+   `PluginState.ah` values (§6.7). In view.ts, the model layer and the
+   drawing layer (§6.7), covering §6.4's band rules and Pane width
+   fallback and §6.5's toast keys and texts. In `vectors.ts`, the band,
+   Pane rows and toasts for all seven cases. Add the view.ts edge cases
+   from §6.6 that concern the band and the Pane. register.tsx is not
+   changed. [AC 1]
+3. **Band and Pane drawing.** In register.tsx:
+   - the tick writes `view` only on change;
+   - the AbovePrompt hook and the Pane hook (§6.7).
+
+   Register tests on both surfaces, through `$.ui.mount`:
+   - the band draws above `next(e)`'s answer;
+   - the band yields to `next(e)` during a survey and when there is no
+     band;
+   - a `view` change redraws a mounted band;
+   - the Pane draws its rows, and draws the `null` line;
+   - another component passes through.
+
+   Also the §6.6 tree walk: only `Box`, `Text` and `engine` nodes.
+   [AC 1, 5]
+4. **`/hierarchy-pane`, auto-open and close.**
+   - `command.register` in `session.start`.
+   - The `command.run` hook, including the member-session reply.
+   - Auto-open in the tick.
+   - The `ui.close` hook with its flags.
+
+   Register tests:
+   - the command opens the Pane (`ui.open` arguments recorded) and
+     returns exactly `{text}`, with `next` staged to carry `context` and
+     `exitCode`;
+   - another command is not answered;
+   - auto-open fires once, never after a person close, never in a member
+     session, and with `isPlaced: false` it still counts as opened;
+   - a person close sets `closed`; `/hierarchy-pane` clears it;
+   - `ui.close` calls `next` exactly once and returns its value.
+
+   [AC 1, 2, 5]
+5. **Toasts.** In the tick, the `seen` set, silent seeding, and pruning
+   only on a non-null `view` (§6.5, §6.7).
+
+   Register tests:
+   - seeding toasts nothing;
+   - a new key toasts once, with the §6.5 text;
+   - the same key does not toast again;
+   - a `null` view for one tick does not re-toast;
+   - a member session toasts nothing;
+   - dedupe across a reload, through the stand-in if it holds (§6.7).
+
+   [AC 1, 3]
+6. **README** (Implementer for this step: `docs-writer`). Cover:
+   - the band;
+   - the Pane and `/hierarchy-pane`;
+   - when the Pane opens unasked (144 columns, or 110 once asked) and
+     that closing it keeps it closed for the session;
+   - toasts and their three triggers;
+   - member sessions see none of it.
+
+   [AC 7]
+7. **Release.** Bump to 0.112.0 in plugin.json and the root
+   marketplace.json. Add a CHANGELOG [0.112.0] entry. [AC 7]
+
+**ACs.**
+
+1. All of §6.6 passes through `tests/test-mod-plugin-test.sh` in the full
+   bash suite. Every fixture case has band, Pane and toast vectors. The
+   E15 answers are in the step-0 report.
+2. The auto-open rules hold, shown by register tests:
+   - once per session;
+   - never after a person closes the Pane;
+   - never in member sessions.
+3. Toasts:
+   - a fresh session seeds silently;
+   - each key toasts at most once per session;
+   - a `null` view does not cause a replay;
+   - none appear in a member session.
+
+   Across a reload: a register test through the stand-in, or else the
+   user checks it in a live session.
+4. A manual check by the user. Start from a state where `ah-status` has
+   never been opened by hand.
+   - In a 118-column Herdr split:
+     - the band is visible;
+     - the Pane waits until `/hierarchy-pane`, then opens inline;
+     - the counts are on exactly one line. With `status_entry` on and no
+       claude-tui-line `ah` item placed, that is the `⚠ ah: …` line.
+       With the item placed and `status_entry` off, it is the
+       claude-tui-line item.
+   - In a terminal of 144 columns or more, the Pane opens once, unasked.
+     Closing it by hand keeps it closed for the session.
+5. The read-only guard holds for the P3 module:
+   - every §6.6 and P3 step-1 planted case fails the lexer alone;
+   - validate's `hooks:` are within the allowed registrations, matchers
+     included;
+   - the r3.16–r3.19 behaviour tests pass.
+6. The full `ah` bash suite passes, and the command hooks are unaffected.
+7. 0.112.0 agrees in plugin.json and marketplace.json, with a CHANGELOG
+   entry and the README. After release, the user updates from the
+   marketplace and repeats AC 4's 118-column check on the installed
+   copy.
 
 ## 9. Decisions made, with rationale
 
@@ -2257,6 +2525,25 @@ Changes from r2 (r3, after the evidence in `0071-evidence.md`):
   exact; new ACs 23–25; P2b ACs rewritten (E12, E13 first; installed-copy
   check by the user); P3 AC 4 reworded for the toggle.
 - **§11:** verdicts recorded; E12 and E13 added.
+
+r3.20 (the Orchestrator asked for P3 to be made build-ready):
+
+- **New §6.7** settles P3 against the 2.1.289 types:
+  - `view`, `seen`, `opened` and `closed` live in `$.state`, which
+    survives reloads, and a write redraws the readers, so no
+    `ui.invalidate` is needed;
+  - view.ts splits into a model layer that is free of width and a
+    drawing layer that takes width;
+  - the band draws above `next(e)`'s answer, never in its place;
+  - auto-open's floor is 144 columns, or 110 once asked (F:2382);
+  - `/hierarchy-pane` is registered in `session.start`;
+  - `seen` is pruned only on a non-null `view`.
+- **Guard:** no new `$` call. `ui.close` gets the exact matcher
+  `{ id: 'ah-status' }`. A `StateRef` value import is allowed only if
+  E15(a) needs one.
+- **§8 P3:** step list 0–7, ACs 1–7, and E15 in §11.
+- **User question U-P3a:** whether `/hierarchy-pane` works in a member
+  session. The default is no, following Q3.
 
 r3.19 (two in-ceiling nits from the step-1e review, which passed):
 
@@ -2543,6 +2830,7 @@ was within every bound: write p95 warm 5.63 ms and cold 13.40 ms;
 | E11 (P1) | **Done.** The read part found NEEDS-ARCHITECT #5, resolved in §3.7.1. The suite run at P1 step 2 showed only the intended failures. **Suite run (P1 step 2):** with §3.7.1 in place, run the full `ah` bash suite. | Green after only the §3.7.7 updates → done. Any other failure → return it to the Architect before step 2 lands. |
 | E12 (P2b start) | **Done: readable from `register`'s `options` (defaults filled in), no blocking prompt on update, enable or start → userConfig as in §6.4 (r3.11 read path and scope there).** Read the plugin-authoring reference (load the `plugin-authoring` skill) and, if it is not explicit, probe: how does a module read a plugin `userConfig` value, and does adding a `userConfig` key to an installed plugin's plugin.json prompt the user on update or enable? Probe sandbox-safely as in E9 (`T=$(mktemp -d)`, checked non-empty; `--plugin-dir`; `--setting-sources local`; timeout; `pgrep -fl claude` afterwards). | Readable and no prompt, or a prompt with the default pre-filled → userConfig as in §6.4. Not readable by a module → return to the Architect (the fallback is a `$.store` flag set by a mod command). A blocking prompt for every `ah` user → return to the Architect; it becomes a user decision. |
 | E13 (P2b start) | **Done: no; any `.json` import is refused, and a `.ts` module that embeds the JSON loads → `fixtures.ts` plus the drift test (§6.6 r3.11).** Can a `claude plugin test` test file under `<mod>/tests/` import a JSON file under `agent-hierarchy/tests/fixtures/status/` (a static `import … with { type: "json" }`, or a plain import)? One-test probe in a scratch copy of the plugin. | Yes → tests read fixtures in place. No → the embedded fixtures module plus the bash drift check (§6.6). |
+| E15 (P3 step 0, read only, r3.20) | **Open.** Answer from the plugin-authoring reference only; run nothing. (a) How is a `StateRef` for `$.state.get/set` written: a literal at the call, or a value import from `'claude-code'` (which name)? (b) Which theme keys does a `Text` `color` accept? | (a) Literal: no guard change. Import: §6.3 item 5 allows exactly that name, done in P3 step 1. (b) The Implementor maps bad, warn and work by name to the error key, the warning key and an in-progress or suggestion key (else no colour), and idle to `dimColor` (§6.7). |
 | E14 (P2b step 0, read only, r3.11) | Answer from the plugin-authoring reference only; run nothing. (a) Can a `claude plugin test` test supply `options` (userConfig values) to `register`? (b) Does the reference name a type check for module code that runs with no new dependency in the repo? `ah` has no package.json, and `tsc` is not installed. | (a) Yes → add a register-level toggle test. No → the view.ts toggle test alone carries P2b AC 6. (b) Yes → AC 3 runs it. No → AC 3 is `validate` only, and `ah` gains no node toolchain. Ceiling: type errors that the tests do not exercise go unseen. |
 
 All probes must be sandbox-safe:

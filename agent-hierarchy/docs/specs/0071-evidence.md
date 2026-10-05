@@ -21,6 +21,7 @@ Probes only. No product code was changed. Scratch root used below:
 | E12 | **readable, no blocking prompt → userConfig (§6.4)** | `register(on, options)` gets `status_entry` with its default filled in. A stored value is read from user settings or `--settings` only, not from project or local settings. Update, enable and interactive start never prompt. A fresh install prints one non-blocking "1 userConfig option not yet set" line. |
 | E13 | **no → embedded fixtures module + drift check (§6.6)** | `claude plugin test` refuses any `.json` import ("not named like code and was not loaded"), with or without `with { type: "json" }`. A `.ts` module that embeds the JSON loads. |
 | E14 | **(a) yes → register-level toggle test; (b) no → AC 3 is `validate` only** | (a) `test(name, { options }, body)` hands `register` the userConfig values. (b) The only type check named is `tsc -p <mod folder>`, which needs `tsc`, and `ah` has none. Reference only; nothing was run. |
+| E15 | **(a) literal → no guard change; (b) only `warning` is documented** | (a) A `StateRef` is a literal `{ plugin, key } as const` at the call; no import. (b) A `Text` `color` is "a theme key or a raw color", and the reference lists no keys. `'warning'` is the only one named, so bad (error key) and work (in-progress or suggestion key) have no documented key. Reference only; nothing was run. |
 
 ## Spec assumptions broken
 
@@ -308,6 +309,25 @@ Read only, nothing run. Source: the 2.1.289 plugin-authoring skill, `/private/tm
   - reference.md:62: `claude plugin validate` "checks the contract" of a plugin that adds a noun to `$`, meaning its types file. It does not type-check module code.
   - → AC 3 is `claude plugin validate` only. The ceiling stands: type errors the tests do not exercise go unseen.
 - Side note: per reference.md:41–48, a mod loaded from a folder the person owns (`--plugin-dir` among them) gets `.claude-plugin/types/` written beside it at every load and reload. A live `--plugin-dir` run on the worktree would leave generated files in the plugin folder.
+
+### E15: the StateRef form and the Text colour keys, from the reference only (P3 step 0)
+
+Read only, nothing run. Source: the 2.1.289 plugin-authoring skill (`reference.md` and `types/claude-code.d.ts`).
+
+- **(a) How is a `StateRef` written? As a literal.**
+  - types :3292–3297: `$.state.get(ref)` takes "`{ plugin, key }` as the owner's contract declares it in PluginState", with the example `const workers = { plugin: "swarm", key: "workers" } as const`, then `$.state.get(workers)`.
+  - reference.md:90: "refer to one by a typed reference whose `plugin` and `key` are literals".
+  - `StateRef` (:11502) is a type only. The `atom`/`read`/`update` helpers that `examples/band.tsx` imports take `$` as an argument, which the guard bans, and P3 does not need them.
+  - → No value import from `'claude-code'`, and no guard change for (a) (§6.7).
+- **(b) Which theme keys does a `Text` `color` accept? The reference does not list them.**
+  - `TextProps` (:12005–12012): "Colors are a theme key or a raw color". There is no key type or list.
+  - The only key named anywhere in reference.md, the types or the examples is `'warning'`, in a highlight example (:8109, `{ start: 4, end: 8, color: 'warning', bold: true }`). A search for `color: '…'` and `color="…"` found nothing else.
+  - §6.7 mapping, from what is documented:
+    - warn → `warning`: documented;
+    - bad → "the theme's error key": no error key is documented;
+    - work → "in-progress or suggestion key if one exists, else no colour": none is documented, so it gets no colour by the rule;
+    - idle and unknown → `dimColor`: documented on `TextProps` (:11999).
+  - Open: bad has no documented key, and §6.7 gives no fallback for bad. This matters from P3 step 3 (drawing), not step 1 (guard).
 
 ## Side effects outside scratch (for the user)
 - **`~/.claude/settings.json` was rewritten by the user's own verb-themes plugin** during the two E9 r2 runs. Those runs load full user settings, as r2 prescribes, and verb-themes `rotate.py:217` swaps the spinner pack on each SessionStart. File mtime: 22:47:55. It rotated twice. The runs' output named Star Trek, then James Bond, and the session had started on Doctor Strangelove. It was not reverted, because the brief forbids settings edits. `/verb-themes` restores it. Every other probe used `--setting-sources local|project,local` to avoid this.
