@@ -5,6 +5,26 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.115.0]
+
+Reviews that know what a change is meant to deliver, and fixes that do not reach a push unreviewed.
+
+### Added
+- A review intent gate. A request to a review-class role (the Reviewer, or any custom role of the review class)
+  must state its goal and acceptance. The dispatch hook holds one that does not, on every route that names a
+  request file, including a peer brief sent without the sentinel. `roster.mjs deliver` refuses it too.
+- The Reviewer audits claims (`verified | unverified | contradicted`), traces every newly emitted or persisted
+  value on every caller path, probes each added or changed condition, and treats earlier "resolved" threads as claims.
+- `NEEDS-INTENT`: a Reviewer with no spec and no stated intent says so instead of reviewing.
+- The Reviewer's report names the range it reviewed.
+- A spec section, "Invariants and negative cases", and an Implementor rule: a negative test for every condition
+  added or widened, and no unsourced external claims in comments.
+- A generic review scenario under `tests/fixtures/review-scenario/`, with a self-check that its defects are real.
+
+### Changed
+- A verdict covers only the range it names; a behaviour-changing commit after it is re-reviewed before push.
+- A change to a decision rule is never "Determined": it takes the design step.
+
 ## [0.114.0]
 
 The band gets a button that opens the Pane, and the status entry becomes opt-in.

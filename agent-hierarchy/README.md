@@ -79,6 +79,12 @@ to the Implementor) or a **spec-defect** (the spec is wrong, so it goes back to
 the Architect). After two round trips the loop goes up to the Ultra-Advisor
 instead of going in circles.
 
+A Reviewer needs to know what the change is meant to deliver: a review brief
+states its goal and acceptance, and a dispatch without them is held until it
+does. A Reviewer that finds no intent anywhere answers `NEEDS-INTENT` instead of
+reviewing. A verdict covers only the range it names, so a behaviour-changing
+commit made after it gets its own review of that range before it is pushed.
+
 ## Lanes: reasoning roles never execute
 
 The expensive roles read. They don't run things. That's enforced three ways at
@@ -605,6 +611,7 @@ than pass.
 - **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
 - **0.109.0** `/pipeline` decides safe questions for you and parks dangerous ones: [Decisions made for you](#decisions-made-for-you). Plan runs get a default branch. Issue runs can merge a PR for you, one approving click each, if you opt in: [Merging](#merging-only-if-you-opt-in).
 - **0.114.0** the band's `[ Pane ]` button opens the hierarchy Pane; the `⚠ ah:` status entry is now opt-in (`status_entry` defaults to off): [The band](#the-band).
+- **0.115.0** review and intent gates: a Reviewer brief must state its goal and acceptance, the Reviewer audits claims and traces new values and changed conditions, and a verdict covers only its range.
 - **0.113.0** one team file per repo, whatever worktree you spawn from, and `disband`/`dismiss` verify the close and warn loudly; finished peer work is never left unseen (four report-back layers, including a dispatch watcher): [Finished work is never left unseen](#finished-work-is-never-left-unseen), [Team home and teardown](./docs/cli-tools.md#team-home-and-teardown).
 
 The installed version is in `.claude-plugin/plugin.json`. Each feature below

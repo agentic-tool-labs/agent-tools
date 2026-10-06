@@ -1232,7 +1232,9 @@ with the next item. A red build ends only its item, not the run.
 In order:
 1. Builds and tests are reported green by the Implementor or task-runner.
 2. **Reviewer:** an adversarial review of the whole
-   `<base>..ah/issue-<N>` range, slug `<tag>-i<N>-gate`. Findings feed the
+   `<base>..ah/issue-<N>` range, slug `<tag>-i<N>-gate`. Its brief fills
+   `[1] goal` (what the issue must deliver, with its source) and `[5]
+   acceptance`: a Reviewer dispatch without them is held. Findings feed the
    item's rework; gate rounds are capped at 3.
 3. **Architect:** sign-off on that review, slug `<tag>-i<N>-ok` — on the
    review and the reported evidence, never on the builds (§ Completion
