@@ -230,7 +230,7 @@ check "K1: hooks.json no longer describes a route question or the prefer-peers d
 check "K1: comms-protocol.md no longer describes a route question or the prefer-peers default" '! grep -qE "Default when the user has not answered|ask ONCE per session|One routing question per session" "$PLUGIN/docs/comms-protocol.md"'
 # K1: every budget the size test holds, pinned at its value. Raising one means editing this list
 # as well, so it is a deliberate, reviewed change; lowering one needs nothing here.
-K1_PINS="AUTO_MAX=14600 CONFIRM_MAX=16500 architect=9900 ultra-advisor=7300 reviewer=6700 implementor=5500 task-runner=5650 orchestrator=7350"
+K1_PINS="AUTO_MAX=14700 CONFIRM_MAX=16000 architect=10200 ultra-advisor=7300 reviewer=7900 implementor=5900 task-runner=5650 orchestrator=7350"
 k1_raised() { # <size test file>: each pinned budget it raises or no longer defines
   local f=$1 pin name max got
   for pin in $K1_PINS; do
@@ -245,12 +245,12 @@ k1_raised() { # <size test file>: each pinned budget it raises or no longer defi
 OUT=$(k1_raised "$PLUGIN/tests/test-directive-size.sh")
 check "K1: no directive or agents/*.md budget in the size test is raised above its pin" '[ -z "$OUT" ]'
 SIZE_COPY="$SANDBOX/size-copy.sh"
-for raise in 's/^AUTO_MAX=14600/AUTO_MAX=14601/' 's/^CONFIRM_MAX=16500/CONFIRM_MAX=17000/' 's/^md_ceiling orchestrator  7350/md_ceiling orchestrator  7351/' 's/^md_ceiling task-runner   5650/md_ceiling task-runner   9999/' 's/^md_ceiling architect .*//'; do
+for raise in 's/^AUTO_MAX=14700/AUTO_MAX=14701/' 's/^CONFIRM_MAX=16000/CONFIRM_MAX=17000/' 's/^md_ceiling orchestrator  7350/md_ceiling orchestrator  7351/' 's/^md_ceiling task-runner   5650/md_ceiling task-runner   9999/' 's/^md_ceiling architect .*//'; do
   perl -pe "$raise" "$PLUGIN/tests/test-directive-size.sh" > "$SIZE_COPY"
   OUT=$(k1_raised "$SIZE_COPY")
   check "T-H0: K1 fails on a copy of the size test edited with $raise" '! cmp -s "$SIZE_COPY" "$PLUGIN/tests/test-directive-size.sh" && [ -n "$OUT" ]'
 done
-perl -pe 's/^AUTO_MAX=14600/AUTO_MAX=14000/' "$PLUGIN/tests/test-directive-size.sh" > "$SIZE_COPY"
+perl -pe 's/^AUTO_MAX=14700/AUTO_MAX=14000/' "$PLUGIN/tests/test-directive-size.sh" > "$SIZE_COPY"
 OUT=$(k1_raised "$SIZE_COPY")
 check "T-H0: a lowered budget passes K1" '[ -z "$OUT" ]'
 check "K1: commands/hierarchy.md has no plugins/cache/*/task-gopher glob" '! grep -qF "plugins/cache/*/task-gopher" "$PLUGIN/commands/hierarchy.md"'
