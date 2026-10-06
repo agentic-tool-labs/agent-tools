@@ -136,7 +136,9 @@ export function clearActivity(dir, subject) {
   const file = activityFile(subject);
   if (!file || !dir) return;
   try {
-    unlinkSync(join(dir, "activity", file));
+    const activity = activityDirOf(dir);
+    if (!activity) return;
+    unlinkSync(join(activity, file));
   } catch {
     return;
   }

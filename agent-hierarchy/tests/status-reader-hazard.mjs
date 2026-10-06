@@ -37,6 +37,15 @@ const cases = {
     const wrote = lib.recordActivity(d, "s", { activity: "working" });
     return swept === 0 && existsSync(join(other, "x.json")) && wrote === false && !existsSync(join(other, "s.json"));
   },
+  H8: async ({ d, other, lib }) => {
+    rmSync(join(d, "activity"), { recursive: true });
+    writeFileSync(join(other, "pane-a.json"), REC);
+    writeFileSync(join(other, "sid.json"), REC);
+    symlinkSync(other, join(d, "activity"));
+    lib.clearActivity(d, "pane-a");
+    lib.clearActivity(d, "sid");
+    return existsSync(join(other, "pane-a.json")) && existsSync(join(other, "sid.json"));
+  },
   W1: async ({ d, other, lib }) => {
     writeFileSync(join(other, "t"), "KEEP\n");
     symlinkSync(join(other, "t"), join(d, `status.json.${process.pid}.tmp`));
