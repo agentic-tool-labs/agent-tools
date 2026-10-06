@@ -35,6 +35,15 @@ Two changes ship together as 0.114.0.
 - Inside the `ui.render` hook whose matcher is `component=AbovePrompt`, `Button` may be destructured from `$.ui.resolve(e)` and returned as a JSX element.
 - Everywhere else, Button stays forbidden exactly as now. That covers the Pane `ui.render`, `session.start`, `command.run`, `ui.close` and module scope. Planted cases l.321 and l.327 must still fail unchanged.
 - The band hook's exemption covers only its own body. The span of any `on(...)` call nested inside it is excluded, so a Pane render registered inside the band hook gets no exemption. *(Added after review F3, as built.)*
+- **Position rule: a Button never leaves the band hook.** *(Added after the F3 re-review. A span-based exemption let a Button value or element escape through an outer binding and be drawn in the Pane. This closes the class rather than documenting it as a ceiling.)* Inside the band span (excluding nested `on(...)` spans), the identifier `Button` may appear in exactly two positions. Every other occurrence fails.
+  - **P-a. Destructure.** As a shorthand property, without renaming, in a `const { … }` pattern whose initializer is `$.ui.resolve(e)`. The `const` sits at the band hook's own function depth, not inside any nested function literal. `Button: X`, `X: Button`, `let`/`var` patterns, and any other initializer all fail.
+  - **P-b. Tag.** As a JSX tag name, `<Button` or `</Button`, only where all of these hold:
+    - (i) The tag lies inside the argument of a `return` statement that belongs to the band hook's own function body. If the hook is an expression-bodied arrow, the tag lies inside that body expression.
+    - (ii) No function literal (`=>` or `function`) opens between that `return` (or arrow body start) and the tag. The Button's own `onPress` arrow opens after the tag, so it is unaffected. A tag inside an `onPress` body therefore fails.
+    - (iii) Every `(` still open between that `return` and the tag is a grouping paren, not a call paren. A call paren is a `(` whose preceding token (whitespace and comments skipped) is an identifier, `)`, `]`, `?.` or `>` of a type argument. The keywords `return`, `if`, `while`, `for`, `switch`, `typeof`, `await`, `void` before a `(` make it grouping.
+    - (iv) That return argument contains no assignment operator: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`, `&&=`, `||=`, `??=`. Not counted as assignment: `==`, `===`, `!=`, `!==`, `<=`, `>=`, `=>`, and a JSX attribute `name=` (an identifier, with optional hyphens, directly inside a JSX opening tag before `=`). The `onPress` arrow body is exempt from (iv), because it is lexed under every existing rule and holds no tag.
+  - **Accepted stricter side effects:** a Button cannot be built inside `.map(...)`, a helper component or a variable and then returned, and it cannot be renamed on destructure. A band that needs more than one Button must write each one inline in the return.
+  - **Today's `register.tsx` passes.** The destructure is at hook depth. The tag sits under `return (` → JSX → `{wide ? (` → JSX. The only open parens are grouping (after `return` and after `?`). There is no assignment outside attributes, and `onPress` opens after the tag.
 - A Button's `onPress` must be an inline arrow function. Its parameter, if it has one, must not be named `$`. Its body is lexed under every existing rule: the allow-list, no `$` destructuring or storing, and the banned tokens.
 - The other input elements (`Input`, `Select`, `Link`, `Code`, `Markdown`, `Client`, `Svg`, `Raster`, `Image`) stay non-drawable everywhere.
 - Why this stays inside the 0071 §6.3 item 6 ceiling: the guard exists so that an ordinary edit cannot act, send or answer by accident. A Button press is caused by the person, and its handler can reach only calls that are already allow-listed (`ui.open` and `state.set` are already made unasked by `tick`). The new class it opens is "code that runs on a person's press". That class is closed by the same allow-list, so no new action capability is added.
@@ -64,6 +73,16 @@ Two changes ship together as 0.114.0.
 9. Spaced member calls `x. h($)` and `new K(). h($)`, where an object or class method `h(env)` exists (review F1).
 10. A nested `function* h(env)`, `function *h(env)` or `async function* h(env)` that shadows a valid `$`-first helper, called as `h($)` (review F2).
 11. A Pane `ui.render` `on(...)` holding a `<Button>`, registered inside the AbovePrompt hook (review F3).
+
+The following cases were added after the F3 re-review. Each uses an outer `let` and a Pane hook that draws the escaped value, unless noted otherwise:
+
+12. Q1, a bare value: `B = Button` in the band hook; the Pane returns `<B onPress={() => 0} />`. Fails P-a/P-b on the bare `Button`.
+13. Q2, a thunk: `mk = () => <Button onPress={() => 0} />` in the band hook; the Pane returns `mk()`. Fails P-b(i) and P-b(ii).
+14. A stored element: `el = <Button onPress={() => 0} />; return next(e)` in the band hook; the Pane returns `el`. Fails P-b(i), because the tag is not in a return.
+15. Assignment in the return: `return (el = <Box><Button onPress={() => 0} /></Box>)`. Fails P-b(iv).
+16. A call wrap: `return keep(<Box><Button onPress={() => 0} /></Box>)`, where `keep` is a same-file `const`. Fails P-b(iii).
+17. A renamed destructure: `const { Button: B } = $.ui.resolve(e)`, then `return <B onPress={() => 0} />`. Fails P-a.
+18. A tag in onPress: `<Button onPress={() => { x = <Button onPress={() => 0} /> }} />` inside the return. Fails P-b(ii) on the inner tag.
 
 **Required new allowed forms (must pass):** the band hook returning `<Box><Text>…</Text><Button onPress={() => …}>…</Button></Box>`; a `$`-first helper declared once and called as `helper($)` from two hooks.
 
@@ -148,7 +167,7 @@ Two changes ship together as 0.114.0.
 ## 7. Acceptance
 
 Automated, all green:
-1. `tests/test-mod-readonly.sh` passes with W1 and W2. All existing planted cases still fail. The new planted cases 1–11 in §3 each fail on the lexer layer alone, and the new allowed forms pass.
+1. `tests/test-mod-readonly.sh` passes with W1 and W2. All existing planted cases still fail. The new planted cases 1–18 in §3 each fail on the lexer layer alone, and the new allowed forms pass.
 2. `tests/test-mod-plugin-test.sh` (`claude plugin test` on the plugin root) passes, with these register tests added:
    1. `/hierarchy-pane` behaviour and texts are unchanged (the existing tests at l.303–321 and l.406–414 pass unmodified).
    2. Band press. With a fixture that draws the band (for example `work`), the rendered AbovePrompt contains a Button keyed `ah-pane`. Pressing it writes `closed=false` before one `ui.open({ id:'ah-status', title:'Hierarchy' })`. With `placed=false` it toasts the not-placed text; with `placed=true` it toasts nothing. **How the press is driven depends on N3.**
