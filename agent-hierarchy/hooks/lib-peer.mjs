@@ -37,7 +37,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { isGatedPeerTarget } from "./lib-gate.mjs";
-import { parseMsgFilename } from "./lib-hier.mjs";
+import { extractMsgToken, parseMsgFilename, readMsgFile } from "./lib-hier.mjs";
 
 /** One JSONL record per tracked peer obligation. */
 export function peerPendingPath() {
@@ -122,7 +122,7 @@ const MSG_TOKEN_LINE_RE = /^\[hierarchy-msg\s+([^\]\s]+)\s*\]/;
  * that must not cede on this path (§4.1a) can tell the two apart; the
  * sentinel path is unchanged in every other respect.
  */
-export function extractPendingRecord(text) {
+export function extractPendingRecord(text, role = null) {
   if (typeof text !== "string" || !text) return null;
 
   const tagMatch = text.match(WRAPPER_TAG_RE);
@@ -160,6 +160,19 @@ export function extractPendingRecord(text) {
           task: meta.slug,
           armed_by: "msg-token",
         };
+      }
+    }
+  }
+
+  // A dispatch that carries the token mid-line still tasks this session when the request is
+  // addressed to its own role; the role match is what keeps a quoted request from arming.
+  if (role) {
+    const path = extractMsgToken(afterTag);
+    if (path && path.endsWith("--request.md") && existsSync(path)) {
+      const meta = parseMsgFilename(path);
+      const parsed = meta && meta.type === "request" ? readMsgFile(path) : null;
+      if (parsed && parsed.fm && parsed.fm.to === role) {
+        return { from: wrapper.from, from_name: wrapper.fromName, reply_to: wrapper.from, task: meta.slug, armed_by: "msg-token" };
       }
     }
   }
@@ -202,7 +215,7 @@ function keyOf(rec) {
 export function latestByKey(records) {
   const byKey = new Map();
   for (const rec of records) {
-    if (rec && (rec.type === "turn" || rec.type === "dispatch" || rec.type === "subagent")) continue;
+    if (rec && rec.type) continue; // obligations carry no `type`; every typed row is some other record
     byKey.set(keyOf(rec), rec);
   }
   return [...byKey.values()];
@@ -246,8 +259,33 @@ export function latestTurnMarker(sessionId) {
  * moment it sends a request token, keyed on the SENDER's own `session_id` —
  * independent of whether the recipient ever saw it.
  */
-export function appendDispatchRecord(sessionId, requestId, to) {
-  appendPeerRecord({ type: "dispatch", session_id: sessionId, request_id: requestId, to, created: new Date().toISOString() });
+export function appendDispatchRecord(sessionId, requestId, to, path = null, toAddr = null) {
+  appendPeerRecord({
+    type: "dispatch",
+    session_id: sessionId,
+    request_id: requestId,
+    to,
+    ...(path ? { path } : {}),
+    ...(toAddr ? { to_addr: toAddr } : {}),
+    created: new Date().toISOString(),
+  });
+}
+
+/** Record that this session has been shown the response for `requestId`: `seen` when it arrived as a delivery, `surfaced` when a hook put it in front of the Orchestrator. */
+export function appendReportRecord(type, sessionId, requestId) {
+  appendPeerRecord({ type, session_id: sessionId, request_id: requestId, ts: new Date().toISOString() });
+}
+
+/** True when this session already has a `seen` or `surfaced` row for the request. */
+export function reportShown(sessionId, requestId) {
+  return readPeerRecords().some((r) => r && (r.type === "seen" || r.type === "surfaced") && r.session_id === sessionId && r.request_id === requestId);
+}
+
+/** The latest dispatch row per request id for one session, in file order. */
+export function latestDispatchRows(sessionId) {
+  const byId = new Map();
+  for (const r of dispatchRecordsFor(sessionId)) byId.set(r.request_id, r);
+  return [...byId.values()];
 }
 
 /** Append a `type:"subagent"` record: `status` is "started" or "stopped". */
@@ -321,4 +359,29 @@ export function targetSatisfiesRecord(to, rec) {
   if (isGatedPeerTarget(to, rec.from_name)) return true;
   if (rec.reply_to !== "sender" && isGatedPeerTarget(to, rec.reply_to)) return true;
   return false;
+}
+
+/** The latest `watcher` row for a session, or null. */
+export function latestWatcher(sessionId) {
+  const rows = readPeerRecords().filter((r) => r && r.type === "watcher" && r.session_id === sessionId);
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+/** True when the session's latest watcher row names a pid that is alive (other than `except`). */
+export function watcherAlive(sessionId, except = null) {
+  const w = latestWatcher(sessionId);
+  if (!w || !Number.isInteger(w.pid) || w.pid === except) return false;
+  try {
+    process.kill(w.pid, 0);
+    return true;
+  } catch (err) {
+    return err && err.code === "EPERM";
+  }
+}
+
+/** The `watch-event` rows for a session that no `watch-consumed` row covers yet, oldest first. */
+export function unconsumedWatchEvents(sessionId) {
+  const rows = readPeerRecords().filter((r) => r && r.session_id === sessionId);
+  const consumed = rows.filter((r) => r.type === "watch-consumed").map((r) => r.ts).sort().pop() || "";
+  return rows.filter((r) => r.type === "watch-event" && r.ts > consumed);
 }

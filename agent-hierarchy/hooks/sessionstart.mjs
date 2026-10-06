@@ -55,7 +55,7 @@ import {
   teamPrefix,
 } from "./lib-config.mjs";
 import { appendGate, appendRosterRecord, buildStateBlock, cacheSessionModel, effectiveRoute, ensureHierarchyDir, realCwd, sessionModel, sweep, SWEEP_DAYS } from "./lib-hier.mjs";
-import { attributeSessionTeam, clearTeam, herdrOnPath, readTeam, teamIsLive } from "./lib-roster.mjs";
+import { attributeSessionTeam, clearTeam, expectedRootFor, herdrOnPath, readTeam, sessionMemberRow, teamIsLive } from "./lib-roster.mjs";
 import { writeSessionRole } from "./lib-session-role.mjs";
 import { writeStatus } from "./lib-status.mjs";
 
@@ -137,9 +137,10 @@ try {
         // the role scan safe-refuses to no `team` field at all when it is ambiguous. A session that
         // resolves to no team is a legitimate non-peer session, not a mismatch: detection skips
         // entirely, silently, same reasoning as an absent expected_root.
-        const resolved = attributeSessionTeam(dir, role, { paneId: process.env.HERDR_PANE_ID || process.env.TMUX_PANE || null, homes: [dir, mainHierarchyDir(cwd)] });
+        const paneId = process.env.HERDR_PANE_ID || process.env.TMUX_PANE || null;
+        const resolved = attributeSessionTeam(dir, role, { paneId, homes: [dir, mainHierarchyDir(cwd)] });
         const team = resolved && resolved.team;
-        expectedRoot = (team && team.expected_root) || null;
+        expectedRoot = expectedRootFor(team, sessionMemberRow(team, paneId), resolved && resolved.via === "env" ? process.env.AH_EXPECTED_ROOT : null);
         teamId = team && team.team_id;
         misplaced = Boolean(expectedRoot) && realCwd(cwd) !== expectedRoot;
         const rec = {

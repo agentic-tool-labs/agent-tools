@@ -50,6 +50,7 @@
  */
 
 import { isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
+import { WATCHER_SCRIPT } from "./lib-liveness.mjs";
 import { appendSubagentRecord, latestSubagentRecords, pendingFor } from "./lib-peer.mjs";
 
 function closeStarted(sessionId, latest, agentIds) {
@@ -105,7 +106,11 @@ try {
       if (input.tool_name === "TaskStop") onTaskStop(sessionId, input);
       else {
         const taskId = backgroundTaskId(input);
-        if (taskId && !isSubagent(input) && pendingFor(sessionId).length > 0) appendSubagentRecord(sessionId, taskId, "started");
+        // The dispatch watcher lives for hours by design; counting it as in-flight work would make an
+        // Orchestrator that is also someone's peer defer its own report for good.
+        const request = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
+        const isWatcher = typeof request.command === "string" && request.command.includes(WATCHER_SCRIPT);
+        if (taskId && !isWatcher && !isSubagent(input) && pendingFor(sessionId).length > 0) appendSubagentRecord(sessionId, taskId, "started");
       }
     } else if (event === "UserPromptSubmit") {
       if (typeof input.prompt === "string" && input.prompt.includes("<task-notification>")) {

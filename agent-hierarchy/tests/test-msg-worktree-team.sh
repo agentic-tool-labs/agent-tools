@@ -47,7 +47,7 @@ check "request to a main-checkout teammate, written from the worktree, lands in 
 check "it names the Team's file" 'grep -qxF "team_file: $TEAM_FILE" "$REQ"'
 check "stderr says where it went and why" 'echo "$ERR" | grep -qF "$MAIN/.claude/hierarchy"'
 
-OUT=$(node -e 'const[c,t,m]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:"s1",cwd:c,tool_name:"SendMessage",tool_input:{to:t,message:m}}));' \
+OUT=$(node -e 'const[c,t,m]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:"s1",cwd:c,tool_name:"SendMessage",tool_input:{to:t,message:m,notify_when_idle:true}}));' \
   "$WT" main-reviewer "[hierarchy-peer-brief reply-to=\"sender\" task=\"wt-task\"]
 [hierarchy-msg $REQ]" | HOME="$FAKEHOME" node "$GATE" 2>&1); RC=$?
 check "msg gate, session cwd in the worktree: the brief passes" '[ $RC -eq 0 ] && [ -z "$OUT" ]'

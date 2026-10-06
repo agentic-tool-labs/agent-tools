@@ -164,7 +164,7 @@ check "U3 ... its output shows the member not removed, with the reason" '[ "$(jg
 # dismiss --close --also-config: the pane closes and the row goes; the config file stays.
 NODE_DIR="$(dirname "$(command -v node)")"
 mkdir -p "$SANDBOX/closebin"
-printf '#!/bin/sh\n[ "$1" = "kill-pane" ] && exit 0\nexit 1\n' > "$SANDBOX/closebin/tmux"; chmod +x "$SANDBOX/closebin/tmux"
+printf '#!/bin/sh\n[ "$1" = "kill-pane" ] && exit 0\n[ "$1" = "list-panes" ] && exit 0\nexit 1\n' > "$SANDBOX/closebin/tmux"; chmod +x "$SANDBOX/closebin/tmux"
 # <roster.mjs flags for the close> : dismisses hotfix-implementor through its plan's close token.
 dismiss_close() {
   mkdir -p "$PROJ/.claude/hierarchy/teams"

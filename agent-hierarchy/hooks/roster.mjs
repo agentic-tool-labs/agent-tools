@@ -165,7 +165,7 @@ import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFi
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
 import { clearActivity, computeStatus, plainStatus, recordActivity, saveStatus } from "./lib-status.mjs";
-import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
+import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, expectedRootFor, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, sessionMemberRow, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam, writeTeamFile, clearTeamFile, readTeamFile, splitTeamCopy, teamHomeDir, poolTeamPath } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
 const DISBAND_FLAGS = new Set(["kill", "plan", "close", "confirm", "plan-token", "allow-global", "cwd", "team"]);
@@ -2673,7 +2673,7 @@ function spawnShape(member, transport, agent = null) {
       fail(`member ${member.name} would be launched with AH_TEAM_FILE=${teamFilePath}, but a member of that team is named ${expected}-${member.role} or ${expected}-${member.role}-<n> (expected prefix "${expected}-") — nothing was launched`);
     }
   }
-  const teamFileSetting = `--settings ${shQuote(JSON.stringify({ env: { AH_TEAM_FILE: teamFilePath } }))}`;
+  const teamFileSetting = `--settings ${shQuote(JSON.stringify({ env: { AH_TEAM_FILE: teamFilePath, AH_EXPECTED_ROOT: realCwd(cwd) } }))}`;
   const agentFlags = isClaude
     ? [`--agent ${agentRef}`, `--name ${member.name}`, member.model && member.model !== "inherit" ? `--model ${member.model}` : null, member.effort ? `--effort ${member.effort}` : null, member.autoMode ? `--permission-mode ${member.autoMode}` : null, teamFileSetting].filter(Boolean)
     : [];
@@ -3061,8 +3061,8 @@ function herdrAgentState(name) {
  */
 let herdrTopologyCache = null;
 
-function queryHerdrTopology() {
-  if (herdrTopologyCache) return herdrTopologyCache;
+function queryHerdrTopology(fresh = false) {
+  if (herdrTopologyCache && !fresh) return herdrTopologyCache;
   const result = herdrCall(["agent", "list"]);
   const agents = result && result.result && Array.isArray(result.result.agents) ? result.result.agents : null;
   if (!agents) throw new Error("herdr agent list produced unexpected shape (missing .result.agents)");
@@ -4240,18 +4240,84 @@ function herdrArmMatches(dir, scope) {
   const prefix = scopePrefix(scope);
   const selfPane = process.env.HERDR_PANE_ID || null;
   const myRoot = findGitRoot(realCwd(cwd)) || null;
+  const myCheckout = checkoutRoot(realCwd(cwd)) || null;
+  // Without --team a session is also named for the repo's own checkout, which differs from the
+  // scope prefix when the command runs from a linked worktree.
+  const prefixes = teamArg || !myCheckout ? [prefix] : [...new Set([prefix, basename(myCheckout)])];
+  let others = null;
   const matched = [];
   for (const a of q.agents) {
     const key = a.name || a.title;
     const parts = hierarchyNameParts(key);
-    if (!parts || parts.prefix !== prefix) continue;
+    if (!parts) continue;
     if (selfPane && a.pane_id === selfPane) continue;
     // Fail closed when this command has no git root to compare against: an agent that reports a
     // cwd is then unverifiable, not assumed local. One that reports none is unchanged.
-    if (a.cwd && (!myRoot || (findGitRoot(realCwd(a.cwd)) || null) !== myRoot)) continue;
-    matched.push({ name: key, role: parts.role, pid: null, pane_id: a.pane_id, session_id: a.session_id || null, cwd: a.cwd || null, live: true, how: `herdr agent list (${a.name ? "name" : "title"})`, source: "herdr" });
+    const sameRoot = parts.prefix === prefix && !(a.cwd && (!myRoot || (findGitRoot(realCwd(a.cwd)) || null) !== myRoot));
+    let stray = false;
+    if (!sameRoot) {
+      // A stray is named for this scope and lives in this checkout or one of its worktrees, but
+      // no team record names it. Another orchestrator, or a member of another team, is never one.
+      if (!prefixes.includes(parts.prefix)) continue;
+      if (a.cwd && (!myCheckout || (checkoutRoot(realCwd(a.cwd)) || null) !== myCheckout)) continue;
+      if (parts.role === "orchestrator") continue;
+      others = others || otherTeamMemberKeys(dir);
+      if (others.panes.has(a.pane_id) || others.names.has(key)) continue;
+      stray = true;
+    }
+    matched.push({ name: key, role: parts.role, pid: null, pane_id: a.pane_id, session_id: a.session_id || null, cwd: a.cwd || null, live: true, how: `herdr agent list (${a.name ? "name" : "title"})`, source: "herdr", ...(stray ? { stray: true } : {}) });
   }
   return { ...q, prefix, matched };
+}
+
+/** The pane ids and names every team file readable in this pool or its team home records. */
+function otherTeamMemberKeys(dir) {
+  const panes = new Set();
+  const names = new Set();
+  for (const d of new Set([teamHomeDir(dir), dir])) {
+    for (const name of [null, ...listTeamNames(d)]) {
+      const t = readTeamFile(poolTeamPath(d, name));
+      for (const m of t && Array.isArray(t.members) ? t.members : []) {
+        if (m && m.transport_id != null) panes.add(m.transport_id);
+        if (m && m.name) names.add(m.name);
+      }
+    }
+  }
+  return { panes, names };
+}
+
+/** The hierarchy dirs a teardown reads peers.jsonl from: this pool, the team home, and the pool of
+    every checkout a team member recorded as its own. Dirs that do not exist are skipped. */
+function teardownPools(dir) {
+  const pools = [];
+  const add = (d) => {
+    if (d && !pools.includes(d) && existsSync(d)) pools.push(d);
+  };
+  const home = teamHomeDir(dir);
+  add(dir);
+  add(home);
+  for (const d of new Set([dir, home])) {
+    for (const name of [null, ...listTeamNames(d)]) {
+      const t = readTeamFile(poolTeamPath(d, name));
+      for (const m of t && Array.isArray(t.members) ? t.members : []) if (m && typeof m.expected_root === "string" && m.expected_root) add(hierarchyDir(m.expected_root));
+    }
+  }
+  return pools;
+}
+
+/** `livePeerSlots` over every pool a teardown reads, one slot per session. */
+function livePeerSlotsAcross(dir, scope) {
+  const seen = new Set();
+  const slots = [];
+  for (const pool of teardownPools(dir)) {
+    for (const s of livePeerSlots(pool, scope)) {
+      const key = s.pane_id ? `pane:${s.pane_id}` : s.session_id ? `sid:${s.session_id}` : `name:${s.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      slots.push(s);
+    }
+  }
+  return slots;
 }
 
 /** Registry wins: an agent a team.json row or a peers.jsonl row already names — by pane id, by
@@ -4276,7 +4342,7 @@ function herdrArmSlots(dir, scope, known) {
     the fallback/extras/untracked lists goes through here, so the arm reaches all of them at once
     and none of them carries per-site herdr logic. */
 function liveRegistrySlots(dir, scope, known = []) {
-  const peers = livePeerSlots(dir, scope);
+  const peers = livePeerSlotsAcross(dir, scope);
   return [...peers, ...herdrArmSlots(dir, scope, [...peers, ...known])];
 }
 
@@ -4286,7 +4352,7 @@ function sourcesField(dir, scope, team) {
   const arm = herdrArmMatches(dir, scope);
   return {
     team: { file: team ? teamPath(dir, teamFile) : null, members: team && Array.isArray(team.members) ? team.members.length : 0 },
-    peers: { live: livePeerSlots(dir, scope).filter((s) => s.live).length },
+    peers: { live: livePeerSlotsAcross(dir, scope).filter((s) => s.live).length },
     herdr: arm.ok
       ? { ok: true, agents: arm.agents.length, matched: arm.matched.length, prefix: arm.prefix }
       : { ok: false, reason: arm.reason, prefix: arm.prefix },
@@ -4307,7 +4373,7 @@ function peerFallbackMembers(dir, scope, known = []) {
   // there excluding default-team peers is the correct isolation.
   return liveRegistrySlots(dir, scope, known)
     .filter((s) => s.live)
-    .map((s) => ({ role: s.role, name: s.name, route: "peer", transport_id: s.pane_id, session_id: s.session_id || null, live: s.live, how: s.how, source: s.source || "peers" }));
+    .map((s) => ({ role: s.role, name: s.name, route: "peer", transport_id: s.pane_id, session_id: s.session_id || null, live: s.live, how: s.how, source: s.source || "peers", ...(s.stray ? { stray: true } : {}) }));
 }
 
 /** Live registry peers that are not already one of `members`. A pane hosts exactly one session, so
@@ -4400,7 +4466,7 @@ function adoptCommand(teamName) {
 }
 
 function peerFallbackPlanEntry(m) {
-  return { role: m.role, name: m.name, route: m.route, transport: "herdr", transport_id: m.transport_id, command: m.transport_id ? `herdr pane close ${m.transport_id}` : null, live: m.live, how: m.how, source: m.source || "peers" };
+  return { role: m.role, name: m.name, route: m.route, transport: "herdr", transport_id: m.transport_id, command: m.transport_id ? `herdr pane close ${m.transport_id}` : null, live: m.live, how: m.how, source: m.source || "peers", ...(m.stray ? { stray: true } : {}) };
 }
 
 /** Close one member of a (possibly mixed, spec 0040 §1.4a) close set: team rows use the team's
@@ -4414,7 +4480,111 @@ function closeOne(m, teamTransport) {
     Object.assign(row, { closed: false, error: err.message });
   }
   if (m.source) row.source = m.source;
+  if (m.stray) row.stray = true;
   return row;
+}
+
+const VERIFY_POLL_MS = 250;
+// ponytail: the deadline is a guess at herdr's close latency; raise it if a slow herdr keeps reporting panes still live.
+const VERIFY_DEADLINE_MS = 3000;
+const sleepMs = (ms) => new Promise((done) => setTimeout(done, ms));
+
+/** The pane ids a transport lists right now, read fresh. Throws when the transport cannot be asked. */
+function livePaneIds(transport) {
+  if (transport === "herdr") return new Set(queryHerdrTopology(true).map((a) => a.pane_id));
+  if (transport === "tmux") {
+    const listed = execFileSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+    return new Set(listed.split("\n").filter(Boolean));
+  }
+  throw new Error(`transport ${JSON.stringify(transport)} has no pane list to query`);
+}
+
+/** The name now on a herdr pane when it is not the one the plan matched, else null. Panes get
+    reused: a pane id from the plan can host a different agent by the time it is closed. A stray
+    must still carry exactly the name it was matched by; any other target only must not have
+    become another prefix or role. An absent or unparseable name proceeds. */
+function reuseConflict(m, transport) {
+  if (transport !== "herdr" || !m.name || m.transport_id == null) return null;
+  let agents;
+  try {
+    agents = queryHerdrTopology(true);
+  } catch (err) {
+    // A stray was matched by name alone, so it is closed only once that name is confirmed again.
+    return m.stray ? { unverified: err.message } : null;
+  }
+  const a = agents.find((x) => x.pane_id === m.transport_id);
+  const now = a && (a.name || a.title);
+  if (!now) return a && m.stray ? "(no name)" : null;
+  if (m.stray) return now === m.name ? null : now;
+  const want = hierarchyNameParts(m.name);
+  const got = hierarchyNameParts(now);
+  if (!want || !got) return null;
+  return want.prefix === got.prefix && want.role === got.role ? null : now;
+}
+
+/**
+ * Close every target, then re-query the transport until each is gone or the deadline passes.
+ * A result's `closed` means verified gone, not that the close command ran. Appends a warning for
+ * every shortfall to `warnings` and returns `{results, still_live}`.
+ */
+async function closeAndVerify(closable, teamTransport, warnings) {
+  const transportOf = (m) => (m.source ? "herdr" : teamTransport);
+  const results = closable.map((m) => {
+    const conflict = reuseConflict(m, transportOf(m));
+    if (!conflict) return closeOne(m, teamTransport);
+    const unverified = typeof conflict === "object";
+    warnings.push(unverified ? `Pane ${m.transport_id} could not be re-checked before closing it (${conflict.unverified}). It was not closed.` : `Pane ${m.transport_id} now carries ${conflict}, not ${m.name}. It was not closed.`);
+    return { name: m.name, transport_id: m.transport_id, closed: false, error: unverified ? "pane could not be re-checked" : `pane now carries ${conflict}`, ...(m.source ? { source: m.source } : {}), ...(m.stray ? { stray: true } : {}) };
+  });
+  const pending = new Map();
+  results.forEach((r, i) => {
+    if (r.closed) pending.set(r, transportOf(closable[i]));
+  });
+  for (const transport of new Set(pending.values())) {
+    const rows = [...pending].filter(([, t]) => t === transport).map(([r]) => r);
+    const deadline = Date.now() + VERIFY_DEADLINE_MS;
+    let still = rows;
+    let why = null;
+    for (;;) {
+      try {
+        const ids = livePaneIds(transport);
+        still = rows.filter((r) => ids.has(r.transport_id));
+      } catch (err) {
+        why = err.message;
+        break;
+      }
+      if (still.length === 0 || Date.now() >= deadline) break;
+      await sleepMs(VERIFY_POLL_MS);
+    }
+    if (why) {
+      warnings.push(`${transport} could not be queried (${why}). ${rows.length} target${rows.length === 1 ? " is" : "s are"} unverified.`);
+      for (const r of rows) Object.assign(r, { closed: false, error: `could not verify the close: ${why}` });
+    } else {
+      for (const r of still) Object.assign(r, { closed: false, error: "still listed after the close command" });
+    }
+  }
+  const stillLive = results.filter((r) => !r.closed).map((r) => r.name ?? r.transport_id);
+  if (stillLive.length) warnings.push(`After close, ${stillLive.length} ${stillLive.length === 1 ? "is" : "are"} still live: ${stillLive.join(", ")}.`);
+  return { results, still_live: stillLive };
+}
+
+/** The additive keys every close answer carries beside `closed`. */
+function closeSummary(closable, verified, warnings) {
+  const strays = closable.filter((m) => m.stray).map((m) => m.name);
+  if (strays.length) warnings.unshift(strayWarning(strays));
+  return {
+    closed: verified.results.every((r) => r.closed),
+    expected: closable.length,
+    closed_count: verified.results.filter((r) => r.closed).length,
+    still_live: verified.still_live,
+    strays,
+    warnings,
+  };
+}
+
+/** Residual risk of closing by name: spelled out in every plan and close that has strays. */
+function strayWarning(strays) {
+  return `Closing ${strays.length} herdr agent${strays.length === 1 ? "" : "s"} named \`${scopePrefix(teamFile)}-<role>\` that ${strays.length === 1 ? "is" : "are"} not in the team record: ${strays.join(", ")}. They are matched by name and checkout only. A live agent from another orchestrator in this repo or one of its worktrees, with the same name prefix, would be closed too.`;
 }
 
 /** Shared token/confirm gate for every --close variant. */
@@ -4456,9 +4626,8 @@ function unreadableTeamFile(dir) {
     A closed session's row goes; a row whose session may still exist stays, with the reason.
     `snapshot` is the record the close plan was validated against — a named row absent from it
     was added while the closes ran and is never touched. */
-function reconcileAfterClose(dir, snapshot, results) {
-  const path = teamPath(dir, teamFile);
-  const fresh = readTeam(dir, teamFile);
+function reconcileAfterClose(dir, snapshot, results, path = teamPath(dir, teamFile)) {
+  const fresh = readTeamFile(path);
   if (!fresh || !Array.isArray(fresh.members)) return { pruned: [], kept: [], team_removed: false, team_file: existsSync(path) ? path : null };
   const snapshotNames = new Set(snapshot.members.map((m) => m.name).filter((n) => n != null));
   const resultFor = (m) => results.find((r) => (m.name != null ? r.name === m.name : r.name == null && r.transport_id != null && r.transport_id === m.transport_id));
@@ -4481,16 +4650,86 @@ function reconcileAfterClose(dir, snapshot, results) {
       keptRows.push(m);
     } else pruned.push(label);
   }
-  return { pruned, kept, team_removed: writeTeamRows(dir, fresh, keptRows), team_file: path };
+  return { pruned, kept, team_removed: writeTeamRows(dir, fresh, keptRows, path), team_file: path };
 }
 
 /** Writes `team` with only `rows`, or clears its file when no row is left: a team's last departure
     ends it. A pane member that leaves takes its activity record with it. True when the file was cleared. */
-function writeTeamRows(dir, team, rows) {
+function writeTeamRows(dir, team, rows, path = teamPath(dir, teamFile)) {
   for (const m of team.members) if (m && m.name != null && !rows.includes(m)) clearActivity(dir, `pane-${m.name}`);
-  if (rows.length === 0) clearTeam(dir, teamFile);
-  else writeTeam(dir, { ...team, members: rows }, teamFile);
+  if (rows.length === 0) clearTeamFile(path, dir);
+  else writeTeamFile(path, { ...team, members: rows }, dir);
   return rows.length === 0;
+}
+
+/**
+ * The team record(s) a teardown verb reads for the resolved scope: the file `teamPath` resolves
+ * to, plus this pool's own copy when an older release left one beside the home's. The pool copy
+ * joins the close set only when this session owns it or its owner is gone.
+ */
+function teardownTeam(dir, warnings) {
+  const team = readTeam(dir, teamFile);
+  const split = splitTeamCopy(dir, teamFile);
+  const extra = [];
+  if (split) {
+    warnings.push(`Team ${teamFile ?? "(default)"} has records in both ${teamHomeDir(dir)} and ${dir} (left by an older release). Both were read.`);
+    const owner = split.team.orchestrator && split.team.orchestrator.pid;
+    if (teamOwnedBy(split.team, invokerIdentity()) || teamIsOrphaned(split.team)) extra.push(split);
+    else warnings.push(`Team ${teamFile ?? "(default)"} in ${split.path} belongs to another live orchestrator (pid ${owner}). Its ${split.team.members.length} members were left alone.`);
+  }
+  const files = team ? [teamPath(dir, teamFile), ...extra.map((x) => x.path)] : [];
+  return { team, extra, files };
+}
+
+/** `team` with the pool copy's members added, each pane or name once. */
+function mergedTeam(team, extra) {
+  if (!extra.length) return team;
+  const seen = new Set(team.members.map((m) => (m.transport_id != null ? `p:${m.transport_id}` : `n:${m.name}`)));
+  const added = extra.flatMap((x) => x.team.members).filter((m) => {
+    const key = m.transport_id != null ? `p:${m.transport_id}` : `n:${m.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { ...team, members: [...team.members, ...added] };
+}
+
+/** Members that hold a pane route but have nothing to close: no pane id, or a transport with no panes. */
+function notClosableOf(members, transport) {
+  return members.filter((m) => routeHasPane(m.route) && (m.transport_id == null || transport === "terminal")).map((m) => ({ name: m.name ?? m.role, reason: "no pane" }));
+}
+
+/** W8: members a teardown cannot close from here, as a warnings entry (none when every member has a pane). */
+function notClosableWarnings(notClosable) {
+  if (!notClosable.length) return [];
+  return [`W8: ${notClosable.length} member${notClosable.length === 1 ? "" : "s"} cannot be closed from here, because they have no pane: ${notClosable.map((m) => m.name).join(", ")}. Close them by hand.`];
+}
+
+/** The close set a team's teardown acts on, from the healed rows of every file read plus live registry peers. */
+function teamCloseSet(dir, eff, healedMembers) {
+  const extras = peerExtras(dir, healedMembers, teamFile);
+  const all = [...healedMembers, ...extras];
+  const closable = eff.transport === "terminal" ? [] : closableMembers(all);
+  return { extras, closable, notClosable: notClosableOf(all, eff.transport) };
+}
+
+/** Where the live sessions found without a team record came from, for the no-record warning. */
+function noRecordWarning(dir, found) {
+  const via = [...new Set(found.map((m) => (m.source === "herdr" ? "herdr agent list" : "peers.jsonl")))].join(" and ");
+  return `No team record for ${teamFile ?? "(default)"} in ${teamHomeDir(dir)}${teamHomeDir(dir) === dir ? "" : ` or ${dir}`}, but ${found.length} live member${found.length === 1 ? " was" : "s were"} found via ${via}.`;
+}
+
+/** Warnings a spawn carries about where its team is recorded; nothing here blocks the spawn. */
+function spawnPlacementWarnings(dir) {
+  const warnings = [];
+  const name = teamFile ?? "(default)";
+  const split = splitTeamCopy(dir, teamFile);
+  if (split) warnings.push(`team ${name} has records in ${teamHomeDir(dir)} and ${split.path.replace(/\/teams\/[^/]*$|\/team\.json$/, "")}`);
+  const recorded = checkoutRoot(realCwd(cwd));
+  // ponytail: process.cwd() is the calling shell's cwd, normally the orchestrator's; a caller that cd's elsewhere gets a false warning or none.
+  const caller = checkoutRoot(process.cwd());
+  if (recorded && caller && recorded !== caller) warnings.push(`team ${name} is recorded in ${recorded}; teardown run from ${caller} will not see it`);
+  return warnings;
 }
 
 /** `create --spawn` (spec 0005): resolve + layout + launch + retry in one script invocation. */
@@ -4554,8 +4793,13 @@ function describeTeamRow(dir, name, invoker) {
   const t = readTeam(dir, name);
   if (!t) return null;
   const pid = t.orchestrator && t.orchestrator.pid;
+  const home = teamHomeDir(dir);
+  const legacy = home !== dir && teamPath(dir, name).startsWith(dir + "/");
+  const split = splitTeamCopy(dir, name);
   return {
     name,
+    ...(legacy ? { legacy_dir: dir } : {}),
+    ...(split ? { warnings: [`Team ${name ?? "(default)"} has records in both ${home} and ${dir} (left by an older release). Both were read.`] } : {}),
     team_id: t.team_id,
     members: Array.isArray(t.members) ? t.members.length : 0,
     orchestrator_pid: pid ?? null,
@@ -5050,7 +5294,7 @@ async function spawnOneCore(role, callerLabel, adHocMember = null) {
     fail([`${callerLabel}: launching ${member.name} failed`, launched.error, ...extra].filter(Boolean).join(" — "));
   }
 
-  const newRecord = { role: member.role, name: member.name, ...(member.renamed_from ? { renamed_from: member.renamed_from } : {}), route: memberRoute, model: member.model, effort: member.effort, autoMode: member.autoMode, transport_id: launched.transport_id };
+  const newRecord = { role: member.role, name: member.name, ...(member.renamed_from ? { renamed_from: member.renamed_from } : {}), route: memberRoute, model: member.model, effort: member.effort, autoMode: member.autoMode, transport_id: launched.transport_id, expected_root: realCwd(planEntry.spawn.launch_cwd || cwd) };
   // §1.1: written only when it is not the default, so claude-kind team.json rows are unchanged.
   if (resolveKind(member) !== KIND_DEFAULT) newRecord.kind = resolveKind(member);
   if (memberArgs(member)) newRecord.args = [...memberArgs(member)];
@@ -5084,6 +5328,8 @@ async function spawnOneCore(role, callerLabel, adHocMember = null) {
   const outMember = launched.label ? { ...newRecord, label: launched.label } : newRecord;
   // Spec 0035 §2.4: report where this peer actually launched, not just that it launched.
   const spawnOut = { spawned: true, member: outMember, team_id: outTeam.team_id, roster_level: outTeam.roster_level, launch_cwd: planEntry.spawn.launch_cwd, ...validation, ...renamedField(renamedNow) };
+  const placementWarnings = spawnPlacementWarnings(dir);
+  if (placementWarnings.length) spawnOut.warnings = placementWarnings;
   // Spec 0043 §1.4: blocked-at-startup is success WITH AN ACTION OUTSTANDING, not a failure —
   // the agent is live and queryable, so the team row stands and the caller is told what to do.
   if (launched.launch_status === "blocked-at-startup") {
@@ -5577,6 +5823,7 @@ try {
       }
       createWarnings.push(...staleTeamKeys(cwd, registry()).warnings);
       for (const w of createWarnings) process.stderr.write(`roster.mjs: warning — ${w}\n`);
+      if (opts.spawn === true || opts.commit) createWarnings.push(...spawnPlacementWarnings(dir));
       const withWarnings = (obj) => (createWarnings.length ? { ...obj, warnings: createWarnings } : obj);
       // Spec 0044 §1.1: all three modes settle the scope here, together. `--commit` creates a team
       // exactly as `--plan`/`--spawn` do, and reaching `writeTeam` without this let it recreate the
@@ -5658,6 +5905,7 @@ try {
           const { renamed_from: _supplied, ...rest } = m;
           return source ? { ...rest, renamed_from: source.renamed_from } : rest;
         });
+        members = members.map((m) => ({ ...m, expected_root: m.expected_root || realCwd(typeof m.launch_cwd === "string" && m.launch_cwd ? m.launch_cwd : cwd) }));
         // roster.mjs runs as a transient Bash-tool subprocess, so process.ppid here is
         // that shell, not the orchestrator's own long-lived process — using it would make
         // the staleness sweep (sessionstart.mjs) tear the Team down almost immediately.
@@ -5751,36 +5999,49 @@ try {
       // argv built directly (never runShell's /bin/sh), then reconciles the team file against
       // what actually closed — no bookkeeping call follows.
       if (opts.close === true) {
-        const team = readTeam(dir, teamFile);
+        const warnings = [];
+        const { team, extra, files } = teardownTeam(dir, warnings);
         if (!team) {
           // Spec 0040 §1.1/§1.3: no team.json — close the live registry peers instead, under the
           // same three gates, with the literal "no-team" standing in for team_id in the token.
           // Dedup like :2521's plan does. closeToken() sorts the ids WITHOUT deduping, so one
           // session appearing as both a nameless `up` row and a `briefed` row yields a plan token
           // over one id and a close set over two — the token never matches its own plan.
-          const closable = closableMembers(dedupPeers(peerFallbackMembers(dir, NO_TEAM_SCOPE)));
+          const found = dedupPeers(peerFallbackMembers(dir, NO_TEAM_SCOPE));
+          const closable = closableMembers(found);
           const unreadable = unreadableTeamFile(dir);
           const unreadableField = unreadable ? { team_file_unreadable: unreadable } : {};
-          if (closable.length === 0) {
+          if (found.length === 0) {
             out({ closed: false, reason: "no active team and no live peers", sources: sourcesField(dir, NO_TEAM_SCOPE, null), ...unreadableField });
             break;
           }
+          if (closable.length === 0) {
+            out({ closed: false, reason: "live peers were found but none has a pane to close", expected: 0, not_closable: notClosableOf(found, null), warnings: [noRecordWarning(dir, found), ...notClosableWarnings(notClosableOf(found, null))], sources: sourcesField(dir, NO_TEAM_SCOPE, null), ...unreadableField });
+            break;
+          }
+          warnings.push(noRecordWarning(dir, found), ...notClosableWarnings(notClosableOf(found, null)));
           gateClose("disband", "no-team", closable);
-          const results = closable.map((m) => closeOne(m, null));
-          out({ closed: results.every((r) => r.closed), source: "peers", results, sources: sourcesField(dir, NO_TEAM_SCOPE, null), pruned: [], kept: [], team_removed: false, team_file: null, ...unreadableField });
+          const verified = await closeAndVerify(closable, null, warnings);
+          const peersSummary = closeSummary(closable, verified, warnings);
+          out({ ...peersSummary, closed: peersSummary.closed && notClosableOf(found, null).length === 0, source: "peers", results: verified.results, not_closable: notClosableOf(found, null), sources: sourcesField(dir, NO_TEAM_SCOPE, null), pruned: [], kept: [], team_removed: false, team_file: null, ...unreadableField });
           break;
         }
-        let healedMembers = team.members;
+        const eff = mergedTeam(team, extra);
+        let healedMembers = eff.members;
         if (team.transport === "herdr") {
-          const result = resyncMembers(team);
+          const result = resyncMembers(eff);
           if (result.query_ok) healedMembers = result.members;
         }
         // Spec 0040 §1.4a: the close set is the union of team.json members and live registry
         // peers outside it; the token pins exactly that union.
-        const closable = closableMembers([...healedMembers, ...peerExtras(dir, healedMembers, teamFile)]);
+        const { closable, notClosable } = teamCloseSet(dir, eff, healedMembers);
         gateClose("disband", team.team_id, closable);
-        const results = closable.map((m) => closeOne(m, team.transport));
-        out({ closed: results.every((r) => r.closed), results, sources: sourcesField(dir, teamFile, team), ...reconcileAfterClose(dir, team, results) });
+        const verified = await closeAndVerify(closable, team.transport, warnings);
+        const reconciled = reconcileAfterClose(dir, team, verified.results);
+        for (const x of extra) reconcileAfterClose(dir, x.team, verified.results, x.path);
+        warnings.push(...notClosableWarnings(notClosable));
+        const summary = closeSummary(closable, verified, warnings);
+        out({ ...summary, closed: summary.closed && notClosable.length === 0, results: verified.results, not_closable: notClosable, team_files: files, sources: sourcesField(dir, teamFile, team), ...reconciled });
         break;
       }
 
@@ -5790,31 +6051,36 @@ try {
       // emits the close plan, writes nothing. Spec 0008 §5.6 (AMENDMENT): for herdr, resync the
       // member list in memory first — the plan then targets each member's *current* pane — but
       // never persist the heal and never fail() on a query error (degrade to the stored ids).
-      const team = readTeam(dir, teamFile);
+      const planWarnings = [];
+      const { team, extra, files } = teardownTeam(dir, planWarnings);
       if (!team) {
         // Spec 0040 §1.1/§1.5: plan over the live registry peers; `source: "peers"` says so.
         const fallback = dedupPeers(peerFallbackMembers(dir, NO_TEAM_SCOPE));
         const closable = closableMembers(fallback);
         const unreadable = unreadableTeamFile(dir);
         const unreadableField = unreadable ? { team_file_unreadable: unreadable } : {};
-        if (closable.length === 0) {
+        if (fallback.length === 0) {
           out({ disbanded: false, reason: "no active team and no live peers", sources: sourcesField(dir, NO_TEAM_SCOPE, null), ...unreadableField });
           break;
         }
+        planWarnings.push(noRecordWarning(dir, fallback), ...notClosableWarnings(notClosableOf(fallback, null)));
+        const strays = closable.filter((m) => m.stray).map((m) => m.name);
+        if (strays.length) planWarnings.unshift(strayWarning(strays));
         const peersToken = closeToken("no-team", closable);
-        out({ close: fallback.map(peerFallbackPlanEntry), close_token: peersToken, next: closeCommand("disband", null, peersToken), source: "peers", sources: sourcesField(dir, NO_TEAM_SCOPE, null), ...unreadableField });
+        out({ close: fallback.map(peerFallbackPlanEntry), close_token: peersToken, ...(closable.length ? { next: closeCommand("disband", null, peersToken) } : {}), source: "peers", expected: closable.length, strays, not_closable: notClosableOf(fallback, null), team_files: [], warnings: planWarnings, sources: sourcesField(dir, NO_TEAM_SCOPE, null), ...unreadableField });
         break;
       }
-      let healedMembers = team.members;
+      const eff = mergedTeam(team, extra);
+      let healedMembers = eff.members;
       let resyncSummary = null;
       if (team.transport === "herdr") {
-        const result = resyncMembers(team);
+        const result = resyncMembers(eff);
         if (result.query_ok) {
           healedMembers = result.members;
           resyncSummary = { ok: true, counts: result.counts };
           if (result.warning) resyncSummary.warning = result.warning;
         } else {
-          healedMembers = team.members.map((m) => ({ ...m, status: "unqueried" }));
+          healedMembers = eff.members.map((m) => ({ ...m, status: "unqueried" }));
           resyncSummary = { ok: false, reason: result.query_error };
         }
       }
@@ -5830,10 +6096,13 @@ try {
       });
       // Spec 0040 §1.4a: live registry peers outside team.json join the plan, labeled, and the
       // token hashes the union — with none present, output and token are exactly the team-only ones.
-      const extras = peerExtras(dir, healedMembers, teamFile);
+      const { extras, closable: planClosable, notClosable } = teamCloseSet(dir, eff, healedMembers);
       for (const m of extras) close.push(peerFallbackPlanEntry(m));
-      const planToken = closeToken(team.team_id, closableMembers([...healedMembers, ...extras]));
-      const disbandOut = { close, close_token: planToken, next: closeCommand("disband", null, planToken), sources: sourcesField(dir, teamFile, team) };
+      const planStrays = planClosable.filter((m) => m.stray).map((m) => m.name);
+      planWarnings.push(...notClosableWarnings(notClosable));
+      if (planStrays.length) planWarnings.unshift(strayWarning(planStrays));
+      const planToken = closeToken(team.team_id, planClosable);
+      const disbandOut = { close, close_token: planToken, next: closeCommand("disband", null, planToken), expected: planClosable.length, strays: planStrays, not_closable: notClosable, team_files: files, warnings: planWarnings, sources: sourcesField(dir, teamFile, team) };
       if (resyncSummary) disbandOut.resync = resyncSummary;
       out(disbandOut);
       break;
@@ -5861,7 +6130,9 @@ try {
       }
       const name = typeof opts._[0] === "string" ? opts._[0] : fail("dismiss needs a member name: roster.mjs dismiss <name> [--plan|--close --confirm --plan-token <tok>]");
       const dir = hierarchyDir(cwd);
-      const team = readTeam(dir, teamFile);
+      const dismissWarnings = [];
+      const { team: primaryTeam, extra: extraFiles } = teardownTeam(dir, dismissWarnings);
+      const team = primaryTeam ? mergedTeam(primaryTeam, extraFiles) : null;
       const target = team ? team.members.find((m) => m.name === name) : null;
       // Spec 0040 §1.4b + 0046 §2.4: a name absent from team.json (or no team.json at all) is
       // resolved against the live registry by every identifier the user can see.
@@ -5900,12 +6171,16 @@ try {
         if (opts.close === true) {
           if (closable.length === 0) fail(`dismiss --close: ${name} has no addressable pane (live peer record without a pane_id)`);
           gateClose("dismiss", scope, closable);
-          const results = closable.map((m) => closeOne(m, null));
-          out({ closed: results.every((r) => r.closed), source: "peers", results, sources: sourcesField(dir, dismissScope, team) });
+          const verified = await closeAndVerify(closable, null, dismissWarnings);
+          out({ ...closeSummary(closable, verified, dismissWarnings), source: "peers", results: verified.results, sources: sourcesField(dir, dismissScope, team) });
           break;
         }
         const peerToken = closeToken(scope, closable);
-        out({ member: peerFallbackPlanEntry(fbTarget), live: fbTarget.live, close_token: peerToken, ...(closable.length > 0 ? { next: closeCommand("dismiss", name, peerToken) } : {}), source: "peers", sources: sourcesField(dir, dismissScope, team) });
+        const peerStrays = closable.filter((m) => m.stray).map((m) => m.name);
+        const peerNotClosable = notClosableOf([fbTarget], null);
+        dismissWarnings.push(...notClosableWarnings(peerNotClosable));
+        if (peerStrays.length) dismissWarnings.unshift(strayWarning(peerStrays));
+        out({ member: peerFallbackPlanEntry(fbTarget), live: fbTarget.live, close_token: peerToken, ...(closable.length > 0 ? { next: closeCommand("dismiss", name, peerToken) } : {}), source: "peers", expected: closable.length, strays: peerStrays, not_closable: peerNotClosable, warnings: dismissWarnings, sources: sourcesField(dir, dismissScope, team) });
         break;
       }
 
@@ -5917,7 +6192,7 @@ try {
           if (result.query_ok) healedMembers = result.members;
         }
         const healedTarget = healedMembers.find((m) => m.name === name) || target;
-        const closable = closableMembers([healedTarget]);
+        const closable = team.transport === "terminal" ? [] : closableMembers([healedTarget]);
         if (closable.length === 0) {
           fail(`dismiss --close: ${name} has no addressable pane (route=${target.route}, transport_id=${target.transport_id ?? null}) — use --commit to prune the record`);
         }
@@ -5937,22 +6212,19 @@ try {
         if (opts["plan-token"] !== expectedToken) {
           fail("dismiss --close: --plan-token does not match the current close plan (the topology may have changed) — re-run `dismiss` and retry with the fresh token");
         }
-        const results = closable.map((m) => {
-          try {
-            closeMemberPane(team.transport, m.transport_id);
-            return { name: m.name, transport_id: m.transport_id, closed: true, error: null };
-          } catch (err) {
-            return { name: m.name, transport_id: m.transport_id, closed: false, error: err.message };
-          }
-        });
+        const verified = await closeAndVerify(closable, team.transport, dismissWarnings);
+        const results = verified.results;
         const allClosed = results.every((r) => r.closed);
         // §2.1 bookkeeping: the row goes only when the close actually succeeded. A failed close
         // that still dropped the record is exactly the orphan GitHub #4 was about.
-        const dismissClose = { closed: allClosed, results, untracked: false, sources: sourcesField(dir, teamFile, team) };
+        const dismissClose = { ...closeSummary(closable, verified, dismissWarnings), results, untracked: false, sources: sourcesField(dir, teamFile, team) };
         if (allClosed) {
           // The template key is read from the team file, which the last departure removes.
           const templateKey = opts["also-config"] === true ? teamTemplateKey(dir) : null;
-          if (writeTeamRows(dir, team, team.members.filter((m) => m.name !== name))) dismissClose.team_removed = true;
+          for (const f of [{ path: teamPath(dir, teamFile), team: primaryTeam }, ...extraFiles]) {
+            if (!f.team.members.some((m) => m.name === name)) continue;
+            if (writeTeamRows(dir, f.team, f.team.members.filter((m) => m.name !== name), f.path)) dismissClose.team_removed = true;
+          }
           dismissClose.untracked = true;
           if (opts["also-config"] === true) dismissClose.config = removeConfigMember(target.name, templateKey, { sideEffect: true });
         }
@@ -5978,8 +6250,11 @@ try {
       // transport_id regardless of `live` — a stale-registry member still yields a close command.
       const memberOut = { role: healedTarget.role, name: healedTarget.name, route: healedTarget.route, transport: team.transport, transport_id: healedTarget.transport_id, command };
       if (team.transport === "herdr") memberOut.resync_status = healedTarget.status || "unqueried";
-      const dismissClosable = closableMembers([healedTarget]);
+      // A terminal transport has no panes, so nothing is closable there, as in the disband plan.
+      const dismissClosable = team.transport === "terminal" ? [] : closableMembers([healedTarget]);
       const dismissToken = closeToken(team.team_id, dismissClosable);
+      const dismissNotClosable = notClosableOf([healedTarget], team.transport);
+      dismissWarnings.push(...notClosableWarnings(dismissNotClosable));
       out({
         member: memberOut,
         // Spec 0043 §1.6 three-valued: `null` is "could not determine", distinct from `false`.
@@ -5991,6 +6266,10 @@ try {
         // Nothing to close means `--close` would only refuse, so no command is offered.
         ...(dismissClosable.length > 0 ? { next: closeCommand("dismiss", name, dismissToken) } : {}),
         sources: sourcesField(dir, teamFile, team),
+        expected: dismissClosable.length,
+        strays: [],
+        not_closable: dismissNotClosable,
+        warnings: dismissWarnings,
         team_id: team.team_id,
         remaining: team.members.filter((m) => m.name !== name).map((m) => m.name),
         ...(team.members.every((m) => m.name === name) ? { team_will_be_removed: true } : {}),
@@ -6799,7 +7078,7 @@ try {
           const byPane = r.pane_id ? resolveTeamByPane(dir, r.pane_id) : null;
           if (!byPane || byPane.teamName !== row.name) continue;
           byPaneSeen.add(r);
-          const root = t && t.expected_root;
+          const root = expectedRootFor(t, byPane.member);
           if (root && realCwd(r.cwd) !== root) flagged.push({ role: r.role, name: byPane.member.name, observed_cwd: r.cwd });
         }
         for (const r of liveMisplaced) {
@@ -6862,7 +7141,7 @@ try {
       // (§3.2 point 3), unaffected.
       if ((teamArg || teamDefaultExplicit) && !resolved) fail(`checkin: no such team "${teamArgName(teamArg)}"`);
       const team = resolved && resolved.team;
-      const expectedRoot = (team && team.expected_root) || null;
+      const expectedRoot = expectedRootFor(team, sessionMemberRow(team, sessionPaneId(existing)));
       const observed = realCwd(cwd);
       const misplaced = Boolean(expectedRoot) && observed !== expectedRoot;
       const rec = {
@@ -6953,7 +7232,8 @@ try {
       const records = [dir, mainHierarchyDir(cwd)]
         .filter(Boolean)
         .flatMap((home) => (teamArg || teamDefaultExplicit ? [teamArg] : [null, ...listTeamNames(home)]).map((teamName) => ({ home, teamName, team: readTeam(home, teamName) })))
-        .filter((r) => r.team);
+        .filter((r) => r.team)
+        .filter((r, i, all) => all.findIndex((o) => teamPath(o.home, o.teamName) === teamPath(r.home, r.teamName)) === i);
       if (records.length === 0) {
         out(empty("no-team"));
         break;

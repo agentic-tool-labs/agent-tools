@@ -5,6 +5,74 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.113.0]
+
+One team file per repo, teardown that verifies, and finished peer work that is
+never left unseen.
+
+### Changed
+
+- **Team home.** A team file now lives in the main checkout's hierarchy dir
+  whatever `--cwd` a spawn or `create` is given, so a team with members in a
+  worktree and in the main checkout is one file, not two. A team recorded in a
+  worktree's own dir by an older release is read and updated there, in place;
+  nothing is migrated. Worktrees of one repo share team names, the default
+  `team.json` included: a name already live in a sibling worktree now meets the
+  usual second-team and ownership refusals instead of silently giving a private
+  team. [docs/team-file.md](./docs/team-file.md).
+- **Members record their own root.** Each member row carries `expected_root`,
+  and the launcher sets `AH_EXPECTED_ROOT`, so a main-checkout member of a
+  worktree-created team is no longer flagged misplaced, including at its first
+  `SessionStart`.
+- **Verified close.** `disband`/`dismiss --close` re-query after closing;
+  `closed: true` now means every target is gone and nothing was un-closable.
+  Added keys: `expected`, `closed_count`, `still_live`, `strays`,
+  `not_closable`, `team_files`, `warnings`. `--close` with `closed: false` still
+  exits 0. `teams` rows read from a legacy worktree copy carry `legacy_dir`.
+- **`disband` reads the whole team.** The team file from its home (and a legacy
+  copy), `peers.jsonl` from every pool the team touches, and herdr panes in any
+  worktree of the repo. A herdr pane that carries the team's name but is not in
+  the record is closed as a **stray**, in the plan you confirm, with a named
+  residual risk: matching is by name and checkout only, so another
+  orchestrator's agent in the same repo with the same prefix would be closed too
+  (warning W2). Orchestrator-role panes and members of other teams are never
+  strays. [Team home and teardown](./docs/cli-tools.md#team-home-and-teardown).
+- **Loud warnings W1–W8** on plans and closes: no team record found (W1),
+  strays (W2), a team split across home and worktree (W3), a team owned by
+  another live orchestrator (W4), a pane that changed name before the close
+  (W5), a transport that could not be queried (W6), targets still live after
+  the close (W7), members with no pane to close (W8: `disband` plans and closes,
+  and the `dismiss` plan, which also lists them in `not_closable`;
+  `dismiss --close` still exits 2 for such a member). Spawns
+  warn, never block, on a split team or a `--cwd` in another checkout than the
+  calling shell's.
+- **`ScheduleWakeup` prose removed** from the Orchestrator directive; the
+  dispatch watcher is the timer in every session.
+
+### Added
+
+- **Report-back, four layers.** (L1) a peer arms its owed reply when the
+  `[hierarchy-msg]` token appears anywhere in the wrapped brief and the request
+  is addressed to its own role, not only at the start of the first line; (L2)
+  the Orchestrator's Stop sees every dispatch in the pool the request lives in,
+  and blocks once on a response that landed but was never sent; (L3)
+  Orchestrator `SendMessage` dispatches must carry `notify_when_idle: true`
+  (denied once, with the fix), and the idle notice is handled by injection,
+  never by a status query; (L4) a background dispatch watcher, started by the
+  Orchestrator, wakes an idle session with LANDED, CHECK-IN or SILENT events
+  when a peer is hung or silent. Fixes the case where two Implementors wrote
+  responses, never sent them, and sat idle for hours.
+  [Finished work is never left unseen](./README.md#finished-work-is-never-left-unseen).
+
+### Fixed
+
+- **A worktree Orchestrator's `disband`** finds the team, its main-checkout
+  members and the panes they sit in, instead of `team: null` and
+  `closed: true` over live sessions.
+
+Known limit: run from the main checkout, a legacy team recorded only in a
+worktree's own dir is not seen; run `disband` from that worktree.
+
 ## [0.112.1]
 
 The status file's readers no longer open anything but a non-empty regular

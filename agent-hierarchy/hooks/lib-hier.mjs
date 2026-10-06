@@ -735,6 +735,23 @@ export function hasResponseToken(text, id) {
   return hasAuthoredContent(bodyAfterFrontmatter(body));
 }
 
+/** How long a response file must have sat untouched before it counts as landed rather than still being written. */
+export const LANDED_QUIET_MS = 120 * 1000;
+
+/**
+ * True when the response file at `path` has authored content (not a bare skeleton) and was last
+ * written at least LANDED_QUIET_MS ago, so the peer that wrote it has had the chance to send it.
+ * The one definition L2, L3 and the watcher share.
+ */
+export function responseLanded(path, now = Date.now()) {
+  try {
+    if (now - statSync(path).mtimeMs < LANDED_QUIET_MS) return false;
+    return hasAuthoredContent(bodyAfterFrontmatter(readFileSync(path, "utf8")));
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------- gates.jsonl
 
 export function readGates(dir) {

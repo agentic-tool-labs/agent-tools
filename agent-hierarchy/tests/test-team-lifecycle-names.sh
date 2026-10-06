@@ -65,6 +65,10 @@ if (args[0] === "agent" && args[1] === "start") {
   console.log(JSON.stringify({ result: { pane: { pane_id: "target" }, agent: { name: args[2], ready: true } } }));
   finish(0);
 }
+if (args[0] === "agent" && args[1] === "list") {
+  console.log(JSON.stringify({ result: { agents: [], type: "agent_list" } }));
+  finish(0);
+}
 if (args[0] === "pane" && (args[1] === "close" || args[1] === "rename")) {
   console.log(JSON.stringify({ result: {} }));
   finish(0);

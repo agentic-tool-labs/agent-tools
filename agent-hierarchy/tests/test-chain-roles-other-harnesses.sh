@@ -378,7 +378,7 @@ check "K2: with the message pool outside the cwd, --add-dir <pool> sits between 
 r "HERDR_ENV=1" spawn-one architect --dry-run
 check "K2: ...and with the pool under the cwd there is no --add-dir" '! jo "o.launch[0]" | grep -q -- "--add-dir"'
 r "HERDR_ENV=1" spawn-one reviewer --dry-run
-check "K2: a claude member's argv is byte-identical to 0.91.0" '[ "$(jo "o.launch[0]")" = "herdr agent start myrepo-reviewer --kind claude --pane <TARGET> -- --agent ah:reviewer --name myrepo-reviewer --model opus --settings '"'"'{\"env\":{\"AH_TEAM_FILE\":\"$HIER/teams/myrepo.json\"}}'"'"'" ]'
+check "K2: a claude member's argv is byte-identical to 0.91.0" '[ "$(jo "o.launch[0]")" = "herdr agent start myrepo-reviewer --kind claude --pane <TARGET> -- --agent ah:reviewer --name myrepo-reviewer --model opus --settings '"'"'{\"env\":{\"AH_TEAM_FILE\":\"$HIER/teams/myrepo.json\",\"AH_EXPECTED_ROOT\":\"$PROJ\"}}'"'"'" ]'
 roster_cfg '[{"role":"architect","kind":"codex","route":"pane"}]'
 r "HERDR_ENV=1" spawn-one architect --model m-now --dry-run
 check "K2: spawn-one --model on a model-less codex member launches it on that model, this time" '[ "$RC" -eq 0 ] && jo "o.launch[0]" | grep -qF -- "-- '"'"'--model'"'"' '"'"'m-now'"'"'" && ! grep -q m-now "$CFG"'
@@ -645,7 +645,7 @@ mkdir -p "$HIER/instructions"; echo SENTINEL > "$HIER/instructions/myrepo-review
 FP_BEFORE=$(fingerprints)
 spawn_gen reviewer
 check "K3 Part 1: a Claude spawn leaves a pre-existing instructions file untouched and creates none" '[ "$(cat "$HIER/instructions/myrepo-reviewer.md")" = SENTINEL ] && [ "$(ls "$HIER/instructions" | wc -l | tr -d " ")" = 1 ]'
-check "K3 Part 1: ...its launch argv is the 0.91.0 golden" '[ "$(passthrough myrepo-reviewer)" = "$(node -e "console.log(JSON.stringify([\"--agent\",\"ah:reviewer\",\"--name\",\"myrepo-reviewer\",\"--model\",\"opus\",\"--settings\",JSON.stringify({env:{AH_TEAM_FILE:process.argv[1]}})]))" "$HIER/teams/myrepo.json")" ]'
+check "K3 Part 1: ...its launch argv is the 0.91.0 golden" '[ "$(passthrough myrepo-reviewer)" = "$(node -e "console.log(JSON.stringify([\"--agent\",\"ah:reviewer\",\"--name\",\"myrepo-reviewer\",\"--model\",\"opus\",\"--settings\",JSON.stringify({env:{AH_TEAM_FILE:process.argv[1],AH_EXPECTED_ROOT:process.argv[2]}})]))" "$HIER/teams/myrepo.json" "$PROJ")" ]'
 check "K3 Part 1: ...and its agent file is byte-identical, with no model warning" '[ "$(fingerprints)" = "$FP_BEFORE" ] && no_warning'
 rm -rf "$PROJ/.claude/agents" "$HIER"; rm -f "$GLOBAL" "$CODEXHOME/config.toml"
 

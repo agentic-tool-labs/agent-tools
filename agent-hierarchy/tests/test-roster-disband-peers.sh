@@ -44,6 +44,10 @@ if (args[0] === "pane" && args[1] === "close") {
     process.stderr.write("pane_not_found\n");
     process.exit(1);
   }
+  try {
+    const state = process.env.FAKE_HERDR_STATE;
+    fs.writeFileSync(state, JSON.stringify(JSON.parse(fs.readFileSync(state, "utf8")).filter((a) => a.pane_id !== args[2])));
+  } catch {}
   console.log(JSON.stringify({ id: "cli:pane:close", result: { ok: true } }));
   process.exit(0);
 }
@@ -296,7 +300,7 @@ check "T9: close touches only the live pane" '[ "$RC" -eq 0 ] && [ "$(closes)" =
 fresh
 seed_peer myrepo-architect architect up $$
 run disband
-check "T9b: only a no-pane record -> zero closable -> no-op" '[ "$(jq_ "o.disbanded===false && Object.keys(o).length===3 && o.reason")" = "no active team and no live peers" ]'
+check "T9b: only a no-pane record -> nothing closable, but reported as not closable rather than as no live peers" '[ "$(jq_ "o.disbanded===undefined && o.expected===0 && o.not_closable.length===1 && o.not_closable[0].name===\"myrepo-architect\" && o.next===undefined")" = "true" ]'
 seed_peer myrepo-reviewer reviewer up $$ pC
 run disband
 check "T9b: no-pane record listed with command:null beside the closable one" \
@@ -318,7 +322,7 @@ check "T10: role-vs-name hint preserved" '[ "$RC" -eq 2 ] && echo "$OUT" | grep 
 check "T8: roster.mjs no longer carries the freshness arithmetic" '! grep -q "ROSTER_FRESH_SEC" "$H/roster.mjs"'
 check "T8: lib-hier computes the freshness comparison exactly once" '[ "$(grep -c "ageSec < ROSTER_FRESH_SEC" "$H/lib-hier.mjs")" = "1" ]'
 check "T8: roster() and livePeerSlots both route through recordLiveness" '[ "$(grep -c "recordLiveness(rec, now)" "$H/lib-hier.mjs")" = "2" ]'
-check "T8: the fallback enumerates via livePeerSlots (no second enumeration in roster.mjs)" 'grep -q "livePeerSlots(dir, scope)" "$H/roster.mjs" && ! grep -q "attributedRoster(dir).find(" "$H/roster.mjs" && [ "$(grep -c "roster.find((r) => r.name === name)" "$H/lib-hier.mjs")" = "1" ] && grep -q "attributedLiveness(attributedRoster(dir), name)" "$H/roster.mjs"'
+check "T8: the fallback enumerates via livePeerSlots (no second enumeration in roster.mjs)" 'grep -q "livePeerSlots(pool, scope)" "$H/roster.mjs" && ! grep -q "attributedRoster(dir).find(" "$H/roster.mjs" && [ "$(grep -c "roster.find((r) => r.name === name)" "$H/lib-hier.mjs")" = "1" ] && grep -q "attributedLiveness(attributedRoster(dir), name)" "$H/roster.mjs"'
 # Spec 0046 §2.2: the scope is the operated-on team's identity, never the --team FLAG. Passing
 # `teamArg` here WAS GitHub #4 — a bare disband scoped to null and excluded every tagged peer.
 check "T8: peerFallbackMembers never scopes on teamArg again (0046 §2.2)" '! grep -q "livePeerSlots(dir, teamArg" "$H/roster.mjs"'

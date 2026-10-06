@@ -238,7 +238,7 @@ jqnode() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{
 reset_state; clear_hierarchy; init_geometry; init_roster
 r "" add --no-spawn --role architect --model opus
 r "" add --no-spawn --role implementor --model sonnet
-TEAM_SETTING=$(node -e 'process.stdout.write("--settings \x27" + JSON.stringify({ env: { AH_TEAM_FILE: process.argv[1] } }) + "\x27")' "$PROJ/.claude/hierarchy/teams/myrepo.json")
+TEAM_SETTING=$(node -e 'process.stdout.write("--settings \x27" + JSON.stringify({ env: { AH_TEAM_FILE: process.argv[1], AH_EXPECTED_ROOT: process.argv[2] } }) + "\x27")' "$PROJ/.claude/hierarchy/teams/myrepo.json" "$PROJ")
 TMUX_LAUNCH=$(TS="$TEAM_SETTING" node -e 'process.stdout.write("tmux send-keys -t <TARGET> " + JSON.stringify("claude --agent ah:architect --name myrepo-architect --model opus " + process.env.TS) + " Enter")')
 
 r "HERDR_ENV=1" spawn-one architect --dry-run

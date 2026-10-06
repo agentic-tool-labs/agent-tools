@@ -24,7 +24,7 @@ roster.mjs: warning — ah: roles.reviewer.dispatch "model" in <SANDBOX>/myrepo/
           "tmux new-window -P -F '#{pane_id}' -c \"<SANDBOX>/myrepo\""
         ],
         "launch": [
-          "tmux send-keys -t <TARGET> \"claude --agent ah:architect --name myrepo-architect --model opus --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\"}}'\" Enter"
+          "tmux send-keys -t <TARGET> \"claude --agent ah:architect --name myrepo-architect --model opus --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\",\\\"AH_EXPECTED_ROOT\\\":\\\"<SANDBOX>/myrepo\\\"}}'\" Enter"
         ],
         "launch_cwd": "<SANDBOX>/myrepo",
         "target_placeholder": "<TARGET>",
@@ -49,7 +49,7 @@ roster.mjs: warning — ah: roles.reviewer.dispatch "model" in <SANDBOX>/myrepo/
           "tmux new-window -P -F '#{pane_id}' -c \"<SANDBOX>/myrepo\""
         ],
         "launch": [
-          "tmux send-keys -t <TARGET> \"claude --agent ah:implementor --name myrepo-implementor --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\"}}'\" Enter"
+          "tmux send-keys -t <TARGET> \"claude --agent ah:implementor --name myrepo-implementor --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\",\\\"AH_EXPECTED_ROOT\\\":\\\"<SANDBOX>/myrepo\\\"}}'\" Enter"
         ],
         "launch_cwd": "<SANDBOX>/myrepo",
         "target_placeholder": "<TARGET>",
@@ -75,7 +75,7 @@ roster.mjs: warning — ah: roles.reviewer.dispatch "model" in <SANDBOX>/myrepo/
           "tmux new-window -P -F '#{pane_id}' -c \"<SANDBOX>/myrepo\""
         ],
         "launch": [
-          "tmux send-keys -t <TARGET> \"claude --agent ah:reviewer --name myrepo-reviewer --model opus --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\"}}'\" Enter"
+          "tmux send-keys -t <TARGET> \"claude --agent ah:reviewer --name myrepo-reviewer --model opus --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\",\\\"AH_EXPECTED_ROOT\\\":\\\"<SANDBOX>/myrepo\\\"}}'\" Enter"
         ],
         "launch_cwd": "<SANDBOX>/myrepo",
         "target_placeholder": "<TARGET>",
@@ -101,7 +101,7 @@ roster.mjs: warning — ah: roles.reviewer.dispatch "model" in <SANDBOX>/myrepo/
           "tmux new-window -P -F '#{pane_id}' -c \"<SANDBOX>/myrepo\""
         ],
         "launch": [
-          "tmux send-keys -t <TARGET> \"claude --agent ah:ultra-advisor --name myrepo-ultra-advisor --model fable --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\"}}'\" Enter"
+          "tmux send-keys -t <TARGET> \"claude --agent ah:ultra-advisor --name myrepo-ultra-advisor --model fable --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\",\\\"AH_EXPECTED_ROOT\\\":\\\"<SANDBOX>/myrepo\\\"}}'\" Enter"
         ],
         "launch_cwd": "<SANDBOX>/myrepo",
         "target_placeholder": "<TARGET>",
@@ -127,7 +127,7 @@ roster.mjs: warning — ah: roles.reviewer.dispatch "model" in <SANDBOX>/myrepo/
           "tmux new-window -P -F '#{pane_id}' -c \"<SANDBOX>/myrepo\""
         ],
         "launch": [
-          "tmux send-keys -t <TARGET> \"claude --agent ah:task-runner --name myrepo-task-runner --model haiku --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\"}}'\" Enter"
+          "tmux send-keys -t <TARGET> \"claude --agent ah:task-runner --name myrepo-task-runner --model haiku --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\",\\\"AH_EXPECTED_ROOT\\\":\\\"<SANDBOX>/myrepo\\\"}}'\" Enter"
         ],
         "launch_cwd": "<SANDBOX>/myrepo",
         "target_placeholder": "<TARGET>",
@@ -153,7 +153,7 @@ roster.mjs: warning — ah: roles.reviewer.dispatch "model" in <SANDBOX>/myrepo/
           "tmux new-window -P -F '#{pane_id}' -c \"<SANDBOX>/myrepo\""
         ],
         "launch": [
-          "tmux send-keys -t <TARGET> \"claude --agent ah:implementor --name myrepo-implementor-2 --model opus --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\"}}'\" Enter"
+          "tmux send-keys -t <TARGET> \"claude --agent ah:implementor --name myrepo-implementor-2 --model opus --settings '{\\\"env\\\":{\\\"AH_TEAM_FILE\\\":\\\"<SANDBOX>/myrepo/.claude/hierarchy/teams/myrepo.json\\\",\\\"AH_EXPECTED_ROOT\\\":\\\"<SANDBOX>/myrepo\\\"}}'\" Enter"
         ],
         "launch_cwd": "<SANDBOX>/myrepo",
         "target_placeholder": "<TARGET>",

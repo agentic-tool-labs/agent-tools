@@ -196,7 +196,7 @@ setup_roster() { # repo roster: one architect and one reviewer, both peers
 # verbs existed. <SB> stands for the sandbox path.
 S6_GOLDEN='["pane","layout","--current"]
 ["pane","split","--pane","w1:p0","--direction","right","--cwd","<SB>/myrepo","--no-focus"]
-["agent","start","myrepo-architect","--kind","claude","--pane","w1:p10","--","--agent","ah:architect","--name","myrepo-architect","--model","opus","--settings","{\"env\":{\"AH_TEAM_FILE\":\"<SB>/myrepo/.claude/hierarchy/teams/myrepo.json\"}}"]
+["agent","start","myrepo-architect","--kind","claude","--pane","w1:p10","--","--agent","ah:architect","--name","myrepo-architect","--model","opus","--settings","{\"env\":{\"AH_TEAM_FILE\":\"<SB>/myrepo/.claude/hierarchy/teams/myrepo.json\",\"AH_EXPECTED_ROOT\":\"<SB>/myrepo\"}}"]
 ["pane","rename","w1:p10","claude","-","myrepo-architect"]'
 
 WT="$PROJ/.claude/worktrees"

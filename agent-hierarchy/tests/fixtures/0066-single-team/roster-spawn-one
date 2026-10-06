@@ -5,6 +5,6 @@
   "name": "foo-reviewer",
   "mode": "auto",
   "launch": [
-    "claude --agent ah:reviewer --name foo-reviewer --model sonnet --settings '{\"env\":{\"AH_TEAM_FILE\":\"<SANDBOX>/hier/teams/foo.json\"}}' --bg"
+    "claude --agent ah:reviewer --name foo-reviewer --model sonnet --settings '{\"env\":{\"AH_TEAM_FILE\":\"<SANDBOX>/hier/teams/foo.json\",\"AH_EXPECTED_ROOT\":\"<SANDBOX>/myrepo\"}}' --bg"
   ]
 }
