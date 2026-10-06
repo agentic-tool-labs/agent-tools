@@ -22,7 +22,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realp
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, MSG_ROLES, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
+import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, MSG_ROLES, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, roleClass, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
 import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamArgName, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
 import { statusChanged, sweepActivity } from "./lib-status.mjs";
 
@@ -626,6 +626,53 @@ export function validateRequestToken(text, dir, expectedTo) {
     return { ok: false, why: `wrong to: (file says ${parsed.fm.to}, dispatch is ${expectedTo})` };
   }
   return { ok: true, path, fm: parsed.fm };
+}
+
+const EMPTY_INTENT = new Set(["", "none", "n/a", "na", "-", "tbd"]);
+const blankIntent = (s) => EMPTY_INTENT.has(String(s).trim().toLowerCase());
+
+/**
+ * Which of `goal` and `acceptance` a parsed request leaves empty. A key is filled by text after the colon
+ * on its `[0] tldr` line, or by a bullet with text in its `## [N] key` section.
+ */
+export function missingIntent(parsed) {
+  const lines = parsed.text.split("\n");
+  const filled = (key) => {
+    let section = null;
+    for (const line of lines) {
+      const a = line.match(/^## \[\d+\] (\S+)/);
+      if (a) { section = a[1]; continue; }
+      if (section === "tldr") {
+        const m = line.match(new RegExp(`^- \\[\\d+\\] ${key}:(.*)$`));
+        if (m && !blankIntent(m[1])) return true;
+      } else if (section === key) {
+        const b = line.match(/^\s*[-*] (.*)$/);
+        if (b && !blankIntent(b[1])) return true;
+      }
+    }
+    return false;
+  };
+  return ["goal", "acceptance"].filter((k) => !filled(k));
+}
+
+/**
+ * The intent a review-class request still lacks, as `["goal"]`, `["acceptance"]` or both; null when the file is
+ * not a request to a review-class role, its intent is filled, or the check cannot be made (an error never blocks).
+ */
+export function reviewIntentGap(path, resolved) {
+  try {
+    const parsed = readMsgFile(path);
+    if (!parsed || !parsed.fm || parsed.fm.type !== "request" || roleClass(parsed.fm.to, resolved) !== "review") return null;
+    const missing = missingIntent(parsed);
+    return missing.length ? missing : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The hold text for a review-class request without its intent; `again` finishes "…, then <again>.". */
+export function reviewIntentReason(path, missing, again) {
+  return `ah: a Reviewer brief needs its intent. Fill [1] goal (what the change must deliver, and its source: spec path, ticket or PR text) and [5] acceptance in ${path}, then ${again}. Missing: ${missing.join(", ")}.`;
 }
 
 /**

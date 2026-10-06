@@ -13,10 +13,17 @@
  * context (`agent_id` set — nested dispatches are 0.30.0 territory), pings /
  * chat / replies (SendMessage without the sentinel), a disabled hierarchy,
  * and `msgs:"off"` in agent-hierarchy.json. Any internal error allows.
+ *
+ * Review-class intent check: a request whose `to:` is a review-class role must state its goal and
+ * acceptance. It runs after every check above passes, and also on a SendMessage without the sentinel
+ * that names a `--request.md` first, since peer briefs usually carry no sentinel.
  */
 
 import { chainRoles, classProp, isSubagent, lookupRole, logHookError, MSG_CLI, readHookInput, resolveConfig, resolvedPeerTargets, resolveHierarchyRole, teamPrefix } from "./lib-config.mjs";
-import { extractMsgToken, hierarchyDir, parseMsgFilename, validateRequestToken } from "./lib-hier.mjs";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
+
+import { extractMsgToken, hierarchyDir, parseMsgFilename, reviewIntentGap, reviewIntentReason, validateRequestToken } from "./lib-hier.mjs";
 import { appendPeerRecord, parseSentinel, readPeerRecords, stripRef } from "./lib-peer.mjs";
 
 function decide(decision, reason, systemMessage) {
@@ -57,6 +64,12 @@ function denyWithoutIdleNotice(input, toolInput) {
   decide("deny", NOTIFY_REASON(meta.id));
 }
 
+/** Holds the dispatch when the request it names is a review-class brief without its intent; otherwise returns. */
+function denyWithoutIntent(path, resolved) {
+  const missing = reviewIntentGap(path, resolved);
+  if (missing) decide("deny", reviewIntentReason(path, missing, "re-issue this dispatch"), "ah: held a Reviewer dispatch until its brief states the intent; it will be re-sent.");
+}
+
 try {
   const input = await readHookInput();
   if (isSubagent(input)) decide(null);
@@ -82,6 +95,7 @@ try {
 
   let role = null;
   let text = "";
+  let sentinel = true;
   if (isDispatch) {
     const hit = lookupRole(toolInput.subagent_type, cwd);
     role = hit.role;
@@ -89,12 +103,19 @@ try {
     text = typeof toolInput.prompt === "string" ? toolInput.prompt : "";
   } else {
     text = typeof toolInput.message === "string" ? toolInput.message : "";
-    if (!parseSentinel(text)) decide(null);
+    sentinel = Boolean(parseSentinel(text));
   }
 
   const sessionId = typeof input.session_id === "string" && input.session_id ? input.session_id : "__nosession__";
   const resolved = resolveConfig(cwd, { sessionId: sessionId !== "__nosession__" ? sessionId : undefined });
   if (!resolved.enabled || resolved.msgs === "off") decide(null);
+
+  // Not a peer tasking, so only the intent check applies, and only to a send whose first token names a request file.
+  if (isSend && !sentinel) {
+    const named = extractMsgToken(text);
+    if (named && named.endsWith("--request.md") && isAbsolute(named) && existsSync(named)) denyWithoutIntent(named, resolved);
+    decide(null);
+  }
 
   if (isSend) {
     const to = typeof toolInput.to === "string" ? stripRef(toolInput.to.trim()) : "";
@@ -106,7 +127,10 @@ try {
 
   const dir = hierarchyDir(cwd);
   const check = validateRequestToken(text, dir, role);
-  if (check.ok) decide(null);
+  if (check.ok) {
+    denyWithoutIntent(check.path, resolved);
+    decide(null);
+  }
   decide("deny", denyReason(role, check.why), "ah: held a role dispatch until its brief is written as a message file; it will be re-sent.");
 } catch (err) {
   logHookError("pretooluse-msg-gate.mjs", err);

@@ -5,6 +5,7 @@
 # Usage: bash tests/test-msg-worktree-team.sh   (exits 0 iff all cases pass)
 
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
+. "$PLUGIN/tests/lib-intent.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 H="$PLUGIN/hooks"
@@ -42,6 +43,7 @@ path_of() { node -e 'process.stdout.write(JSON.parse(process.argv[1]).path)' "$O
 
 msg new --cwd "$WT" --to reviewer --from orchestrator --slug wt-task --to-name main-reviewer
 REQ=$(path_of)
+fill_intent "$REQ"
 check "request to a main-checkout teammate, written from the worktree, lands in the Team's pool" \
   'case "$REQ" in "$MAIN/.claude/hierarchy/msgs/"*) true;; *) false;; esac'
 check "it names the Team's file" 'grep -qxF "team_file: $TEAM_FILE" "$REQ"'
