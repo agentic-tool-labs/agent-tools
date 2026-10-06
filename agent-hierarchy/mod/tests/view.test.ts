@@ -535,3 +535,13 @@ test('a focusable member row splits into the name (the click target) and the res
   expect(row(60, { session_id: 'someone-else' }).focus).toBe('builder')
   expect(secs([team({ members: [peer('builder')], dispatches: [] })])[0].rows[0].focus).toBe(null)
 })
+
+test('S13 a session listed in member_sessions draws no band, toast, Pane view or status entry, while its member is marked gone', async () => {
+  const gone = team({ members: [member({ name: 'demo-architect', session_id: 'sess-orch', live: false, activity: 'idle' })], dispatches: [dispatch({ states: [{ at: at(-60000), state: 'stalled', reason: 'member-gone' }] })] })
+  const text = docText({ member_sessions: ['sess-orch'], teams: [gone] }, { out: 1, blocked: 0, stalled: 1, tone: 'bad' })
+  expect(statusText(parseDoc(text), ms(T0), 'sess-orch', true)).toBe(undefined)
+  expect(viewModel(parseDoc(text), ms(T0), 'sess-orch')).toBe(null)
+  expect(bandLine(viewModel(parseDoc(text), ms(T0), 'sess-orch'), 120)).toBe(null)
+  expect(paneRows(viewModel(parseDoc(text), ms(T0), 'sess-orch'), 120, nullCause(parseDoc(text), ms(T0), 'sess-orch')).map((r) => r.text)).toEqual(['No hierarchy status here (member session).'])
+  expect(statusText(parseDoc(text), ms(T0), 'some-other-session', true)).not.toBe(undefined)
+})

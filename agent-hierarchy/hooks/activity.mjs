@@ -9,13 +9,14 @@
 // files its report with the Write tool, which no ah hook sees, so its turn ending is what surfaces it.
 //
 // Role sessions only (the role sessionstart.mjs persisted for this session id), never a subagent.
+// UserPromptSubmit and Stop also re-register a session whose latest roster row is a false `down` (healFalseDown).
 // Never writes stdout, never blocks, always exits 0.
 //
 // ponytail: PostToolUse runs async, so it and the sync Stop are two writers for one record and the last
 // rename wins. PostToolUse lands ~35 ms after its tool, long before the turn ends, so Stop lands last.
 
 import { hierarchyDir, isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
-import { SELF_STATE } from "./lib-hier.mjs";
+import { healFalseDown, SELF_STATE } from "./lib-hier.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 import { recordActivity, statusChanged } from "./lib-status.mjs";
 
@@ -30,6 +31,8 @@ try {
     if (sessionId && readSessionRole(sessionId)) {
       // PostToolUse means working again; recordActivity leaves a record already in that state alone.
       const activity = event === "PostToolUse" ? "working" : SELF_STATE[event];
+      // A running member whose latest roster row is a false `down` re-registers at its next prompt or stop.
+      if (event === "UserPromptSubmit" || event === "Stop") healFalseDown(dir, sessionId, process.ppid);
       if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null, tool: event === "PostToolUse" ? input.tool_name : null });
     }
     if (!recorded && (event === "UserPromptSubmit" || event === "Stop")) statusChanged(dir);

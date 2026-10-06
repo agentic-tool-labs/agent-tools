@@ -971,6 +971,27 @@ export function attributedRoster(dir) {
   return result;
 }
 
+/**
+ * Self-heal a false `down`: when this session's latest roster row is `down`, and its latest `up` row was
+ * registered by the process calling (`pid`, the hook's parent, derived as SessionStart derives the pid it
+ * registers), append a copy of that `up` row. A relaunched copy has another client pid, so it can never
+ * re-register itself here. Only SessionEnd writes `down`. Returns true when a row was appended; never throws.
+ */
+export function healFalseDown(dir, sessionId, pid) {
+  try {
+    if (!sessionId || !Number.isInteger(pid) || pid <= 0) return false;
+    const rows = readRoster(dir).filter((r) => r.session_id === sessionId);
+    if (!rows.length || rows[rows.length - 1].status !== "down") return false;
+    const up = [...rows].reverse().find((r) => r.status === "up");
+    if (!up || up.pid !== pid) return false;
+    const { type: _type, ts: _ts, ...rest } = up;
+    appendRosterRecord(dir, { ...rest, status: "up" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The `up` record for a session_id, if its latest state is `up`. */
 export function upRecordFor(dir, sessionId) {
   return latestRoster(dir).find((r) => r.session_id === sessionId && r.status === "up") || null;

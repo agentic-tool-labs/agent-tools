@@ -407,7 +407,7 @@ export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd), 
     written_at: iso(nowMs),
     expires_at: iso(nowMs + EXPIRES_AFTER_MS),
     enabled,
-    member_sessions: allMembers.filter((m) => !isPaneMember(m) && m.live === true && m.session_id).map((m) => m.session_id),
+    member_sessions: [...new Set(allMembers.filter((m) => !isPaneMember(m) && typeof m.session_id === "string" && m.session_id).map((m) => m.session_id))],
     teams,
     timeline: buildTimeline(nowMs, allMembers, allDispatches, enabled, teams.some((t) => t.pipeline !== null)),
   };

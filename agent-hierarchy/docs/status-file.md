@@ -82,7 +82,7 @@ which today's readers treat as absent.
 | `written_at` | when the document was computed (ISO-8601 UTC, ms) |
 | `expires_at` | `written_at` + 24 h |
 | `enabled` | the hierarchy's `enabled` setting |
-| `member_sessions` | session ids of the live Claude members of every live team, whatever their route |
+| `member_sessions` | the session id of each Claude team member's latest roster registration, live or not, so a member's own session never gets the orchestrator view while it is marked gone; each id once; a session that belongs to no team is not listed |
 | `teams[]` | one entry per live team |
 | `teams[].team` | the team's name; `null` for the default team (`team.json`), shown as `default` |
 | `teams[].members[]` | `name`, `role`, `label`, `kind`, `route`, `session_id`, `live`, `activity`, `activity_at`, `last_tool`, `last_tool_at`, `stream`, `focusable`, `blocked_by`, `blocked_note` |

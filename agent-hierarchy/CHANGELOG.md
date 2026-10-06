@@ -5,6 +5,14 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.117.1]
+
+### Fixed
+- A member session stays excluded from the orchestrator view while it is marked gone: the status file's member
+  sessions now list each member's latest registered session whether or not it is live.
+- A running member whose roster row was wrongly marked down re-registers itself at its next prompt or stop, but only
+  from the process that registered it, so a relaunched copy of a session cannot.
+
 ## [0.117.0]
 
 ### Added
