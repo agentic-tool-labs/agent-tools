@@ -181,6 +181,29 @@ its absolute path and the remedy: repair or remove it, or use a different `--tea
 refuse; beside an unparseable legacy `team.json` a bare read verb resolves to that legacy file
 rather than to `teams/<prefix>.json`, so it reports that scope.
 
+## Self-care (any peer)
+
+A role that has a shell only for self-care (the built-in Architect, and any custom role whose
+registry row says `shell: "self-care"`) may run these commands and nothing else. A hook that runs
+before every other Bash hook refuses the rest. It is a role-discipline tripwire, not a security
+boundary: your permission settings still apply to every command, and the gate never approves one on
+its own.
+
+| CLI | verb | flags | conditions |
+|---|---|---|---|
+| roster | `checkin` | `--cwd`, `--team` | `--team` must be the team on this session's latest roster row that has one; never `--orchestrator-pid` |
+| roster | `whoami` | `--cwd`, `--team` | |
+| roster | `status` | `--cwd` | no `--now`, no `--plain` |
+| msg | `new` | `--type`, `--id`, `--to`, `--from`, `--req`, `--cwd`, `--to-name`, `--from-name` | `--type response`; `--from` is your own role; `--req` is an existing `*--request.md` inside this pool's `msgs/` or its team home's |
+| msg | `list`, `index`, `downstream`, `roster` | `--cwd` | read-only |
+
+The command must be one plain `node <abs CLI path> <verb> --flag value ...` line: at most 1024
+characters, tokens made only of letters, digits and `. _ / : @ + , -`, every flag followed by its
+value (the value may not start with `-`), no flag twice, and `--cwd`, when given, equal to the
+session's own directory. No quotes, `=`, pipes, redirection or command prefixes. A plugin path or
+working directory containing a space makes self-care unavailable. A subagent of a gated role gets no
+shell at all; other subagents (for example a retrieval subagent) are untouched.
+
 ## Team home and teardown
 
 **One home.** A team file lives in the hierarchy dir of the repo's main checkout

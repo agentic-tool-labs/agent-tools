@@ -1193,6 +1193,11 @@ export function staleTeamKeys(cwd, registry = null) {
 /** Row keys a built-in cannot change: present in config → a warning, ignored. */
 const BUILTIN_FIXED_KEYS = ["class", "label", "description", "routes"];
 
+/** The `shell` registry value that opts a custom role into the self-care shell gate (pretooluse-self-care-gate.mjs). Any other value means not gated. */
+export const SHELL_SELF_CARE = "self-care";
+/** Built-in roles that run with a shell only for self-care commands. A built-in has no registry row to carry the marker, so the set is a code constant. */
+export const SELF_CARE_BUILTIN_ROLES = new Set(["architect"]);
+
 export const ROLE_NAME_RE = /^[a-z][a-z0-9-]{0,30}$/;
 /**
  * An agent reference is interpolated into shell strings (spawn commands and the directive's spawn
@@ -1273,6 +1278,7 @@ export function checkCustomRow(name, raw) {
     return { error: `model ${JSON.stringify(model)} is not allowed for class ${raw.class} (allowed: ${cls.models.join(", ")})` };
   }
   row.model = model;
+  if (raw.shell === SHELL_SELF_CARE) row.shell = raw.shell;
   if (cls.chain) {
     if (raw.dispatch !== undefined) row.dispatch = raw.dispatch;
     if (raw.peer !== undefined) row.peer = raw.peer;

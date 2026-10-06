@@ -160,7 +160,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, isPaneMember, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { SHELL_SELF_CARE, activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, isPaneMember, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
 import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, reviewIntentGap, reviewIntentReason, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
@@ -276,7 +276,7 @@ function gitPorcelain(dir) {
 /** Read-only state report: rows a human or an agent can read in one pass. Writes nothing. */
 // ---------------------------------------------------------------- role verbs (custom roles)
 
-const ROLE_FLAGS = new Set(["class", "agent", "label", "description", "routes", "model", "dispatch", "level", "scaffold", "from", "pin", "dry-run", "json", "cwd"]);
+const ROLE_FLAGS = new Set(["class", "agent", "label", "description", "routes", "model", "dispatch", "shell", "level", "scaffold", "from", "pin", "dry-run", "json", "cwd"]);
 
 /** resolveConfig's scope names → roster level names. */
 function levelOfScope(scope) {
@@ -387,15 +387,16 @@ function roleSet(name) {
   const reg = registry();
   const builtin = isBuiltinRole(name);
   const dry = opts["dry-run"] === true;
-  const given = { class: opts.class, agent: opts.agent, label: opts.label, description: opts.description, routes: opts.routes, model: opts.model, dispatch: opts.dispatch, scaffold: opts.scaffold, level: opts.level };
+  const given = { class: opts.class, agent: opts.agent, label: opts.label, description: opts.description, routes: opts.routes, model: opts.model, dispatch: opts.dispatch, shell: opts.shell, scaffold: opts.scaffold, level: opts.level };
   for (const [k, v] of Object.entries(given)) {
     if (v === true) fail(`role set: --${k} needs a value`);
   }
   if (builtin) {
-    for (const k of ["class", "label", "description", "routes", "scaffold"]) {
+    for (const k of ["class", "label", "description", "routes", "scaffold", "shell"]) {
       if (given[k] !== undefined) fail(`role set ${name}: --${k} does not apply to a built-in role — only --agent, --model and --dispatch`);
     }
   }
+  if (given.shell !== undefined && given.shell !== SHELL_SELF_CARE) fail(`role set ${name}: --shell must be ${SHELL_SELF_CARE}`);
   // Default: where the row already lives (a write elsewhere would be shadowed
   // or would shadow it), else beside a repo scaffold, else global.
   const defined = levelOfScope(reg.sources[name]);
@@ -412,6 +413,7 @@ function roleSet(name) {
   }
   const row = atLevel ? { ...atLevel } : reg.roles[name] ? seedRow(name, reg.roles[name]) : {};
   for (const k of ["class", "agent", "label", "model", "dispatch"]) if (typeof given[k] === "string") row[k] = given[k];
+  if (given.shell !== undefined) row.shell = given.shell;
   for (const k of ["description", "routes"]) {
     if (typeof given[k] !== "string") continue;
     if (given[k] === "") delete row[k];
@@ -668,7 +670,7 @@ function refuseTrustCommitHere(label) {
  */
 function roleSetFrom(name) {
   const dry = opts["dry-run"] === true;
-  for (const k of ["class", "agent", "scaffold"]) {
+  for (const k of ["class", "agent", "scaffold", "shell"]) {
     if (opts[k] !== undefined) fail(`role set ${name}: --${k} can't be used with --from — a pack role's ${k === "scaffold" ? "agent file" : k} comes from the pack. To change it, remove the role and define your own`);
   }
   for (const k of ["from", "pin", "label", "description", "routes", "model", "dispatch", "level"]) {
@@ -734,7 +736,7 @@ function roleSetFrom(name) {
 /** `role set` on a row already adopted from a pack: only the user's own fields change, and the pin
     stays, since the pack's content doesn't. */
 function roleSetAdoptedFields(name, { level, path, data, layerRoles, atLevel, given, dry, builtin }) {
-  for (const k of ["class", "agent", "scaffold"]) {
+  for (const k of ["class", "agent", "scaffold", "shell"]) {
     if (given[k] !== undefined) fail(`role set ${name}: --${k} can't change a role adopted from a pack (${atLevel.from}) — remove it and define your own role to change that`);
   }
   const row = { ...atLevel };
