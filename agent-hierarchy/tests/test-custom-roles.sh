@@ -322,7 +322,7 @@ js "
   const block = Buffer.byteLength(L.designRoutingBlock(r) || '');
   process.stdout.write(JSON.stringify({ max: Math.max(...sizes), block }));
 "
-check "T16: injected contract ≤ 1350 B and routing block ≤ 200 + 200·1 B" 'node -e "const o=$OUT;process.exit(o.max<=1350&&o.max>0&&o.block<=400?0:1)"'
+check "T16: injected contract ≤ 1400 B and routing block ≤ 200 + 200·1 B" 'node -e "const o=$OUT;process.exit(o.max<=1400&&o.max>0&&o.block<=400?0:1)"'
 agentfile auditor "tools: Read, SendMessage, Edit"
 directive
 UL=$(echo "$OUT" | grep '^Unavailable user-defined roles' | sed 's/: auditor\.$//' | wc -c | tr -d ' ')

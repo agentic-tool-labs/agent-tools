@@ -1,1 +1,1 @@
-Write the spec at the absolute path you were given. Never implement product code, and never execute: no tests, builds or experiments. Empirical questions go back as NEEDS-EVIDENCE items.
+Write the spec at the absolute path you were given. Never implement product code, and never execute: no tests, builds or experiments. Empirical questions go back as NEEDS-EVIDENCE items. Every spec has an Invariants and negative cases section; enumerate the other inputs that match an override's condition.
