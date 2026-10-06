@@ -5,6 +5,16 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.116.0]
+
+### Fixed
+- The hierarchy Pane is never blank. A visible status document that lists no team now draws one line saying so,
+  and a value in the Pane's state that is not a view draws the "nothing here" line instead of nothing.
+- That line now names its cause: no file, unreadable, expired, the hierarchy off, not visible, or a member session.
+- A session whose own config is disabled no longer hides a live team's view. Its event writes of the status file
+  keep the `enabled` already published, and still publish every change at once; `roster.mjs status` and
+  `/hierarchy off` still hide the view. Limits are in `docs/status-file.md`.
+
 ## [0.115.0]
 
 Reviews that know what a change is meant to deliver, and fixes that do not reach a push unreviewed.

@@ -6,6 +6,8 @@ import type { PaneRow, Tone, View } from './types/index.d.ts'
 export const SIZE_CAP = 262144
 
 export type Doc = {
+  /** `enabled` when the file holds a boolean there, else null. Only the cause shown for an empty Pane reads it. */
+  enabled: boolean | null
   expiresMs: number
   memberSessions: readonly string[]
   timeline: readonly { atMs: number; entry: Record<string, unknown> }[]
@@ -60,7 +62,7 @@ export function parseDoc(text: string | null | undefined): Doc | null {
     if (!Number.isFinite(atMs)) return null
     timeline.push({ atMs, entry: entry as Record<string, unknown> })
   }
-  return { expiresMs, memberSessions: members as string[], timeline, teams: Array.isArray(d.teams) ? d.teams : [] }
+  return { enabled: typeof d.enabled === 'boolean' ? d.enabled : null, expiresMs, memberSessions: members as string[], timeline, teams: Array.isArray(d.teams) ? d.teams : [] }
 }
 
 /**
@@ -75,6 +77,18 @@ function current(doc: Doc | null, nowMs: number, sessionId: string): Record<stri
   if (typeof visible !== 'boolean' || typeof tone !== 'string' || typeof text !== 'string' || typeof short !== 'string') return null
   if (!visible || doc.memberSessions.includes(sessionId)) return null
   return picked.entry
+}
+
+/**
+ * Why there is no view for a document: `unreadable` when it did not parse, else `expired`, `member session`,
+ * `hierarchy off` (it says `enabled` is false) or `not visible`. Named in the empty Pane's one line.
+ */
+export function nullCause(doc: Doc | null, nowMs: number, sessionId: string): string {
+  if (doc === null) return 'unreadable'
+  if (nowMs >= doc.expiresMs) return 'expired'
+  if (doc.memberSessions.includes(sessionId)) return 'member session'
+  if (doc.enabled === false) return 'hierarchy off'
+  return 'not visible'
 }
 
 /**
@@ -260,20 +274,34 @@ export const PANE_BUTTON = { label: 'Pane', width: 8, gap: 1, minColumns: 40 }
 
 /** The band's one line at `columns` and its tone, or null when there is no band. */
 export function bandLine(view: View | null, columns: number): { text: string; tone: Tone } | null {
-  if (view === null || view.band === null) return null
-  let text = view.band.head
-  for (const item of view.band.tail) {
-    const longer = `${text} · ${item}`
+  // A value held in state can come from another version of this module, so its shape is checked, not assumed.
+  const band = typeof view === 'object' && view !== null ? (view as { band?: unknown }).band : null
+  if (typeof band !== 'object' || band === null) return null
+  const { head, tail, tone } = band as { head?: unknown; tail?: unknown; tone?: unknown }
+  if (typeof head !== 'string' || typeof tone !== 'string' || !Array.isArray(tail)) return null
+  let text = head
+  for (const item of tail) {
+    const longer = `${text} · ${String(item)}`
     if (width(longer) > columns) break
     text = longer
   }
-  return { text: cut(text, columns), tone: view.band.tone }
+  return { text: cut(text, columns), tone: tone as Tone }
 }
 
-/** The Pane's rows at `columns`, each with its tone; one dim line when there is no view. */
-export function paneRows(view: View | null, columns: number): { text: string; tone: Tone }[] {
-  if (view === null) return [{ text: cut('No hierarchy status here.', columns), tone: 'idle' }]
-  return view.pane.map((r) => ({ text: drawRow(r, columns), tone: r.tone }))
+/**
+ * The Pane's rows at `columns`, each with its tone. Never empty: no view, or a held value that is not a view,
+ * is one dim line (naming `why` when given), and a view that lists no team says so in one dim line.
+ */
+export function paneRows(view: View | null, columns: number, why: string | null = null): { text: string; tone: Tone }[] {
+  const none = [{ text: cut(`No hierarchy status here${typeof why === 'string' && why ? ` (${why})` : ''}.`, columns), tone: 'idle' as Tone }]
+  const pane = typeof view === 'object' && view !== null ? (view as { pane?: unknown }).pane : null
+  if (!Array.isArray(pane)) return none
+  if (pane.length === 0) return [{ text: cut('No live team in the status file.', columns), tone: 'idle' }]
+  try {
+    return (pane as PaneRow[]).map((r) => ({ text: drawRow(r, columns), tone: r.tone }))
+  } catch {
+    return none
+  }
 }
 
 const bar = (pct: number): string => '█'.repeat(Math.floor(pct / 10)) + '░'.repeat(10 - Math.floor(pct / 10))

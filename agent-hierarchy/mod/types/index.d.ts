@@ -22,6 +22,8 @@ declare module 'claude-code' {
     ah: {
       /** The current view; null whenever nothing should show (no document, expired, invisible, member session). */
       view: View | null
+      /** Why `view` is null, named in the empty Pane's line; null while there is a view. */
+      why: string | null
       /** Toast keys already shown this session; never written means not yet seeded. */
       seen: string[]
       /** Auto-open has fired this session. */
