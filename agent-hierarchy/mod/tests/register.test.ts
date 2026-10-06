@@ -21,9 +21,10 @@ type World = {
   placed: boolean
   writes: { key: string; value: unknown }[]
   toasts: string[]
+  order: string[]
 }
 const world = (over: Partial<World> = {}): World => ({
-  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], ...over,
+  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], order: [], ...over,
 })
 
 // Answers every $ call the module makes, from `w`; nothing real is read.
@@ -43,8 +44,8 @@ const stage = (on: any, w: World) => {
   })
   on('ui.status', (_$: any, e: any) => { w.shown.push(e.text); return { value: undefined } })
   on('command.register', (_$: any, e: any) => { w.registered.push(e); return { value: undefined } })
-  on('ui.open', (_$: any, e: any) => { w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
-  on('state.set', async (_$: any, e: any, next: any) => { w.writes.push({ key: e.key, value: e.value }); return next(e) })
+  on('ui.open', (_$: any, e: any) => { w.order.push('open'); w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
+  on('state.set', async (_$: any, e: any, next: any) => { w.order.push(`set:${e.key}`); w.writes.push({ key: e.key, value: e.value }); return next(e) })
   on('ui.toast', (_$: any, e: any) => { w.toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } })
 }
 const writesOf = (w: World, key: string) => w.writes.filter((x) => x.key === key).map((x) => x.value)
@@ -236,7 +237,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
     expect(buttons(await ui.drawn()).length).toBe(1)
     const before = w.opens.length
+    w.order.length = 0
     await ui.press({ key: 'ah-pane' })
+    expect(w.order).toEqual(['set:closed', 'open'])
     expect(writesOf(w, 'closed')).toEqual([false])
     expect(w.opens.slice(before)).toEqual([{ id: 'ah-status', title: 'Hierarchy' }])
     expect(w.toasts).toEqual([])

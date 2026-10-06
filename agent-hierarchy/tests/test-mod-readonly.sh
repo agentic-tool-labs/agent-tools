@@ -155,7 +155,10 @@ for (const f of files) {
     const a = callArgs(code, m.index + m[0].length - 1);
     if (a && a.list.length === 3 && literalAt(a.list[0]) === "ui.render" && canonOf(a.list[1]) === BAND_MATCHER) bandSpans.push(a.list[2]);
   }
-  const inBand = (i) => bandSpans.some(([s, e]) => i >= s && i < e);
+  // Every on(...) call's span, so a registration nested inside the band hook does not inherit its exemption.
+  const onSpans = [];
+  for (const m of code.matchAll(/(?<![\w$.])on\s*\(/g)) { const a = callArgs(code, m.index + m[0].length - 1); if (a) onSpans.push([m.index, a.close]); }
+  const inBand = (i) => bandSpans.some(([s, e]) => i >= s && i < e && !onSpans.some(([os, oe]) => os >= s && os < e && i >= os && i <= oe));
 
   for (const m of src.matchAll(/\\u/g)) at(m.index, "a \\u escape");
   for (const m of code.matchAll(/(?<![\w$.])[A-Za-z_$][\w$]*/g)) if (TOKENS.has(m[0])) at(m.index, `banned token ${m[0]}`);
@@ -190,15 +193,22 @@ for (const f of files) {
   }
 
   // A same-file helper that may be handed $: declared exactly once, as const <name> = (async)? ($ …) => …, and never bound again.
+  // `before` ends in a member access, whatever whitespace sits between the dot and the name.
+  const isMember = (before) => /(?<!\.\.)\??\.\s*$/.test(before) && !/\.\.\.\s*$/.test(before);
   const helperOk = (name) => {
     let decls = 0, other = 0;
-    for (const h of code.matchAll(new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$])`, "g"))) {
+    for (const h of code.matchAll(new RegExp(`(?<![\\w$])${name.replace(/\$/g, "\\$")}(?![\\w$])`, "g"))) {
       const before = code.slice(0, h.index), after = code.slice(h.index + name.length);
+      if (isMember(before)) continue;
       const eq = /(?<![\w$.])const\s+$/.test(before) ? /^\s*(?::[^=;]+)?=(?!=)/.exec(after) : null;
       if (eq) {
         const at0 = h.index + name.length + eq[0].length, p = fnParams(code, at0);
         if (p && p.length && paramName(p[0][0]) === "$" && !/^\s*(?:async\s+)?function\b/.test(code.slice(at0))) decls++; else other++;
-      } else if (!(/^\s*\(/.test(after) && !/\bfunction\s+$/.test(before))) other++;
+      } else if (/^\s*\(/.test(after)) {
+        // A call site, unless the parenthesis closes into a body: a function, generator or method declaration binds the name.
+        const a = callArgs(code, h.index + name.length + /^\s*/.exec(after)[0].length);
+        if (!a || /^\s*(?::[^;{}=]*)?\{/.test(code.slice(a.close + 1)) || /\bfunction\s*\*?\s*$/.test(before)) other++;
+      } else other++;
     }
     return decls === 1 && other === 0;
   };
@@ -220,8 +230,8 @@ for (const f of files) {
     if (/^\s*\./.test(rest)) { at(i, "$.<noun> without a method"); continue; }
     if (isParam(code, i, rest)) continue;
     // name($ …): $ is the first argument of a call to a once-declared, $-first helper of this file.
-    const callee = /^\s*[,)]/.test(rest) ? /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(\s*$/.exec(code.slice(0, i)) : null;
-    if (callee && !/\b(?:new|function)\s+$/.test(code.slice(0, callee.index)) && helperOk(callee[1])) continue;
+    const callee = /^\s*[,)]/.test(rest) ? /(?<![\w$])([A-Za-z_$][\w$]*)\s*\(\s*$/.exec(code.slice(0, i)) : null;
+    if (callee && !isMember(code.slice(0, callee.index)) && !/\b(?:new|function)\s+$/.test(code.slice(0, callee.index)) && helperOk(callee[1])) continue;
     at(i, "$ used other than as a first parameter, $.<noun>.<method> or the first argument of a $-first helper of this file");
   }
 
@@ -382,6 +392,12 @@ const f = ($) => 1; const f = ($) => 2; f($)
 const f = ($) => 1; const g = (f) => f; f($)
 const f = (env) => env.session.authorize(); f($)
 const f = ($, e) => 1; f(e, $)
+const h = ($) => 0; const x = { h(env) { return env.session.authorize() } }; x. h($)
+const h = ($) => 0; class K { h(env) { return env.session.authorize() } }; new K(). h($)
+const h = ($) => 0; { function* h(env) { env.session.authorize() } h($).next() }
+const h = ($) => 0; { function *h(env) { env.session.authorize() } h($).next() }
+const h = ($) => 0; { async function* h(env) { env.session.authorize() } h($).next() }
+on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => <Button onPress={() => 0} />); return next(e) })
 EOF
 
 # The band hook may draw a Button with an inline arrow onPress; a $-first helper declared once may be called with $ from two hooks.
