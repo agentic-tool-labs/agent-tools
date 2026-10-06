@@ -233,11 +233,11 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
 
   const multi = teams.length > 1
   const heading = (name: string, t: Team): PaneRow => ({ row: 'text', tone: 'idle', text: multi ? `${name} ${t.name}` : name })
-  const pipelineRows = (t: Team): PaneRow[] => {
+  const pipelineRows = (t: Team, none = 'No pipeline run.'): PaneRow[] => {
     const rows: PaneRow[] = []
     const open = t.pipeline === null ? [] : records(t.pipeline.items).filter((item) => item.open === true)
     const cap = t.pipeline === null ? 0 : count(t.pipeline.round_cap)
-    if (!open.length) rows.push({ row: 'text', tone: 'idle', text: 'No pipeline run.' })
+    if (!open.length) rows.push({ row: 'text', tone: 'idle', text: none })
     for (const item of open) rows.push({ row: 'text', tone: 'work', text: `round ${count(item.rounds)}/${cap} · ${str(item.to)}` })
     const waiting = t.pipeline === null ? 0 : count(t.pipeline.waiting_on_user)
     if (waiting > 0) rows.push({ row: 'text', tone: 'warn', text: `${waiting} ${waiting === 1 ? 'decision' : 'decisions'} waiting for you` })
@@ -273,7 +273,7 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
   }
   const teamModels: TeamModel[] = teams.map((t) => ({
     name: t.name,
-    pipeline: t.pipeline === null ? null : pipelineRows(t),
+    pipeline: t.pipeline === null ? null : pipelineRows(t, 'Pipeline idle.'),
     members: t.members.map((m) => ({ stream: m.stream, row: memberRow(m) })),
     dispatches: shownOf(t).map((d) => ({ member: d.member, row: dispatchRow(d) })),
   }))

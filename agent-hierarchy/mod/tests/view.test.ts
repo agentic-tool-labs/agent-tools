@@ -431,7 +431,7 @@ test('G9 a pipeline draws a HIERARCHY box with a row; no pipeline, no box; a tea
   const x = secs([team({ pipeline: { ...PIPE, waiting_on_user: 1 }, members: [peer('a')], dispatches: [] })])
   expect(x[0].section).toBe('hierarchy')
   expect(x[0].rows.map((r) => [r.icon, r.text])).toEqual([[null, 'round 2/3 · reviewer'], [null, '1 decision waiting for you']])
-  expect(secs([team({ pipeline: { ...PIPE, items: [] }, members: [peer('a')], dispatches: [] })])[0].rows.map((r) => r.text)).toEqual(['No pipeline run.'])
+  expect(secs([team({ pipeline: { ...PIPE, items: [] }, members: [peer('a')], dispatches: [] })])[0].rows.map((r) => r.text)).toEqual(['Pipeline idle.'])
   expect(titles([team({ members: [peer('a')], dispatches: [] })])).toEqual(['TEAM default'])
   expect(secs([team({ members: [], dispatches: [] })]).map((z) => z.section)).toEqual(['none'])
 })

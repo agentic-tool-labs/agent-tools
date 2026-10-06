@@ -174,7 +174,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {sections.map((sec) => (
-          <Box flexDirection="column" {...(sec.bordered ? { borderStyle: 'round', ...(sec.color === null ? { borderDimColor: true } : { borderColor: sec.color }) } : {})}>
+          <Box key={sec.key} flexDirection="column" {...(sec.bordered ? { borderStyle: 'round', ...(sec.color === null ? { borderDimColor: true } : { borderColor: sec.color }) } : {})}>
             {sec.title !== '' ? <Text bold {...colorProps(sec.color)}>{sec.title}</Text> : null}
             {sec.rows.map((r) => (
               <Box flexDirection="row">

@@ -751,6 +751,7 @@ test('the Pane draws each section in a round box with its own color, a bold titl
   expect(boxes(pane).map((b: any) => [b.title, b.color, b.bordered])).toEqual([
     ['TEAM default', 'permission', true], ['STREAM api', 'suggestion', true], ['DISPATCHES', null, true],
   ])
+  expect(pane.children.map((b: any) => b.props.key)).toEqual(['team:0', 'stream:0:api', 'dispatches:0'])
   const box = pane.children[1]
   expect(box.props).toMatchObject({ flexDirection: 'column', borderStyle: 'round', borderColor: 'suggestion' })
   expect(box.children[0].props).toMatchObject({ bold: true, color: 'suggestion' })
