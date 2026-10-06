@@ -266,6 +266,7 @@ for (const f of files) {
         for (let k = 0; k < seg.length; k++) { if (seg[k] === "(") open.push(k); else if (seg[k] === ")") open.pop(); }
         if (tag[1] !== "/" && /=>|\bfunction\b/.test(seg)) why = "tag sits inside a function literal";
         else if (open.some((k) => { const pre = seg.slice(0, k).replace(/\s+$/, ""), w = /([\w$]+)$/.exec(pre); return w ? !GROUP.has(w[1]) : /[)\]]$/.test(pre) || /\?\.$/.test(pre) || /[\w$>]>$/.test(pre); })) why = "tag sits inside a call's arguments";
+        else if ((seg.match(/`/g) || []).length % 2) why = "tag sits inside a template literal";
         else if (hasAssign(code.slice(argStart(r), argEnd(r)))) why = "the return holds an assignment";
       }
       if (why) at(i, `Button ${why}`);
@@ -493,6 +494,7 @@ const keep = (x) => x; on('ui.render', { component: 'AbovePrompt' }, ($, e, next
 let B; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button: B } = $.ui.resolve(e); return <B onPress={() => 0} /> })
 let x; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return <Button onPress={() => { x = <Button onPress={() => 0} /> }} /> })
 let s; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); const q = 1, w = 2; return (q <w, s = <Button onPress={() => 0} />) }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => s)
+let s; const keep = (q, x) => { s = x; return x }; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return keep`${<Button />}` }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => s)
 EOF
 
 # The band hook may draw a Button with an inline arrow onPress; a $-first helper declared once may be called with $ from two hooks.
