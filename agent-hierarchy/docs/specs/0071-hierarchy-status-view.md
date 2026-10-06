@@ -3,10 +3,12 @@
 Implementer: implementor
 Reviewer: reviewer
 
-Status: r3.28. Built and released in `agent-tools`: P1 (`ah` 0.110.0),
+Status: r3.29. Built and released in `agent-tools`: P1 (`ah` 0.110.0),
 P2b (0.111.0) and P3 (0.112.0). The whole-branch review passed. r3.28
-(§13, not yet built) hardens every reader and writer of `status.json` and
-`activity/*.json` against non-regular files, as `ah` 0.112.1. P2a is not
+(§13, built at `ec359e3`) hardens every reader and writer of `status.json` and
+`activity/*.json` against non-regular files, as `ah` 0.112.1. r3.29 adds
+`clearActivity`, which r3.28's inventory missed (§13.1, §13.3, H8, §13.8
+step 6). P2a is not
 built here: it is claude-tui-line's SPEC-106, with §7 and §4.4 as its
 contract. The user still checks three things by hand:
 - P2b AC 2(b), before the merge;
@@ -3085,6 +3087,7 @@ From a full grep of `hooks/`, `mod/` and `scripts/` for `status.json`,
 | `hooks/lib-status.mjs:55-63`, `readActivity` (called by `recordActivity` at :79 and the status compute at :135, :141) | `readFileSync` with no check. A FIFO hangs the hook process; a link to a terminal reads it. | §13.3 |
 | `hooks/lib-status.mjs:76-89`, `recordActivity` write | temp file, then rename. | §13.4 |
 | `hooks/lib-status.mjs:107-128`, `sweepActivity` | `readdirSync` of `activity/`, then `statSync` + `unlinkSync` of each old `*.json`. `statSync` opens nothing, so no hang. Hazard: if `activity` is itself a link to another directory, the sweep **deletes old `*.json` files in that directory**. | §13.3 |
+| `hooks/lib-status.mjs:136-145` (line numbers at `ec359e3`), `clearActivity`, called by `roster.mjs:4490` and `sessionend-roster.mjs:24`. r3.29: the r3.28 grep missed this site; the Reviewer found it. | `unlinkSync(join(dir, "activity", file))` with no directory check. Hazard: the same as the sweep. If `activity` is a link to another directory, it **deletes `pane-<name>.json` / `<sid>.json` in that directory**. `unlink` of the record itself never follows a final link, so only the directory matters. | §13.3 |
 | `hooks/lib-status.mjs:361-372`, `saveStatus` | temp file, then rename. | §13.4 |
 | `hooks/roster.mjs`, `hooks/activity.mjs` | No read of either path; they call `computeStatus`, `saveStatus` and `recordActivity` only. | none |
 
@@ -3137,10 +3140,19 @@ ceiling; say so in a `ponytail:` comment.
 does not follow it says it is a real directory. Otherwise:
 - `sweepActivity` removes nothing and returns 0;
 - `recordActivity` writes nothing and returns false;
-- `readActivity` returns `null`.
+- `readActivity` returns `null`;
+- `clearActivity` (added in r3.29) removes nothing. It returns what it
+  returns today when there is no record to remove, and it never throws.
 
 The check never removes or replaces what is there. One check serves all
-three, not three copies of it. If a `hooks/lib-*.mjs` already exports an
+four, not four copies of it. At `ec359e3` that check is `activityDirOf`;
+`clearActivity` must go through it like the other three.
+
+r3.29 adds this: every place in `hooks/` that joins an `activity`
+directory path must get the directory from that one check. The
+Implementor runs `grep -n '"activity"' hooks/*.mjs`. Each hit must be the
+check itself, or a call that goes through it. The Implementor lists every
+hit in the report. If a `hooks/lib-*.mjs` already exports an
 equivalent no-follow regular-file or directory check, reuse it; otherwise
 it lives in `lib-status.mjs`.
 
@@ -3239,6 +3251,7 @@ Hooks (`lib-status.mjs`, through its exported functions):
 | H5 | `activity/<sid>.json` is a 4,097-byte regular file | same as H1 | yes |
 | H6 | `activity/<sid>.json` is a valid regular record | read as today (control) | no |
 | H7 | `activity` is a link to another dir holding an old `x.json` | `sweepActivity` returns 0, `x.json` still exists; `recordActivity` returns false and writes nothing there | yes (the file is deleted) |
+| H8 (r3.29) | `activity` is a link to another dir holding `pane-<name>.json` and `<sid>.json` | `clearActivity` called for that name and sid, as its two callers call it: both files still exist; no throw | yes, on `ec359e3` and on `5d00b1f` (both files are deleted) |
 | W1 | a link at `status.json.<pid>.tmp` (`pid` = the process that calls `saveStatus`) to a file with known bytes | that file's bytes unchanged; `status.json` is a regular file holding the doc | yes (the file is overwritten) |
 | W2 | the same at `activity/<sid>.json.<pid>.tmp`, for `recordActivity` | target unchanged; the record written | yes |
 | W3 | `status.json` is a link to a file with known bytes | after `saveStatus`, `status.json` is a regular file (by `lstat`); the old target is unchanged | no (rename is already safe; guards it) |
@@ -3276,6 +3289,25 @@ the existing no-file tests do, **and** that `w.reads` did not grow:
    check `pgrep -fl claude` and `pgrep -fl node` for anything left
    running. Report the exit codes and the red→green list.
 
+**r3.29 delta, on top of `ec359e3`, on the same branch:**
+
+6. `hooks/lib-status.mjs`: route `clearActivity` through the shared
+   directory check (§13.3).
+   - Show H8 red on `ec359e3` first.
+   - Then run the `"activity"` grep (§13.3) and list every hit in the
+     report.
+   - H1–H7 and W1–W5 must stay green.
+7. The release stays **0.112.1**: no new bump, and no new CHANGELOG
+   version. Per the Orchestrator, 0.112.1 is unpushed, so nobody can
+   have installed it from this branch, and step 4's stale-cache concern
+   does not apply. If it was installed locally from this worktree, bump to
+   0.112.2 instead. Add one line to the existing
+   `[0.112.1]` entry: `clearActivity` no longer follows a linked
+   `activity` dir.
+8. Step 5 again: the full suite, `claude plugin test`, and the `pgrep`
+   check. Commit separately. No push.
+
 Must not change: `parseDoc`, `view.ts`, the doc schema, `computeStatus`'s
 output for regular files, the never-throw contracts, and anything in
-§13.5.
+§13.5. r3.29 adds two more: `clearActivity`'s callers and what it
+returns for a regular `activity` dir.
