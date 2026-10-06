@@ -129,7 +129,10 @@ and roster verbs with Bash, which its frontmatter forbids.
   - a plugin root or cwd containing a space (or any character outside the class) makes self-care unavailable, and the
     deny reason says so;
   - another plugin's hook that rewrites the command after this gate runs is out of scope (same user trust).
-- Internal errors: the body is one try/catch, and any throw → deny. A load failure fails open (accepted, §2).
+- Internal errors: once the role is known to be gated, the check is one try/catch and any throw → deny.
+  An error **before** the role is known (the payload, the session role or the config cannot be read) **fails open**,
+  and is logged. This is deliberate: denying there would block every role's Bash on a config error. A load failure
+  fails open too (accepted, §2).
 
 ### 5.4 Interplay
 
