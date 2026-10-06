@@ -49,6 +49,22 @@ check "G7: a plain stream is emitted as it is" '[ "$(field demo-impl)" = "\"api\
 check "G7: a stream with an escape sequence is cleaned and cut to 64 characters" 'S=$(field demo-rev); [ "$S" != none ] && [ "$S" != null ] && ! printf "%s" "$S" | grep -q "\\\\u001b" && [ "$(node -e "console.log(JSON.parse(process.argv[1]).length)" "$S")" -le 64 ] && printf "%s" "$S" | grep -q "^\"api"'
 check "G6: a stream that is not a string, or absent, is null" '[ "$(field demo-arch)" = null ] && [ "$(field demo-run)" = null ]'
 
+# ---- F10: the mod's name pattern is lib-config's
+pat() { grep -o '/^\[a-z\]\[a-z0-9_-\]{0,31}\$/' "$1" | head -1; }
+MP=$(pat "$REG"); LP=$(pat "$PLUGIN/hooks/lib-config.mjs")
+check "F10: the pattern in the pinned helper is string-equal to validateHerdrName's" '[ -n "$MP" ] && [ "$MP" = "$LP" ]'
+
+# ---- F11: focusable
+LONG33=$(node -e 'process.stdout.write("a".repeat(33))')
+mem() { printf '{"role":"implementor","name":"%s","route":"peer","kind":"claude"%s}' "$1" "$2"; }
+team - "[$(mem demo-ok ',"transport":"herdr","transport_id":"w1:p1"'),$(mem demo-tmux ',"transport":"tmux","transport_id":"%3"'),$(mem demo-term ',"transport":"terminal","transport_id":"x"'),$(mem demo-noid ',"transport":"herdr"'),$(mem demo-emptyid ',"transport":"herdr","transport_id":""'),$(mem Demo-Upper ',"transport":"herdr","transport_id":"w1:p2"'),$(mem "$LONG33" ',"transport":"herdr","transport_id":"w1:p3"'),$(mem demo-none ''),$(mem demo-num ',"transport":"herdr","transport_id":7')]"
+(cd "$SANDBOX" && HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/roster.mjs" status --cwd "$PROJ" >/dev/null 2>&1)
+foc() { node -e 'try { const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); console.log(JSON.stringify(o.teams[0].members.find((m) => m.name === process.argv[2]).focusable)); } catch (e) { console.log("none"); }' "$HD/status.json" "$1"; }
+check "F11: a herdr member with a transport id and a valid name is focusable" '[ "$(foc demo-ok)" = true ]'
+for n in demo-tmux demo-term demo-noid demo-emptyid Demo-Upper "$LONG33" demo-none demo-num; do
+  check "F11: $n is not focusable" '[ "$(foc "$n")" = false ]'
+done
+
 echo "----"
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

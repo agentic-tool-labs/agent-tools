@@ -9,6 +9,22 @@ const toneProps = (tone: string) =>
 // A theme key colors; no key draws dim. Every key comes from view.ts's style table.
 const colorProps = (key: string | null) => (key === null ? { dimColor: true } : { color: key })
 
+// The one process the mod may run, on a person's press: focus a member's terminal pane. The guard (tests/test-mod-readonly.sh)
+// holds this text whole and allows `process` nowhere else in mod/.
+export const focusMember = async ($: any, name: unknown): Promise<boolean> => {
+  if (typeof name !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
+    await $.ui.toast('Could not focus that member.')
+    return false
+  }
+  try {
+    const run = await $.process.run(['herdr', 'agent', 'focus', name], { timeoutMs: 5000 })
+    if (run.exitCode === 0) return true
+  } catch {
+  }
+  await $.ui.toast(`Could not focus ${name}.`)
+  return false
+}
+
 // The one way the Pane opens on the person's request, for the command and the band's button. A member session
 // sees no hierarchy view, so nothing is opened there.
 const openPane = async ($: any, member: boolean) => {
@@ -169,18 +185,19 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e) => {
     const { value } = await $.state.get({ plugin: 'ah', key: 'view' })
     const cause = await $.state.get({ plugin: 'ah', key: 'why' })
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const sections = paneSections(value ?? null, e.props.bodyColumns, typeof cause.value === 'string' ? cause.value : null)
     return (
       <Box flexDirection="column">
         {sections.map((sec) => (
           <Box key={sec.key} flexDirection="column" {...(sec.bordered ? { borderStyle: 'round', ...(sec.color === null ? { borderDimColor: true } : { borderColor: sec.color }) } : {})}>
             {sec.title !== '' ? <Text bold {...colorProps(sec.color)}>{sec.title}</Text> : null}
-            {sec.rows.map((r) => (
+            {sec.rows.map(({ indent, icon, iconColor, focus, tone, text }) => (
               <Box flexDirection="row">
-                {r.indent > 0 ? <Text>{' '.repeat(r.indent)}</Text> : null}
-                {r.icon !== null ? <Text {...colorProps(r.iconColor)}>{r.icon + ' '}</Text> : null}
-                <Text {...toneProps(r.tone)}>{r.text}</Text>
+                {indent > 0 ? <Text>{' '.repeat(indent)}</Text> : null}
+                {icon !== null ? <Text {...colorProps(iconColor)}>{icon + ' '}</Text> : null}
+                {focus !== null ? <Box key={'ah-focus-' + focus}><Button key={'ah-name-' + focus} plain label={focus} dimColor={tone === 'idle'} hover={{ underline: true }} onPress={() => focusMember($, focus)} /></Box> : null}
+                <Text {...toneProps(tone)}>{text}</Text>
               </Box>
             ))}
           </Box>

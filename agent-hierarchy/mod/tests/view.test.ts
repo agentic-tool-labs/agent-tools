@@ -523,3 +523,15 @@ test('D5 the 60-column sample', async () => {
     ['DISPATCHES', null, ['↳ free-ta… → lead | eta 5m | ██░░░░░░░░ 20% | 1:00 | work…']],
   ])
 })
+
+test('a focusable member row splits into the name (the click target) and the rest; a cut name is no target; others carry no focus', async () => {
+  const mk = (over: Record<string, unknown>) => team({ members: [peer('builder', { focusable: true, ...over })], dispatches: [] })
+  const row = (columns: number, over: Record<string, unknown> = {}) => secs([mk(over)], columns)[0].rows[0]
+  expect([row(60).focus, row(60).text]).toEqual(['builder', ' · claude · peer · working'])
+  expect([row(30).focus, row(30).text]).toEqual(['builder', ' working'])
+  const long = 'a-very-long-member-name-here'
+  expect(secs([team({ members: [peer(long, { focusable: true })], dispatches: [] })], 20)[0].rows[0].focus).toBe(null)
+  for (const over of [{ focusable: false }, { focusable: 'true' }, { live: false }, { session_id: 'sess-orch' }]) expect(row(60, over).focus).toBe(null)
+  expect(row(60, { session_id: 'someone-else' }).focus).toBe('builder')
+  expect(secs([team({ members: [peer('builder')], dispatches: [] })])[0].rows[0].focus).toBe(null)
+})

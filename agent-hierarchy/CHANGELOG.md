@@ -12,6 +12,9 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
   stream, dispatches) is a bordered box with its own color; each member and dispatch row starts with an icon whose
   shape tells the state and whose color tells the tone. Members and the dispatches sent to them group under their
   stream. Below 40 columns the borders go and the titles stay. The status file gains a member's `stream`.
+- Pane: click a team member's name to focus its terminal pane. It works for members that run as herdr agents, runs
+  `herdr agent focus <name>` and nothing else, and shows a message only when it fails. The status file gains a
+  member's `focusable`. The read-only guard now pins that one helper, whole, and bans `process` everywhere else.
 
 ## [0.116.0]
 

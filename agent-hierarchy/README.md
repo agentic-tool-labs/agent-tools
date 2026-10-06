@@ -354,6 +354,12 @@ and the toasts have no switch of their own. Like the entry, they only read the
 status file: the mod opens its own Pane and shows toasts, and never sends a
 message, answers a prompt, or runs anything named in the file.
 
+The mod runs nothing without a user press. Exactly one process may run: the
+pinned focus helper, which a click on a team member's name triggers
+(`herdr agent focus <name>`, a fixed argument list with no shell, and only for a
+name that passes herdr's agent-name rule). A second exec site, or any change to
+the pinned argv or init, needs a new security ruling, not a guard edit.
+
 ## Durable agents (retired)
 
 Durable agents were an experiment in keeping a role's Claude Code session

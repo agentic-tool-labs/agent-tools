@@ -787,3 +787,108 @@ test('a null view draws one line with no border and no icon', async ($, on) => {
   expect(anyBorder(pane)).toBe(false)
   expect(texts(pane).length).toBe(1)
 })
+
+// ---- clicking a member's name focuses its pane (the pinned helper, through the Pane's Button)
+// The `work` fixture's one member, marked focusable (or not) and renamed.
+const focusDoc = (over: Record<string, unknown> = {}, base: string = fixtures.work): string => {
+  const doc = JSON.parse(base)
+  Object.assign(doc.teams[0].members[0], { name: 'demo-architect', route: 'peer', kind: 'claude', focusable: true, ...over })
+  return JSON.stringify(doc)
+}
+const OK = { value: { exitCode: 0, stdout: '', stderr: '' } }
+// Mounts the Pane over `text`, answering process.run with `run`; returns what was run and toasted.
+const focusPane = async ($: any, on: any, text: string, run: (e: any) => any = () => OK, id: string = vectors.work.sessionId) => {
+  const w = world({ id, files: { [FILE]: { text, mtimeMs: 1 } } })
+  const calls: any[] = []
+  stage(on, w)
+  beneath(on)
+  mock.clock(on, { now: Date.parse(vectors.work.now) })
+  on('process.run', (_$: any, e: any) => { calls.push(e); return run(e) })
+  await start($, w, 'terminal')
+  const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })
+  return { w, calls, ui }
+}
+const buttonCount = async (ui: any) => (await ui.findAll({ type: 'Button' })).length
+
+test('F1 a click on a focusable member runs exactly the fixed argv with the fixed timeout, once, and shows nothing', async ($, on) => {
+  const { w, calls, ui } = await focusPane($, on, focusDoc())
+  expect(await buttonCount(ui)).toBe(1)
+  await ui.press({ key: 'ah-name-demo-architect' })
+  expect(calls).toEqual([{ argv: ['herdr', 'agent', 'focus', 'demo-architect'], init: { timeoutMs: 5000 } }])
+  expect(w.toasts).toEqual([])
+})
+
+for (const name of ['-x', 'a b', '../t', 'A', 'a'.repeat(33), '', 'a.b', '-', '1a']) {
+  test(`F2 the name ${JSON.stringify(name)} fails the pattern: nothing runs, and the toast carries no name`, async ($, on) => {
+    const { w, calls, ui } = await focusPane($, on, focusDoc({ name }))
+    expect(await buttonCount(ui)).toBe(1)
+    await ui.press({ key: `ah-name-${name}` })
+    expect(calls).toEqual([])
+    expect(w.toasts).toEqual(['Could not focus that member.'])
+  })
+}
+
+for (const name of ['a', 'a'.repeat(32), 'a1_b-2']) {
+  test(`F2b the name ${JSON.stringify(name)} is at the pattern's edge and runs`, async ($, on) => {
+    const { calls, ui } = await focusPane($, on, focusDoc({ name }))
+    await ui.press({ key: `ah-name-${name}` })
+    expect(calls.map((c) => c.argv[3])).toEqual([name])
+  })
+}
+
+for (const focusable of ['true', 1, 'yes', false, null, {}, [true], undefined]) {
+  test(`F3 focusable ${JSON.stringify(focusable) ?? 'absent'} is not exactly true: no Button`, async ($, on) => {
+    const doc = JSON.parse(focusDoc({ focusable }))
+    if (focusable === undefined) delete doc.teams[0].members[0].focusable
+    const { ui } = await focusPane($, on, JSON.stringify(doc))
+    expect(await buttonCount(ui)).toBe(0)
+  })
+}
+
+const FAILS: [string, (e: any) => any][] = [
+  ['a non-zero exit', () => ({ value: { exitCode: 1, stdout: '', stderr: 'secret' } })],
+  ['an exit with no code', () => ({ value: { exitCode: 127 } })],
+  ['a refusal', () => ({ deny: 'boom' })],
+  ['a throw', () => { throw new Error('boom') }],
+  ['no result', () => ({ value: undefined })],
+]
+for (const [label, run] of FAILS) {
+  test(`F7 ${label} from the run shows the failure with the name and never throws out of the press`, async ($, on) => {
+    const { w, calls, ui } = await focusPane($, on, focusDoc(), run)
+    await ui.press({ key: 'ah-name-demo-architect' })
+    expect(calls.length).toBe(1)
+    expect(w.toasts).toEqual(['Could not focus demo-architect.'])
+    expect(w.toasts.join('')).not.toContain('secret')
+  })
+}
+
+const NO_BUTTON: [string, Record<string, unknown>, number][] = [
+  ['a gone member', { live: false }, 0],
+  ['a member row of this very session', { session_id: vectors.work.sessionId }, 0],
+  ['a member that is not focusable', { focusable: false }, 0],
+  ['a member of another session', { session_id: 'some-other-session' }, 1],
+]
+for (const [label, over, want] of NO_BUTTON) {
+  test(`F8 ${label}: ${want} Button`, async ($, on) => {
+    expect(await buttonCount((await focusPane($, on, focusDoc(over))).ui)).toBe(want)
+  })
+}
+
+test('F9 in a member session the Pane holds no Button anywhere', async ($, on) => {
+  const { ui, calls } = await focusPane($, on, focusDoc({}, fixtures['member-session']), () => OK, vectors['member-session'].sessionId)
+  expect(await buttonCount(ui)).toBe(0)
+  expect(calls).toEqual([])
+})
+
+test('a focusable member row draws its name as the Button and the rest as toned text; a name the width cut is not a Button', async ($, on) => {
+  const { ui } = await focusPane($, on, focusDoc())
+  const pane = await ui.drawn()
+  const row = pane.children[0].children[1]
+  expect(row.children.map((c: any) => c.type)).toEqual(['Text', 'Box', 'Text'])
+  expect(row.children[1].props.key).toBe('ah-focus-demo-architect')
+  expect(row.children[1].children[0]).toMatchObject({ type: 'Button', props: { plain: true, label: 'demo-architect' }, hover: { underline: true } })
+  expect(row.children[2].children).toEqual([' · claude · peer · working'])
+  await ui.unmount()
+  const narrow = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: { ...paneProps(), bodyColumns: 12 }, viewport: { columns: 12, rows: 40 } })
+  expect(await narrow.findAll({ type: 'Button' })).toHaveLength(0)
+})

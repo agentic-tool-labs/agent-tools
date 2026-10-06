@@ -122,7 +122,7 @@ type Dispatch = {
 type Member = {
   name: string; label: string; kind: string; route: string; live: unknown
   activity: string; activityMs: number; activityAt: string; blockedBy: string; note: string
-  lastTool: string; lastToolMs: number; stream: string
+  lastTool: string; lastToolMs: number; stream: string; sessionId: string; focusable: boolean
 }
 type Team = { name: string; pipeline: Record<string, unknown> | null; members: Member[]; dispatches: Dispatch[] }
 
@@ -134,7 +134,7 @@ function readTeams(doc: Doc, nowMs: number): Team[] {
       name: str(m.name), label: str(m.label), kind: str(m.kind), route: str(m.route), live: m.live,
       activity: str(m.activity), activityMs: instantMs(m.activity_at), activityAt: str(m.activity_at),
       blockedBy: str(m.blocked_by), note: str(m.blocked_note),
-      lastTool: str(m.last_tool), lastToolMs: instantMs(m.last_tool_at), stream: str(m.stream),
+      lastTool: str(m.last_tool), lastToolMs: instantMs(m.last_tool_at), stream: str(m.stream), sessionId: str(m.session_id), focusable: m.focusable === true,
     })),
     dispatches: records(t.dispatches).map((d) => {
       let state = '', reason = ''
@@ -247,7 +247,9 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
     const progress = m.route !== 'pane' && m.activity === 'working' && m.lastTool !== '' && !Number.isNaN(m.activityMs) && !Number.isNaN(m.lastToolMs) && m.lastToolMs >= m.activityMs
     const base = m.live === false ? 'gone' : `${m.activity}${m.route === 'pane' && !Number.isNaN(m.activityMs) ? ` ${age(nowMs - m.activityMs)}` : ''}`
     const state = m.live !== false && progress ? `working ${age(nowMs - m.activityMs)} · last ${m.lastTool} ${age(nowMs - m.lastToolMs)}` : base
-    return { row: 'member', tone: memberTone(m), name: m.name, kind: m.kind, route: m.route, state, base, ...iconOf(memberIconKey(m)) }
+    // A click focuses the member's terminal pane: only a member the status file marks focusable (exactly true), still live, and not this session.
+    const focus = m.focusable && m.live !== false && (m.sessionId === '' || m.sessionId !== sessionId)
+    return { row: 'member', tone: memberTone(m), name: m.name, kind: m.kind, route: m.route, state, base, focus, ...iconOf(memberIconKey(m)) }
   }
   const shownOf = (t: Team): Dispatch[] => t.dispatches.filter((d) => d.state !== '' && d.state !== 'expired').sort((a, b) => oldestFirst(b.sentMs, a.sentMs))
   const dispatchRow = (d: Dispatch): PaneRow => {
@@ -383,7 +385,7 @@ function fitCut(name: string, columns: number, row: (name: string) => string): s
 export const BORDER_MIN = 40
 
 /** One line of a section: an optional icon cell (with the theme key coloring it, null for dim), its tone, its text already cut to fit, and its indent. */
-export type SectionRow = { icon: string | null; iconColor: string | null; tone: Tone; text: string; indent: number }
+export type SectionRow = { icon: string | null; iconColor: string | null; tone: Tone; text: string; indent: number; focus: string | null }
 /** One Pane section: a box (or, below BORDER_MIN, a title line) holding rows. `color` is the box and title theme key, null for dim. */
 export type Section = { section: 'hierarchy' | 'team' | 'stream' | 'dispatches' | 'none'; key: string; title: string; color: string | null; bordered: boolean; rows: SectionRow[] }
 
@@ -407,7 +409,7 @@ function sectionText(r: PaneRow, columns: number, room: number): string {
 export function paneSections(view: View | null, columns: number, why: string | null = null): Section[] {
   const flat = (): Section[] => [{
     section: 'none', key: 'none', title: '', color: null, bordered: false,
-    rows: paneRows(view, columns, why).map((r) => ({ icon: null, iconColor: null, tone: r.tone, text: r.text, indent: 0 })),
+    rows: paneRows(view, columns, why).map((r) => ({ icon: null, iconColor: null, tone: r.tone, text: r.text, indent: 0, focus: null })),
   }]
   const teams = typeof view === 'object' && view !== null ? (view as { teams?: unknown }).teams : null
   if (!Array.isArray(teams) || teams.length === 0) return flat()
@@ -416,10 +418,12 @@ export function paneSections(view: View | null, columns: number, why: string | n
   try {
     const row = (r: PaneRow, indent: number): SectionRow => {
       const iconed = r.row !== 'text'
-      return {
-        icon: iconed ? r.icon : null, iconColor: iconed ? r.iconColor : null, tone: r.tone, indent,
-        text: sectionText(r, columns, Math.max(0, inner - indent - (iconed ? 2 : 0))),
-      }
+      let text = sectionText(r, columns, Math.max(0, inner - indent - (iconed ? 2 : 0)))
+      // A focusable member's name is drawn as the click target and the rest of the row after it. A name the cut shortened is
+      // no target: what is shown must be what is focused, so that row is drawn whole and is not clickable.
+      let focus: string | null = null
+      if (r.row === 'member' && r.focus === true && text.startsWith(r.name)) { focus = r.name; text = text.slice(r.name.length) }
+      return { icon: iconed ? r.icon : null, iconColor: iconed ? r.iconColor : null, tone: r.tone, indent, focus, text }
     }
     const out: Section[] = []
     const multi = teams.length > 1
