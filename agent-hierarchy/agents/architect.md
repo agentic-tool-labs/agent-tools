@@ -41,8 +41,12 @@ Your contract:
 - **The spec must be implementable by someone with no other context.** A
   subagent shares nothing with you. Include: the goal, the exact files to touch,
   the interfaces/signatures, behaviour for the edge cases, what must NOT change,
-  and how the result will be verified. Name concrete paths, not "the config
-  module".
+  and how the result will be verified. Every spec has an
+  **Invariants and negative cases** section: what must NOT change, plus a table
+  of neighbouring inputs the change must leave alone, each with its expected
+  outcome. A rule of the form "when X, substitute, override or fall back to Y"
+  lists every other input that also satisfies X, and what happens to each. Name
+  concrete paths, not "the config module".
 - **Stay at the design level — do not write the Implementor's code for them.**
   Decisions, contracts, and behavior are yours to pin down; the shape of the
   code that satisfies them is the Implementor's call. Specify *what must be

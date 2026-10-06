@@ -7,6 +7,7 @@
 
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
+. "$PLUGIN/tests/lib-intent.sh"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-other-harness-test.XXXXXX")"
 trap 'rm -rf "$SANDBOX"' EXIT
@@ -1218,9 +1219,26 @@ check "K17: a response body equal to the skeleton plus trailing whitespace is no
 setup_deliver
 team_file "[$CODEX_ARCH,$CODEX_UA,{\"role\":\"reviewer\",\"name\":\"myrepo-reviewer-9\",\"kind\":\"codex\",\"route\":\"pane\",\"model\":\"gpt-6-astra\",\"autoMode\":\"acceptEdits\",\"transport_id\":\"p7\"}]"
 mkreq "t$((++REQN))" reviewer myrepo-reviewer-9
+fill_intent "$REQ"
 hs '{agents:{}}'
 r "" deliver myrepo-reviewer-9 --req "$REQ"
 check "K17: not-live for an ad hoc codex member: spawn-ad-hoc with its recorded kind, model, route and auto-mode, and a spawn_note" '[ "$(jo o.status)" = not-live ] && jo o.spawn | grep -q "roster.mjs spawn-ad-hoc reviewer --kind codex --model gpt-6-astra --route pane --auto-mode acceptEdits --cwd $PROJ$" && jo o.spawn_note | grep -q "may come back different"'
+
+# H19, H20: deliver holds a review-class request that lacks its intent, and leaves every other request alone
+setup_deliver
+team_file "[$CODEX_ARCH,$CODEX_UA,{\"role\":\"reviewer\",\"name\":\"myrepo-reviewer-9\",\"kind\":\"codex\",\"route\":\"pane\",\"model\":\"gpt-6-astra\",\"autoMode\":\"acceptEdits\",\"transport_id\":\"p7\"}]"
+mkreq "t$((++REQN))" reviewer myrepo-reviewer-9
+fill_intent "$REQ" "what it must deliver" ""
+hs "{agents:{}}"
+r "" deliver myrepo-reviewer-9 --req "$REQ"
+check "H19: deliver of a reviewer request whose acceptance is empty is refused: non-zero exit, the reason on stderr, nothing sent" '[ "$RC" -ne 0 ] && grep -qF "Missing: acceptance." "$STDERR_F" && grep -qF "re-run deliver" "$STDERR_F" && [ "$(calls prompt)" -eq 0 ] && [ "$(calls pane-close)" -eq 0 ]'
+fill_intent "$REQ" "what it must deliver" "the checks pass"
+sed -i.bak 's/^- \[5\] acceptance: $/- [5] acceptance: the checks pass/' "$REQ"; rm -f "$REQ.bak"
+r "" deliver myrepo-reviewer-9 --req "$REQ"
+check "H19: once the request is filled, deliver gets past the intent check" '! grep -qF "needs its intent" "$STDERR_F"'
+mkreq "t$((++REQN))" architect myrepo-architect
+r "" deliver myrepo-architect --req "$REQ"
+check "H20: deliver of an architect request whose goal is empty is not held for intent" '! grep -qF "needs its intent" "$STDERR_F" && ! grep -qF "needs its intent" "$STDOUT_F"'
 
 # an advise member of a kind with no model mapping
 rm -rf "$HIER"; rm -f "$CFG"; reset_state
