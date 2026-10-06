@@ -111,7 +111,7 @@ function activityFile(subject) {
 /**
  * Write a subject's activity record atomically and refresh the status file. Only the subject's own
  * events write its record. A record already holding this `activity`, `blocked_by` and `note` is left
- * alone, so its `at` stays the moment that state began, except that a `tool` (a PostToolUse's tool
+ * alone, so its `at` stays the moment that state began (a tool-only write keeps it too), except that a `tool` (a PostToolUse's tool
  * name, never its input) is written when the record has none or its own is TOOL_WRITE_INTERVAL_SEC old.
  * A write without a `tool` keeps the record's `tool` and `tool_at`. Writes nothing without the
  * hierarchy dir. Never throws; true when written.
@@ -130,8 +130,10 @@ export function recordActivity(dir, subject, { activity, blocked_by = null, note
     const activityDir = activityDirOf(dir);
     if (!activityDir) return false;
     const tmp = join(activityDir, `${file}.${process.pid}.tmp`);
-    const at = new Date(nowMs).toISOString();
-    const toolFields = name ? { tool: name, tool_at: at } : kept || { tool: null, tool_at: null };
+    const unchanged = current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note;
+    const at = unchanged && typeof current.at === "string" ? current.at : new Date(nowMs).toISOString();
+    const toolAt = new Date(nowMs).toISOString();
+    const toolFields = name ? { tool: name, tool_at: toolAt } : kept || { tool: null, tool_at: null };
     writeTempExclusive(tmp, JSON.stringify({ activity, at, blocked_by, note, ...toolFields }) + "\n");
     renameSync(tmp, join(activityDir, file));
   } catch {

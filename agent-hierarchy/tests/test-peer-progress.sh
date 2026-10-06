@@ -58,12 +58,20 @@ backdate_tool
 tool Edit
 check "A3: a PostToolUse 15 s after the last tool_at writes the new tool" '[ "$(rec a.tool)" = Edit ] && [ "$(rec a.tool_at)" != "$T0" ] && [ "$(stat m.last_tool)" = Edit ]'
 
+# ---- A8: a tool-only write leaves the state's start alone; a state change moves it
+AT_BEFORE=$(rec a.at); backdate_tool
+sleep 1.1; tool Grep
+check "A8: a tool-only write (activity unchanged) writes the new tool and keeps the record's at" '[ "$(rec a.tool)" = Grep ] && [ "$(rec a.at)" = "$AT_BEFORE" ] && [ "$(stat m.activity_at)" = "$AT_BEFORE" ]'
+check "A8: tool_at itself moved on that write" '[ "$(rec a.tool_at)" != "$AT_BEFORE" ]'
+
 # ---- A4: Stop keeps the tool
 TA=$(rec a.tool_at)
 hook Stop "$SID"
-check "A4: Stop records idle and preserves tool and tool_at" '[ "$(rec a.activity)" = idle ] && [ "$(rec a.tool)" = Edit ] && [ "$(rec a.tool_at)" = "$TA" ]'
+check "A4: Stop records idle and preserves tool and tool_at" '[ "$(rec a.activity)" = idle ] && [ "$(rec a.tool)" = Grep ] && [ "$(rec a.tool_at)" = "$TA" ]'
+sleep 1.1
 hook UserPromptSubmit "$SID"
-check "A4: a new turn's UserPromptSubmit keeps them too, with activity working" '[ "$(rec a.activity)" = working ] && [ "$(rec a.tool)" = Edit ] && [ "$(rec a.tool_at)" = "$TA" ]'
+check "A8: a state change (a new turn) does move at, and so activity_at" '[ "$(rec a.at)" != "$AT_BEFORE" ] && [ "$(stat m.activity_at)" = "$(rec a.at)" ]'
+check "A4: a new turn's UserPromptSubmit keeps them too, with activity working" '[ "$(rec a.activity)" = working ] && [ "$(rec a.tool)" = Grep ] && [ "$(rec a.tool_at)" = "$TA" ]'
 
 # ---- A5: a subagent writes nothing
 BEFORE=$(cat "$HD/activity/$SID.json")
