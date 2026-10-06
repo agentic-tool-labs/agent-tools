@@ -92,3 +92,30 @@ export const vectors: Readonly<Record<string, Vector>> = {
     toasts: [],
   },
 }
+
+// The sections the Pane draws for each fixture at its `columns`, written by hand from the spec: the box color
+// (null: dim), the title, and each line as drawn (indent, icon, a space, then the text). The null-view cases draw
+// the one line of `pane` and so have none here.
+export type Boxed = { title: string; color: string | null; lines: string[] }
+export const sectionsFor: Readonly<Record<string, Boxed[]>> = {
+  bad: [
+    { title: 'TEAM default', color: 'permission', lines: ['● demo-architect · codex · pane · working 7m', '● demo-reviewer · codex · pane · working 11m'] },
+    { title: 'DISPATCHES', color: null, lines: ['▲ build-step → architect | eta 5m | ██████████ 100% | 7:30 | stalled', '▲ review-step → reviewer | eta 5m | ██████████ 100% | 11:30 | stalled'] },
+  ],
+  idle: [
+    { title: 'TEAM default', color: 'permission', lines: ['○ demo-architect · codex · pane · idle 5m', '○ demo-reviewer · codex · pane · idle 5m'] },
+  ],
+  pipeline: [
+    { title: 'HIERARCHY', color: 'claude', lines: ['round 2/3 · reviewer', '1 decision waiting for you'] },
+    { title: 'TEAM demo', color: 'permission', lines: ['○ demo-architect · codex · pane · idle 35m', '● demo-reviewer · codex · pane · working 30m'] },
+    { title: 'DISPATCHES', color: null, lines: ['▲ ac-1 → reviewer | eta 20m | ██████████ 100% | 30:01 | stalled'] },
+  ],
+  warn: [
+    { title: 'TEAM default', color: 'permission', lines: ['■ demo-architect · codex · pane · blocked 1m', '● demo-reviewer · codex · pane · working 1m'] },
+    { title: 'DISPATCHES', color: null, lines: ['↳ build-step → architect | eta 10m | ██░░░░░░░░ 25% | 2:30 | blocked'] },
+  ],
+  work: [
+    { title: 'TEAM default', color: 'permission', lines: ['● demo-architect · codex · pane · working 6m'] },
+    { title: 'DISPATCHES', color: null, lines: ['▲ build-step → architect | eta 5m | ██████████ 100% | 6:00 | overdue'] },
+  ],
+}

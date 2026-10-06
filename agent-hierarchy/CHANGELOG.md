@@ -5,6 +5,14 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.117.0]
+
+### Added
+- Pane: colored section boxes, colored activity icons, grouped by stream. Each section (hierarchy, team, one per
+  stream, dispatches) is a bordered box with its own color; each member and dispatch row starts with an icon whose
+  shape tells the state and whose color tells the tone. Members and the dispatches sent to them group under their
+  stream. Below 40 columns the borders go and the titles stay. The status file gains a member's `stream`.
+
 ## [0.116.0]
 
 ### Added

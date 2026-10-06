@@ -4,8 +4,16 @@ export type Tone = 'bad' | 'warn' | 'work' | 'idle'
 /** One Pane row as data: a heading or line of text, a team member, or a dispatch. Widths are applied when drawing. */
 export type PaneRow =
   | { row: 'text'; tone: Tone; text: string }
-  | { row: 'member'; tone: Tone; name: string; kind: string; route: string; state: string }
-  | { row: 'dispatch'; tone: Tone; slug: string; label: string; eta: string | null; pct: number | null; elapsed: string; state: string }
+  | { row: 'member'; tone: Tone; name: string; kind: string; route: string; state: string; base: string; icon: string; iconColor: string | null }
+  | { row: 'dispatch'; tone: Tone; slug: string; label: string; eta: string | null; pct: number | null; elapsed: string; state: string; icon: string; iconColor: string | null }
+
+/** One team as data, for the sectioned Pane: its pipeline rows (null when it has no pipeline), its members with their stream ('' for none), and its dispatches with the member each went to. */
+export type TeamModel = {
+  name: string
+  pipeline: PaneRow[] | null
+  members: { stream: string; row: PaneRow }[]
+  dispatches: { member: string; row: PaneRow }[]
+}
 
 /**
  * What the band, the Pane and the toasts show at one instant, with nothing that depends on width. The band's
@@ -14,6 +22,7 @@ export type PaneRow =
 export type View = {
   band: { tone: Tone; head: string; tail: string[] } | null
   pane: PaneRow[]
+  teams: TeamModel[]
   toasts: { key: string; text: string }[]
 }
 

@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
-import { vectors } from './vectors.ts'
+import { sectionsFor, vectors } from './vectors.ts'
 import { utf8Bytes } from '../view.ts'
 
 const NOW = Date.parse('2026-01-01T12:00:00.000Z')
@@ -226,7 +226,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(walk(pane)).toEqual([])
       // A null view's one line names its cause; every other vector draws exactly its rows.
       const cause = NULL_CAUSE[name]
-      expect(texts(pane)).toEqual(cause === undefined ? v.pane.map((r) => ({ text: r.text, props: TONE[r.tone] })) : [{ text: `No hierarchy status here (${cause}).`, props: TONE.idle }])
+      if (cause === undefined) expect(boxes(pane)).toEqual(sectionsFor[name].map((b) => ({ ...b, bordered: true })))
+      else expect(texts(pane)).toEqual([{ text: `No hierarchy status here (${cause}).`, props: TONE.idle }])
     })
   }
 
@@ -689,6 +690,22 @@ const paneProps = (): any => ({ title: 'Hierarchy', isFocused: false, bodyColumn
 // The Text props each tone draws with, as the spec's table pins them.
 const TONE: Record<string, Record<string, unknown>> = { bad: { color: 'warning', bold: true }, warn: { color: 'warning' }, work: {}, idle: { dimColor: true } }
 
+// The Pane's sections as drawn: per top-level Box, its border color (null: dim), whether it has a border, its bold
+// title, and each row Box's Texts joined (indent, icon, text).
+function boxes(n: any): { title: string; color: string | null; bordered: boolean; lines: string[] }[] {
+  return (n.children ?? []).map((b: any) => {
+    const kids = (b.children ?? []).filter(Boolean)
+    const title = kids[0]?.type === 'Text' && kids[0].props?.bold === true ? kids[0] : null
+    const rows = title ? kids.slice(1) : kids
+    return {
+      title: title ? (title.children ?? []).join('') : '',
+      color: b.props?.borderColor ?? null,
+      bordered: b.props?.borderStyle === 'round',
+      lines: rows.map((r: any) => (r.children ?? []).filter(Boolean).map((t: any) => (t.children ?? []).join('')).join('')),
+    }
+  })
+}
+
 // Every Text in the tree, in document order, with its props.
 function texts(n: any): { text: string; props: Record<string, unknown> }[] {
   if (typeof n !== 'object' || n === null) return []
@@ -708,3 +725,64 @@ function walk(n: any, extra: string[] = []): string[] {
   for (const key of ['press', 'client', 'raster']) if (key in n && !extra.includes(n.type)) found.push(`${n.type} has ${key}`)
   return [...found, ...(n.children ?? []).flatMap((c: any) => walk(c, extra))]
 }
+
+// ---- the sectioned Pane as drawn
+// The `work` fixture with its member in stream `api`; its one dispatch stays in that stream, or with `leftover`
+// goes to a member that is in no stream, so it draws in DISPATCHES.
+const withStreams = (leftover = true): string => {
+  const doc = JSON.parse(fixtures.work)
+  doc.teams[0].members[0].stream = 'api'
+  if (leftover) doc.teams[0].dispatches[0].member = 'nobody'
+  return JSON.stringify(doc)
+}
+const drawnPane = async ($: any, on: any, w: World, columns: number) => {
+  stage(on, w)
+  beneath(on)
+  mock.clock(on, { now: Date.parse(vectors.work.now) })
+  await start($, w, 'terminal')
+  return (await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: { ...paneProps(), bodyColumns: columns }, viewport: { columns, rows: 40 } })).drawn()
+}
+const anyBorder = (n: any): boolean => typeof n === 'object' && n !== null && (n.props?.borderStyle !== undefined || (n.children ?? []).some(anyBorder))
+
+test('the Pane draws each section in a round box with its own color, a bold title in that color, and colored icons', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: { [FILE]: { text: withStreams(), mtimeMs: 1 } } })
+  const pane = await drawnPane($, on, w, 60)
+  expect(walk(pane)).toEqual([])
+  expect(boxes(pane).map((b: any) => [b.title, b.color, b.bordered])).toEqual([
+    ['TEAM default', 'permission', true], ['STREAM api', 'suggestion', true], ['DISPATCHES', null, true],
+  ])
+  const box = pane.children[1]
+  expect(box.props).toMatchObject({ flexDirection: 'column', borderStyle: 'round', borderColor: 'suggestion' })
+  expect(box.children[0].props).toMatchObject({ bold: true, color: 'suggestion' })
+  expect(box.children[1].children[0]).toMatchObject({ type: 'Text', props: { color: 'success' }, children: ['● '] })
+  const dispatchBox = pane.children[2]
+  expect(dispatchBox.props).toMatchObject({ borderStyle: 'round', borderDimColor: true })
+  expect(dispatchBox.props.borderColor).toBe(undefined)
+  expect(dispatchBox.children[0].props).toMatchObject({ bold: true, dimColor: true })
+  expect(dispatchBox.children[1].children[0].props).toMatchObject({ color: 'error' })
+})
+
+test('a dispatch to a streamed member draws inside its stream box, indented, with no DISPATCHES box', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: { [FILE]: { text: withStreams(false), mtimeMs: 1 } } })
+  const pane = await drawnPane($, on, w, 60)
+  expect(boxes(pane).map((b: any) => b.title)).toEqual(['TEAM default', 'STREAM api'])
+  const row = pane.children[1].children[2]
+  expect(row.children[0]).toMatchObject({ type: 'Text', children: ['  '] })
+  expect(row.children[1]).toMatchObject({ props: { color: 'error' }, children: ['▲ '] })
+})
+
+test('below 40 columns the Pane draws no border, and the title keeps its color', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: { [FILE]: { text: withStreams(), mtimeMs: 1 } } })
+  const pane = await drawnPane($, on, w, 39)
+  expect(anyBorder(pane)).toBe(false)
+  expect(boxes(pane).map((b: any) => [b.title, b.color, b.bordered])).toEqual([['TEAM default', null, false], ['STREAM api', null, false], ['DISPATCHES', null, false]])
+  const title = pane.children[1].children[0]
+  expect(title.props).toMatchObject({ bold: true, color: 'suggestion' })
+})
+
+test('a null view draws one line with no border and no icon', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: {} })
+  const pane = await drawnPane($, on, w, 60)
+  expect(anyBorder(pane)).toBe(false)
+  expect(texts(pane).length).toBe(1)
+})

@@ -1,10 +1,13 @@
 import type { Register } from 'claude-code'
-import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneRows, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
+import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneSections, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
 
 // The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
 // any tone not named here draws dim.
 const toneProps = (tone: string) =>
   tone === 'bad' ? { color: 'warning', bold: true } : tone === 'warn' ? { color: 'warning' } : tone === 'work' ? {} : { dimColor: true }
+
+// A theme key colors; no key draws dim. Every key comes from view.ts's style table.
+const colorProps = (key: string | null) => (key === null ? { dimColor: true } : { color: key })
 
 // The one way the Pane opens on the person's request, for the command and the band's button. A member session
 // sees no hierarchy view, so nothing is opened there.
@@ -167,9 +170,21 @@ export const register: Register = (on, options) => {
     const { value } = await $.state.get({ plugin: 'ah', key: 'view' })
     const cause = await $.state.get({ plugin: 'ah', key: 'why' })
     const { Box, Text } = $.ui.resolve(e)
+    const sections = paneSections(value ?? null, e.props.bodyColumns, typeof cause.value === 'string' ? cause.value : null)
     return (
       <Box flexDirection="column">
-        {paneRows(value ?? null, e.props.bodyColumns, typeof cause.value === 'string' ? cause.value : null).map((r) => <Text {...toneProps(r.tone)}>{r.text}</Text>)}
+        {sections.map((sec) => (
+          <Box flexDirection="column" {...(sec.bordered ? { borderStyle: 'round', ...(sec.color === null ? { borderDimColor: true } : { borderColor: sec.color }) } : {})}>
+            {sec.title !== '' ? <Text bold {...colorProps(sec.color)}>{sec.title}</Text> : null}
+            {sec.rows.map((r) => (
+              <Box flexDirection="row">
+                {r.indent > 0 ? <Text>{' '.repeat(r.indent)}</Text> : null}
+                {r.icon !== null ? <Text {...colorProps(r.iconColor)}>{r.icon + ' '}</Text> : null}
+                <Text {...toneProps(r.tone)}>{r.text}</Text>
+              </Box>
+            ))}
+          </Box>
+        ))}
       </Box>
     )
   })
