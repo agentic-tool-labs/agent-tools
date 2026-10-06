@@ -354,6 +354,11 @@ and the toasts have no switch of their own. Like the entry, they only read the
 status file: the mod opens its own Pane and shows toasts, and never sends a
 message, answers a prompt, or runs anything named in the file.
 
+The `toast_seconds` option sets how long the mod's notices (a reported dispatch,
+a blocked or stalled member, the band's "not placed" note) stay on screen: 10
+seconds by default, 2 to 60, and 0 turns them off. Click a notice to dismiss it;
+hover over it to keep it. Click feedback for a member focus is not affected.
+
 The mod runs nothing without a user press. Exactly one process may run: the
 pinned focus helper, which a click on a team member's name triggers
 (`herdr agent focus <name>`, a fixed argument list with no shell, and only for a
