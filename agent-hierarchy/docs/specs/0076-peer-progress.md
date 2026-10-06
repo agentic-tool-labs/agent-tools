@@ -132,7 +132,17 @@ The "periodic" part is (a): it updates continuously and costs no tokens. (b) is 
   - Send the Orchestrator a one-line note, **only** on news that needs no answer, then keep working:
     - (a) a surprise that changes the plan or scope, which the peer can still act on alone;
     - (b) for an `eta: large` brief, once, at about the midpoint of the work: what is done and what is left.
-  - Format: `[hierarchy-msg <request path>] note: <one line>`, sent to the address the brief came from.
+  - Format: `note <request id>: <one line>` (the id from the brief's frontmatter, e.g. `20261006-153217-1fag`), sent
+    to the address the brief came from. **A note never contains a `[hierarchy-msg` token, nor a message-file path.**
+    (r3, G1: every hook that reads a SendMessage body keys on `[hierarchy-msg <path>]`:
+    - `posttooluse-peer-resolve.mjs:60–71` records a dispatch row and injects the "start the dispatch watcher" text
+      for any `…--request.md` token;
+    - `pretooluse-msg-gate.mjs:114–134` engages on a request token;
+    - `pretooluse-sendmessage-response.mjs:139–161` validates any token as a response while a report is owed.
+
+    A token-free note engages none of them, so no hook code changes and no real dispatch can be dropped. The rejected
+    alternative, a role-session exemption in the resolver, changes a dispatch-recording path and needs a proof that no
+    role session ever dispatches.)
   - **Blocked, or a decision needed** (the peer cannot go on without an answer): send a **report**, not a note — the
     response file with status BLOCKED or NEEDS-DECISION and the exact question, as for any gap. Never send a note and
     then stop to wait. (r2, B1)
@@ -146,11 +156,14 @@ The "periodic" part is (a): it updates continuously and costs no tokens. (b) is 
   `userpromptsubmit-peer-tracking.mjs`: the condition is the sender, not the message path). **No code change.** P5
   pins it.
 - **The report-back gate is unchanged**, and needs no change:
-  - It counts a report only when the body names `[hierarchy-msg <response path>]`. A note names the request, so it
+  - It counts a report only when the body names `[hierarchy-msg <response path>]`. A note carries no token, so it
     never satisfies the gate (P6).
   - A note never waits, so the peer is still working when it sends one; the gate fires only at the peer's Stop, as
     today. A blocked or decision report satisfies the gate like any report (P8).
-- **0074 intent gate is unaffected:** role sessions are exempt (callerDirect). This is pinned by test P7.
+- **0074 intent gate is unaffected:** a token-free note never engages it, and role sessions are exempt anyway. (r3: P7
+  is dropped as moot; P10 and P11 pin the token-free path.)
+- **Every hook that reads a SendMessage body is unchanged** (r3): `posttooluse-peer-resolve.mjs`,
+  `pretooluse-msg-gate.mjs`, `pretooluse-sendmessage-response.mjs`.
 
 ### 4.5 Watcher (r2, S1: no change)
 
@@ -184,7 +197,8 @@ The "periodic" part is (a): it updates continuously and costs no tokens. (b) is 
 | Pane progress text | code (view.ts), mod tests V1–V6 |
 | Push note only on news that needs no answer; one midpoint note on a large eta; format | **prose only** (peer notice) + content grep P1; no hook (D4) |
 | Blocked or decision news goes out as a report, never a note-then-wait | **prose only** (peer notice) + content grep P1; the existing gate catches a note-then-stop by nudging toward the report |
-| A note resets the watcher | existing heard path (E1), test P5 |
+| A note resets the watcher | existing heard path (E1; sender-based, no token needed), test P5 |
+| A note is never taken for a dispatch or a report | token-free format (prose) + P1 grep; body-reading hooks unchanged; tests P10, P11 |
 | A note never satisfies report-back; a BLOCKED report does | existing gate, tests P6, P8 |
 | A BLOCKED report is answered by a new request with `--parent` | prose (orchestrator.md), content grep P2; the round trip is pinned by P9 |
 | The Orchestrator treats a note as news, not a report | prose (orchestrator.md), content grep P2 |
@@ -210,11 +224,13 @@ The "periodic" part is (a): it updates continuously and costs no tokens. (b) is 
 | a pane-route member | today's text | V4 |
 | the peer notice | contains `note:`, "only", both note triggers, `large`, "not the report", `BLOCKED`, `NEEDS-DECISION`, and the "never a note then wait" element | P1 |
 | orchestrator.md | contains "note:", "never closes", "--parent" and "new request" | P2 |
-| a note `[hierarchy-msg <request path>] note: …` from a peer to the Orchestrator | a `heard` record is written; the watcher's base moves | P5 |
+| a note `note <request id>: …` from a peer to the Orchestrator | a `heard` record is written; the watcher's base moves | P5 |
 | a note body as the peer's final SendMessage | the report-back Stop gate still holds (the note is not a report) | P6 |
-| a reviewer-peer note naming its own request, sent from the role session | the 0074 intent gate does not hold it | P7 |
+| (r3) a peer session sends a note `note <request id>: …` (run through `posttooluse-peer-resolve.mjs` with the peer's session and a real request file for that id on disk) | no dispatch row is appended for the peer's session; no "start the dispatch watcher" text is output | P10 |
+| (r3) an implementor peer with a report owed sends a note (run through `pretooluse-sendmessage-response.mjs`) | allowed (no deny, no hold) | P11 |
+| (r3) the peer notice | contains `note <`, and contains no `[hierarchy-msg <request` in the note format (P1 widened) | P1 |
 | a peer with a report owed sends a response file whose status is BLOCKED (or NEEDS-DECISION) and its `[hierarchy-msg <response path>]` message, then stops | the Stop gate lets it stop (the report counts like any report); no nudge | P8 |
-| after a BLOCKED report, the Orchestrator answers with `msg.mjs new --type request --parent <blocked id>` to the same peer | a new dispatch row: the watcher watches it again (CHECK-IN at base+T), the peer owes a new report (the Stop gate nudges if it stops without one), and the peer's response to it is accepted. The blocked dispatch stays closed (r2-1) | P9 |
+| after a BLOCKED report, the Orchestrator answers with `msg.mjs new --type request --parent <blocked id>` to the same peer | (r3, slimmed to the msg.mjs facts the rule rests on; the watcher and the gate on a new request are the generic dispatch path, already covered) (a) `msg.mjs new --type response` a second time for the blocked id is refused; (b) `msg.mjs new --type request --parent <blocked id>` makes a new id whose frontmatter `parent` is the blocked id, and a response to the new id is accepted | P9 |
 
 **Must NOT trigger a push note (prose; P1 greps for the "only" and "otherwise send nothing" elements):**
 
@@ -230,7 +246,9 @@ The "periodic" part is (a): it updates continuously and costs no tokens. (b) is 
 ## 8. Acceptance
 
 1. Every §7 test is present and seen failing first where new. Content greps P1/P2 are seen failing at the base.
-2. `dispatch-watcher.mjs`, `stop-peer-nudge.mjs` and `userpromptsubmit-peer-tracking.mjs` are unchanged in the diff.
+2. `dispatch-watcher.mjs`, `stop-peer-nudge.mjs`, `userpromptsubmit-peer-tracking.mjs`, `posttooluse-peer-resolve.mjs`,
+   `pretooluse-msg-gate.mjs` and `pretooluse-sendmessage-response.mjs` are unchanged in the diff. (r3) The peer
+   notice's note sentence may be up to about 520 B (r3, G3 accepted: the elements are kept).
 3. The full ah suite and `claude plugin test` are green. `orchestrator.md` stays ≤ 7350 B; no other ceiling moves.
 4. The version is bumped in both manifests. The text is generic.
 5. Manual M1 (the Orchestrator, once, live): dispatch a large-eta peer task. Watch the Pane member row update while

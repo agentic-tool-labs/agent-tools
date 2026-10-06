@@ -83,7 +83,10 @@ check "A6: an empty tool name writes no tool, and keeps the previous one" '[ "$(
 # ---- P1, P2: the prose
 NOTICE=$(HOME="$FAKEHOME" node --input-type=module -e "const L = await import('$H/lib-config.mjs'); process.stdout.write(L.buildRoleSessionNotice('implementor', 'ah:implementor'));")
 OUT="$NOTICE"
-check "P1: the peer notice has the note format, 'only', both triggers, large, 'not the report', both report statuses, and never-note-then-wait" 'for s in "note:" " only " "surprise that changes the plan" "midpoint" "eta: large" "not the report" "BLOCKED" "NEEDS-DECISION" "never a note then wait" "send nothing until the report"; do printf "%s" "$NOTICE" | grep -q "$s" || { OUT="missing: $s"; false; break; }; done'
+check "P1: the peer notice has the note format, 'only', both triggers, large, 'not the report', both report statuses, and never-note-then-wait" 'for s in "note <request id>:" " only " "surprise that changes the plan" "midpoint" "eta: large" "not the report" "BLOCKED" "NEEDS-DECISION" "never a note then wait" "send nothing until the report"; do printf "%s" "$NOTICE" | grep -q "$s" || { OUT="missing: $s"; false; break; }; done'
+NOTES_SENTENCE=$(printf "%s" "$NOTICE" | grep -o "Notes: .*until the report\.")
+check "P1: the note format carries no message token and no path" '[ -n "$NOTES_SENTENCE" ] && ! printf "%s" "$NOTES_SENTENCE" | grep -q "hierarchy-msg" && ! printf "%s" "$NOTES_SENTENCE" | grep -q "/"'
+check "P1: the note sentence is within 520 bytes" '[ "$(printf "%s" "$NOTES_SENTENCE" | wc -c)" -le 520 ]'
 ORCH="$PLUGIN/agents/orchestrator.md"
 check "P2: orchestrator.md says a note is news that never closes a dispatch" 'grep -q "note:" "$ORCH" && grep -q "never closes" "$ORCH"'
 check "P2: and that a BLOCKED report is answered by a new request with --parent" 'grep -q -- "--parent" "$ORCH" && grep -q "new request" "$ORCH"'
@@ -114,9 +117,9 @@ session_start() { printf '{"session_id":"%s","cwd":"%s","agent_type":"%s","hook_
 ID5=20260101-000000-p5aa
 request "$ID5" implementor p5 "$(iso_ago 360)" small demo-impl
 printf '{"type":"dispatch","session_id":"s-orch5","request_id":"%s","to":"implementor","path":"%s","to_addr":"peer-heard","created":"%s"}\n' "$ID5" "$HD/msgs/$ID5--implementor--p5--request.md" "$(iso_ago 0)" >> "$PENDING"
-ups s-orch5 "$(wrapped "[hierarchy-msg $HD/msgs/$ID5--implementor--p5--request.md] note: halfway, 3 of 6 done" peer-heard)"
+ups s-orch5 "$(wrapped "note $ID5: halfway, 3 of 6 done" peer-heard)"
 check "P5: a peer note delivered to the Orchestrator writes a heard row" '[ "$(rows "\"type\":\"heard\"")" -ge 1 ]'
-ups s-orch5b "$(wrapped "[hierarchy-msg $HD/msgs/$ID5--implementor--p5--request.md] note: halfway" someone-else)"
+ups s-orch5b "$(wrapped "note $ID5: halfway" someone-else)"
 check "P5: a note from a name that is no dispatch's peer writes none more" '[ "$(rows "\"type\":\"heard\"")" -eq 1 ]'
 
 # P6: a note is not a report
@@ -127,9 +130,25 @@ session_start s-peer6 ah:implementor
 ups s-peer6 "$(wrapped "Implement it. [hierarchy-msg $REQ6]")"
 peer_stop s-peer6
 check "P6 setup: the peer owes a report, so its Stop blocks" 'is_block'
-send s-peer6 at-orchestrator "[hierarchy-msg $REQ6] note: halfway, 3 of 6 done"
+send s-peer6 at-orchestrator "note $ID6: halfway, 3 of 6 done"
 peer_stop s-peer6
 check "P6: after sending only a note the Stop gate still holds" 'is_block'
+
+# P10: a token-free note is no dispatch and starts no watcher; the old format was both
+send s-peer6 at-orchestrator "note $ID6: halfway, 3 of 6 done"
+check "P10: the note is run through the resolver: no output (no watcher prompt)" '[ -z "$OUT" ]'
+check "P10: and no dispatch row exists for the peer's session" '[ "$(grep "\"type\":\"dispatch\"" "$PENDING" | grep -c "\"session_id\":\"s-peer6\"")" -eq 0 ]'
+send s-peer6 at-orchestrator "[hierarchy-msg $REQ6] note: halfway"
+check "P10 contrast: the tokened form is taken for a dispatch (a row is written, the watcher prompt appears)" '[ "$(grep "\"type\":\"dispatch\"" "$PENDING" | grep -c "\"session_id\":\"s-peer6\"")" -ge 1 ] && printf "%s" "$OUT" | grep -q "dispatch watcher"'
+
+# P11: a note is not held by the report check while a report is owed; the tokened form is
+resp_gate() { # <message>: the PreToolUse hook for the implementor peer's SendMessage
+  OUT=$(node -e 'console.log(JSON.stringify({session_id:"s-peer6",cwd:process.argv[1],hook_event_name:"PreToolUse",agent_type:"implementor",tool_name:"SendMessage",tool_input:{to:"at-orchestrator",message:process.argv[2]}}))' "$PROJ" "$1" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/pretooluse-sendmessage-response.mjs" 2>&1); RC=$?
+}
+resp_gate "note $ID6: halfway, 3 of 6 done"
+check "P11: with a report owed, a token-free note is allowed (no deny, no hold)" '[ -z "$OUT" ]'
+resp_gate "[hierarchy-msg $REQ6] note: halfway"
+check "P11 contrast: the tokened form is denied as a report that matches no open request" 'case "$OUT" in *deny*) true;; *) false;; esac'
 
 # P8: a BLOCKED report is a report
 node "$H/msg.mjs" new --type response --id "$ID6" --req "$REQ6" --to orchestrator --from implementor --cwd "$PROJ" >/dev/null 2>&1
@@ -138,6 +157,17 @@ RESP6=$(ls "$HD"/msgs/"$ID6"--*--response.md 2>/dev/null | head -1)
 send s-peer6 at-orchestrator "BLOCKED. [hierarchy-msg $RESP6]"
 peer_stop s-peer6
 check "P8: after a BLOCKED response file and its message the Stop gate lets the peer stop" '[ -n "$RESP6" ] && [ -z "$OUT" ]'
+
+
+# P9: what the new-request rule rests on
+msgcli() { (cd "$SANDBOX" && HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/msg.mjs" "$@" --cwd "$PROJ" 2>&1); }
+OUT=$(msgcli new --type response --id "$ID6" --req "$REQ6" --to orchestrator --from implementor)
+check "P9a: a second response for the blocked id is refused (no path comes back)" '! printf "%s" "$OUT" | grep -q "\"path\"" && [ -n "$OUT" ]'
+OUT=$(msgcli new --type request --to implementor --from orchestrator --slug p9-next --parent "$ID6")
+NEWID=$(printf "%s" "$OUT" | node -e 'try { console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).id) } catch { console.log("") }')
+check "P9b: a request with --parent makes a new id whose frontmatter parent is the blocked id" '[ -n "$NEWID" ] && [ "$NEWID" != "$ID6" ] && grep -q "^parent: $ID6$" "$HD"/msgs/"$NEWID"--*--request.md'
+OUT=$(msgcli new --type response --id "$NEWID" --req "$(ls "$HD"/msgs/"$NEWID"--*--request.md | head -1)" --to orchestrator --from implementor)
+check "P9c: a response to the new id is accepted" 'printf "%s" "$OUT" | grep -q "\"id\":\"$NEWID\""'
 
 echo "----"
 echo "passed: $PASS  failed: $FAIL"
