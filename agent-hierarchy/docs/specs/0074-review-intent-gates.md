@@ -212,9 +212,7 @@ New ceilings are the measured size after the change, rounded **up** to the next 
   - `buildDirective` output in both modes: "covers only the range", "never Determined", "Invariants and negative cases", `NEEDS-INTENT`.
   - Each assertion must be seen FAILING at HEAD before the edit, and passing after. Pick tokens only the new rule text introduces; a common word the base file already contains does not qualify.
 - **Generic review scenario (§4.10).** Its deterministic self-check script.
-- **Generic-text check.** A grep over every file this spec adds or changes (the agent files, contracts, lib-config directive text, the two hooks and CLI, docs, CHANGELOG 0.115.0 section, tests, fixtures) for a deny-list kept in the test itself. The list holds the specific names and words the user ruled out; the Orchestrator supplies it in the Implementor brief, not in any committed file other than that test. It fails if any word matches.
-  - The test keeps the list as data. The words must not appear in any other committed file.
-  - **NEEDS-USER:** the user decides whether even the test's own deny-list may name them. If not, drop this check and rely on the Reviewer reading the diff against the generic-text rule.
+- **Generic-text rule: enforced by review, not by a test** (ruled; the deny-list grep is dropped). A deny-list test would have to name the very words the rule forbids, in a committed file, so the test would break the rule it enforces. Instead the Reviewer reads the full diff and every commit message against the generic-text rule (top of spec) and reports any hit as a finding. Do not add a deny-list, word-list or name grep anywhere.
 - Full ah suite green.
 
 ### 4.9 Docs and version
@@ -343,7 +341,7 @@ A small synthetic fixture that has both failure classes. A deterministic self-ch
 4. `tests/test-directive-size.sh` and `tests/test-custom-roles.sh` pass with the new ceilings, which are within the §4.7 caps.
 5. The full ah suite exits 0.
 6. `claude plugin validate agent-hierarchy` lists the same hooks as 0.114.0.
-7. The generic-text rule holds across the diff. The §4.8 grep checks it, or, if the user drops that check, the Reviewer confirms it by reading the diff.
+7. The generic-text rule holds across the diff. The Reviewer confirms it by reading the full diff and commit messages; there is no test for it (§4.8).
 
 **Manual checks** (the user or the Orchestrator; optional; plain words):
 - **M1.** Ask for a Reviewer on a small change with no spec and an empty goal: the dispatch is held and asks for the goal. Fill in only "review this", with no acceptance: still held. Fill in both: the review runs.
@@ -364,7 +362,7 @@ A small synthetic fixture that has both failure classes. A deterministic self-ch
 - **Q1 (ruled): accept** the deeper review reading, scoped to what the change touches.
 - **Q2 (ruled): no hard push gate now.** O1 stays prose, and the reported range keeps a later hook possible.
 - **Q3 (ruled): a generic test, not a replay.** That is §4.10 together with the generic-text rule.
-- **Open, NEEDS-USER:** may the generic-text check's own test file hold the deny-list words (§4.8)? Default if unanswered: no. Drop the grep check and rely on Reviewer reading.
+- **Deny-list test (ruled): dropped.** A deny-list would carry the very words the rule forbids, so the generic-text rule is enforced by Reviewer reading (§4.8).
 
 ## 10. Risks for the Implementor
 
