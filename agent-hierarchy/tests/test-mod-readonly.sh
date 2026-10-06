@@ -185,6 +185,89 @@ for (const f of files) {
   for (const m of code.matchAll(/(?<![\w$.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=(?!=)/g)) { const p = fnParams(code, m.index + m[0].length); if (p && p.length) withParams.add(m[1]); }
   for (const m of code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)) { const a = callArgs(code, m.index + m[0].length - 1); if (a && a.list.length) withParams.add(m[1]); }
 
+  // Position rule: in a band hook, Button stands only as an unrenamed `const { … } = $.ui.resolve(x)` property at the hook's own
+  // function depth, or as a JSX tag in the hook's own return (or expression body) with no function literal before it, no call paren
+  // open around it and no assignment in that return. So a Button value or element cannot leave the hook by a binding.
+  // ponytail: a `<` before a letter is read as a JSX tag, so `a <B` in a return can hide an `=` until the next `>`.
+  const GROUP = new Set(["return", "if", "while", "for", "switch", "typeof", "await", "void"]);
+  const CTRL = new Set(["if", "for", "while", "switch", "catch", "with"]);
+  const matchOpen = (close) => { let d = 0; for (let k = close; k >= 0; k--) { const ch = code[k]; if (")]}".includes(ch)) d++; else if ("([{".includes(ch) && --d === 0) return k; } return -1; };
+  const isFnBlock = (b) => {
+    const before = code.slice(0, b).replace(/\s+$/, "");
+    if (before.endsWith("=>") || /\)\s*:\s*[\w$.<>[\], |&]*$/.test(before)) return true;
+    if (!before.endsWith(")")) return false;
+    const open = matchOpen(before.length - 1);
+    if (open < 0) return false;
+    const pre = code.slice(0, open).replace(/\s+$/, ""), w = /([\w$]+)$/.exec(pre);
+    return pre.endsWith("*") || !(w && CTRL.has(w[1]));
+  };
+  const hookBody = (hs) => {
+    const k = hs + /^\s*/.exec(code.slice(hs))[0].length, t = code.slice(k);
+    const m = /^(?:async\s+)?function\b[^(]*\(/.exec(t) || /^(?:async\s*)?\(/.exec(t);
+    const after = m ? callArgs(code, k + m[0].length - 1).close + 1 : k + /^(?:async\s+)?[A-Za-z_$][\w$]*\s*/.exec(t)[0].length;
+    const bs = after + /^\s*(?::[^=;{]*)?(?:=>)?\s*/.exec(code.slice(after))[0].length;
+    return { bs, block: code[bs] === "{" };
+  };
+  // Whether `text` assigns outside a JSX attribute name= and outside an onPress body.
+  const hasAssign = (text) => {
+    let inTag = false, bd = 0;
+    for (let k = 0; k < text.length; k++) {
+      const ch = text[k], nx = text[k + 1], pv = text[k - 1] || "";
+      if (inTag) {
+        if (ch === "{") {
+          if (bd === 0 && /onPress\s*=\s*$/.test(text.slice(0, k))) { let d = 0; for (; k < text.length; k++) { if (text[k] === "{") d++; else if (text[k] === "}" && --d === 0) break; } continue; }
+          bd++; continue;
+        }
+        if (ch === "}") { bd--; continue; }
+        if (bd === 0 && ch === ">") { inTag = false; continue; }
+        if (bd === 0 && ch === "=") continue;
+      } else if (ch === "<" && /[A-Za-z]/.test(nx || "") && !/[\w$)\]]/.test(pv)) { inTag = true; bd = 0; continue; }
+      if (ch !== "=") continue;
+      if (nx === "=") { k++; if (text[k + 1] === "=") k++; continue; }
+      if (nx === ">") continue;
+      if (/[!<>]/.test(pv) && !/<<|>>/.test(text.slice(k - 2, k))) continue;
+      return true;
+    }
+    return false;
+  };
+  for (const [hs, he] of bandSpans) {
+    const { bs, block } = hookBody(hs);
+    const fnRegions = [];
+    for (let k = bs + (block ? 1 : 0); k < he; k++) if (code[k] === "{" && isFnBlock(k)) { const a = callArgs(code, k); if (a) fnRegions.push([k, a.close]); }
+    const own = (i) => !fnRegions.some(([x, y]) => i > x && i < y);
+    const returns = block ? [...code.slice(bs, he).matchAll(/(?<![\w$.])return(?![\w$])/g)].map((r) => bs + r.index).filter(own) : [bs];
+    const argStart = (r) => (block ? r + 6 : r);
+    const argEnd = (r) => {
+      if (!block) return he;
+      let d = 0;
+      for (let k = r + 6; k < he; k++) { const ch = code[k]; if ("([{".includes(ch)) d++; else if (")]}".includes(ch)) { if (--d < 0) return k; } else if (ch === ";" && d === 0) return k; }
+      return he;
+    };
+    for (const m of code.slice(hs, he).matchAll(/(?<![\w$.])Button(?![\w$])/g)) {
+      const i = hs + m.index;
+      if (!inBand(i)) continue;
+      const before = code.slice(0, i), rest = code.slice(i + 6), tag = /<(\/?)\s*$/.exec(before);
+      if (!tag) {
+        const pat = /\bconst\s*\{[^{}]*$/.exec(before), end = rest.indexOf("}");
+        const ok = pat && own(pat.index) && /[{,]\s*$/.test(before) && /^\s*[,}]/.test(rest) && end >= 0 &&
+          /^\s*=\s*\$\s*\.\s*ui\s*\.\s*resolve\s*\(\s*[\w$]+\s*\)/.test(rest.slice(end + 1));
+        if (!ok) at(i, "Button outside an unrenamed $.ui.resolve destructure at the band hook's own depth, or a JSX tag in its own return");
+        continue;
+      }
+      const tpos = i - tag[0].length, r = returns.filter((x) => x < tpos).pop();
+      let why = null;
+      if (r === undefined || tpos >= argEnd(r)) why = "tag is not inside the band hook's own return";
+      else {
+        const seg = code.slice(argStart(r), tpos), open = [];
+        for (let k = 0; k < seg.length; k++) { if (seg[k] === "(") open.push(k); else if (seg[k] === ")") open.pop(); }
+        if (tag[1] !== "/" && /=>|\bfunction\b/.test(seg)) why = "tag sits inside a function literal";
+        else if (open.some((k) => { const pre = seg.slice(0, k).replace(/\s+$/, ""), w = /([\w$]+)$/.exec(pre); return w ? !GROUP.has(w[1]) : /[)\]]$/.test(pre) || /\?\.$/.test(pre) || /[\w$>]>$/.test(pre); })) why = "tag sits inside a call's arguments";
+        else if (hasAssign(code.slice(argStart(r), argEnd(r)))) why = "the return holds an assignment";
+      }
+      if (why) at(i, `Button ${why}`);
+    }
+  }
+
   // A Button's onPress is an inline arrow whose parameter, if any, is not named $; its body is lexed like any other code.
   for (const m of code.matchAll(/(?<![\w$.])onPress\s*(?:=\s*\{|:)\s*/g)) {
     const s = m.index + m[0].length, p = fnParams(code, s);
@@ -398,6 +481,13 @@ const h = ($) => 0; { function* h(env) { env.session.authorize() } h($).next() }
 const h = ($) => 0; { function *h(env) { env.session.authorize() } h($).next() }
 const h = ($) => 0; { async function* h(env) { env.session.authorize() } h($).next() }
 on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => <Button onPress={() => 0} />); return next(e) })
+let B; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); B = Button; return next(e) }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => <B onPress={() => 0} />)
+let mk; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); mk = () => <Button onPress={() => 0} />; return next(e) }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => mk())
+let el; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); el = <Button onPress={() => 0} />; return next(e) }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => el)
+let el; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return (el = <Box><Button onPress={() => 0} /></Box>) }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => el)
+const keep = (x) => x; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return keep(<Box><Button onPress={() => 0} /></Box>) })
+let B; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button: B } = $.ui.resolve(e); return <B onPress={() => 0} /> })
+let x; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return <Button onPress={() => { x = <Button onPress={() => 0} /> }} /> })
 EOF
 
 # The band hook may draw a Button with an inline arrow onPress; a $-first helper declared once may be called with $ from two hooks.
@@ -405,6 +495,11 @@ OUT=$(planted "const help = async (\$, x) => { await \$.state.set(x, 1) }" \
   "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button, Text } = \$.ui.resolve(e); return <Box><Text>x</Text><Button key=\"k\" label=\"L\" onPress={async () => { await help(\$, 1); await \$.ui.toast('x') }} /></Box> })" \
   "on('command.run', { command: 'hierarchy-pane' }, async (\$, e, next) => { await help(\$, 2); return ({ text: 'ok' }) })")
 check "lexer passes a band Button with an inline arrow onPress and a \$-first helper called from two hooks" '[ -z "$OUT" ]'
+
+# The position rule still passes a band Button with children, in a conditional return, after an early return.
+OUT=$(planted "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { if (e.props.hasSurvey) return next(e); const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.ok ? (<Button onPress={() => \$.ui.toast('x')}>Go</Button>) : null}</Box>) })" \
+  "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Button } = \$.ui.resolve(e); return <Button onPress={() => \$.ui.toast('x')}>Go</Button> })")
+check "lexer passes a band Button with children, in a conditional return, after an early return" '[ -z "$OUT" ]'
 
 # The import rule closes a helper kept outside the scan: mod/types/ is not scanned, so a value import from
 # it is the violation.
