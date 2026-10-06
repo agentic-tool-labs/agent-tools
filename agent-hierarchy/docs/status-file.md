@@ -13,6 +13,21 @@ is spec [0071](specs/0071-hierarchy-status-view.md).
   prints it. A write is atomic (a per-process temp file, then a rename; the temp file is created exclusively, after anything already at its name is removed, so a write never goes through a link). Nothing is written when the
   hierarchy dir does not exist, and the dir is never created. A failed write never changes the
   outcome of the command or hook that triggered it.
+- **Whose `enabled` an event write publishes.** `roster.mjs status` (which `/hierarchy on|off` runs through)
+  always publishes the `enabled` of the config of the process that ran it. Every other write is an event write,
+  made by a hook or by a command that changed team state. An event write by a process whose own config is
+  enabled publishes `enabled: true`. One by a process whose config is disabled keeps the `enabled` already
+  published, when that document is readable and unexpired (the reading rules below) and has a boolean there;
+  with no such document it publishes `false`. Teams, members and dispatches always come from the pool, never from
+  the document on disk, so a disabled process still publishes every change at once.
+  - Accepted limits. (C1) A disabled process can leave `enabled: false` where there was no usable document;
+    the next event write from an enabled process publishes `true` again. (C2) Disabling the hierarchy by
+    hand-editing a config, without `/hierarchy off`, leaves the published view visible while event writes keep
+    refreshing it; use `/hierarchy off` or `roster.mjs status`. (C3) After `/hierarchy off`, an event write from a
+    process whose own config is enabled publishes `true`. (C4) A disabled event write can race an explicit
+    `/hierarchy off`: if the event write read `true`, then the explicit write saved `false`, then the event write's
+    rename lands, the document says `true` again and later disabled event writes keep it. The window is
+    milliseconds; re-run `/hierarchy off` to recover.
 - **Cost to read:** one `stat`, a read of a file usually under 8 KB, one JSON parse.
 
 ## Reading it
@@ -41,7 +56,9 @@ Every reader follows the same four steps.
 2. Take the `timeline` entry current at `now`: the last entry with `at ≤ now`, or the first entry
    when `now` is earlier than all of them.
 3. Show nothing if that entry has `visible: false`, or if the viewing session's id is in
-   `member_sessions`. Member sessions see nothing; every other session in the checkout sees the
+   `member_sessions`. A reader that shows a visible document which lists no team says so in a line of its own
+   rather than drawing nothing, and a reader that has nothing to show may say why (no file, unreadable, expired,
+   the hierarchy off, not visible, a member session). Member sessions see nothing; every other session in the checkout sees the
    view: the Orchestrator's, plain sessions, and `--agent` sessions on no team. The document does
    not name an Orchestrator, and `member_sessions` is the only signal, so a reader adds no rule of
    its own (hiding on the session's agent name, say, would also hide an Orchestrator launched with

@@ -23,6 +23,8 @@ import { dispatchOrigin } from "./lib-peer.mjs";
 import { listTeamNames, readTeam, teamIsLive } from "./lib-roster.mjs";
 
 export const STATUS_SCHEMA = 1;
+/** The largest status.json a reader accepts. The mod holds the same number as its own `SIZE_CAP`, since it cannot import this file; a test keeps the two equal. */
+export const STATUS_SIZE_CAP = 262144;
 /** The /pipeline skill's cap on rounds per item; it has no other code constant. */
 export const ROUND_CAP = 3;
 /** How long a reported dispatch stays listed, and so how long it counts toward nothing but stays visible. */
@@ -354,8 +356,8 @@ function buildTimeline(nowMs, members, dispatches, enabled, anyPipeline) {
 }
 
 /** The status document for the pool `dir` (by default the one `cwd` resolves to), evaluated at `nowMs`. Reads only. */
-export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd)) {
-  const enabled = Boolean(resolveConfig(cwd).enabled);
+export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd), enabledOverride = undefined) {
+  const enabled = typeof enabledOverride === "boolean" ? enabledOverride : Boolean(resolveConfig(cwd).enabled);
   const teams = [];
   const allMembers = [];
   const allDispatches = [];
@@ -416,12 +418,39 @@ export function saveStatus(dir, doc) {
 
 let writing = false;
 
-/** Compute and save, ignoring a call made while a write is already running in this process. Never throws. */
+const INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * The `enabled` boolean of the document now published in `dir`, read the way every reader reads it
+ * (docs/status-file.md, "Reading it", step 1), or null when there is no usable document: not a regular file,
+ * a link, empty or over the size cap, not JSON, `schema` not 1, `expires_at` not a later instant, `enabled` not
+ * a boolean, or any error. It reads this one field and nothing else.
+ */
+function publishedEnabled(dir, nowMs) {
+  try {
+    const path = join(dir, "status.json");
+    const st = lstatSync(path);
+    if (!st.isFile() || st.isSymbolicLink() || st.size < 1 || st.size > STATUS_SIZE_CAP) return null;
+    const doc = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof doc !== "object" || doc === null || Array.isArray(doc) || doc.schema !== STATUS_SCHEMA) return null;
+    if (typeof doc.expires_at !== "string" || !INSTANT_RE.test(doc.expires_at) || !(Date.parse(doc.expires_at) > nowMs)) return null;
+    return typeof doc.enabled === "boolean" ? doc.enabled : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compute and save, ignoring a call made while a write is already running in this process. Never throws.
+ * An event write by a process whose own config is disabled keeps the `enabled` already published, so a
+ * differently configured session cannot hide a live team's view; the explicit `status` verb does not come here.
+ */
 function refresh(cwd, dir, nowMs) {
   if (writing) return null;
   writing = true;
   try {
-    const doc = computeStatus(cwd, nowMs, dir);
+    const own = Boolean(resolveConfig(cwd).enabled);
+    const doc = computeStatus(cwd, nowMs, dir, own ? true : publishedEnabled(dir, nowMs) ?? false);
     saveStatus(dir, doc);
     return doc;
   } catch {

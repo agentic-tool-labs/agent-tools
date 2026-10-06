@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { bandLine, keepSeen, PANE_BUTTON, paneRows, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
+import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneRows, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
 
 // The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
 // any tone not named here draws dim.
@@ -29,6 +29,8 @@ export const register: Register = (on, options) => {
     let file: string | null = null
     let seenMtime: number | undefined
     let doc: Doc | null = null
+    // Why `doc` is null: `no file` or `unreadable`. Held with the doc, which is re-read only when the file changes.
+    let lost = 'no file'
     // null until the first tick, so a fresh environment always sets the entry, clearing any left by the last one.
     let shown: string | undefined | null = null
 
@@ -50,16 +52,20 @@ export const register: Register = (on, options) => {
       try {
         const where = await $.session.cwd()
         if (where !== cwd) { cwd = where; file = await locate(where); seenMtime = undefined; doc = null }
-        if (file === null) doc = null
+        if (file === null) { doc = null; lost = 'no file' }
         else {
-          const st = await $.fs.stat(file)
-          // ponytail: stat then read by path; a live local process could swap the path between the two calls. A committed file cannot race, and read's own cap bounds a swapped file. Close it if $.fs gains a handle or no-follow read.
-          if (st.isLink || st.kind !== 'file' || st.size === 0 || st.size > SIZE_CAP) { doc = null; seenMtime = undefined }
-          else if (st.mtimeMs !== seenMtime) { seenMtime = st.mtimeMs; doc = parseDoc(await $.fs.read(file)) }
+          let st: any = null
+          try { st = await $.fs.stat(file) } catch { doc = null; seenMtime = undefined; lost = 'no file' }
+          if (st !== null) {
+            // ponytail: stat then read by path; a live local process could swap the path between the two calls. A committed file cannot race, and read's own cap bounds a swapped file. Close it if $.fs gains a handle or no-follow read.
+            if (st.isLink || st.kind !== 'file' || st.size === 0 || st.size > SIZE_CAP) { doc = null; seenMtime = undefined; lost = 'unreadable' }
+            else if (st.mtimeMs !== seenMtime) { seenMtime = st.mtimeMs; doc = parseDoc(await $.fs.read(file)); lost = 'unreadable' }
+          }
         }
       } catch {
         doc = null
         seenMtime = undefined
+        lost = 'unreadable'
       }
       // The id is read every tick: /clear keeps this environment but starts a new session.
       const now = await $.clock.now()
@@ -69,6 +75,10 @@ export const register: Register = (on, options) => {
       // Written only on change, since every write redraws the band and the Pane. Compared with the held value,
       // not a closure copy, because the state outlives a reload of this module.
       const view = viewModel(doc, now, id)
+      // The cause is written before the view, so the empty Pane already names it when the view changes to null.
+      const why = view === null ? (doc === null ? lost : nullCause(doc, now, id)) : null
+      const heldWhy = await $.state.get({ plugin: 'ah', key: 'why' })
+      if ((heldWhy.value ?? null) !== why) await $.state.set({ plugin: 'ah', key: 'why' }, why)
       const held = await $.state.get({ plugin: 'ah', key: 'view' })
       if (JSON.stringify(held.value) !== JSON.stringify(view)) await $.state.set({ plugin: 'ah', key: 'view' }, view)
       const text = statusText(doc, now, id, statusEntry)
@@ -155,10 +165,11 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e) => {
     const { value } = await $.state.get({ plugin: 'ah', key: 'view' })
+    const cause = await $.state.get({ plugin: 'ah', key: 'why' })
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
-        {paneRows(value ?? null, e.props.bodyColumns).map((r) => <Text {...toneProps(r.tone)}>{r.text}</Text>)}
+        {paneRows(value ?? null, e.props.bodyColumns, typeof cause.value === 'string' ? cause.value : null).map((r) => <Text {...toneProps(r.tone)}>{r.text}</Text>)}
       </Box>
     )
   })

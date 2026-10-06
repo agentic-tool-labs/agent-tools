@@ -224,7 +224,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(texts(band)).toEqual(v.band === null ? [CORE_LINE] : [{ text: v.band.text, props: TONE[v.band.tone] }, CORE_LINE])
       const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
       expect(walk(pane)).toEqual([])
-      expect(texts(pane)).toEqual(v.pane.map((r) => ({ text: r.text, props: TONE[r.tone] })))
+      // A null view's one line names its cause; every other vector draws exactly its rows.
+      const cause = NULL_CAUSE[name]
+      expect(texts(pane)).toEqual(cause === undefined ? v.pane.map((r) => ({ text: r.text, props: TONE[r.tone] })) : [{ text: `No hierarchy status here (${cause}).`, props: TONE.idle }])
     })
   }
 
@@ -286,6 +288,77 @@ for (const surface of ['terminal', 'desktop'] as const) {
     mock.clock(on, { now: NOW })
     await start($, w, surface)
     expect(await draw($, surface, bandProps())).toEqual([])
+  })
+
+  const E_DOC = (teams: unknown) => JSON.stringify({
+    schema: 1, written_at: '2026-01-01T12:00:00.000Z', expires_at: '2026-01-02T12:00:00.000Z', enabled: true, member_sessions: [], teams,
+    timeline: [{ at: '2026-01-01T12:00:00.000Z', live: 3, blocked: 0, out: 0, overdue: 0, stalled: 0, text: '3 live · 0 out', short: '3/0', tone: 'idle', visible: true }],
+  })
+  for (const [label, teams] of [['teams: []', []], ['teams holding only non-records', [1, 'x']]] as const) {
+    test(`${surface}: a visible doc with ${label} draws one dim line saying so, and no band`, async ($, on) => {
+      const w = world({ files: { [FILE]: { text: E_DOC(teams), mtimeMs: 1 } } })
+      stage(on, w)
+      beneath(on)
+      mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
+      expect(texts(pane)).toEqual([{ text: 'No live team in the status file.', props: TONE.idle }])
+      const band = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })).drawn()
+      expect(texts(band)).toEqual([CORE_LINE])
+    })
+  }
+
+  for (const value of [{}, { pane: 'x' }, 7]) {
+    test(`${surface}: a held view of ${JSON.stringify(value)} draws the null-view line, not the engine's fallback`, async ($, on) => {
+      const w = world({ files: { [FILE]: { text: E_DOC([]), mtimeMs: 1 } } })
+      stage(on, w)
+      beneath(on)
+      // What the host holds for `view`, whatever an older or newer build of the module left there.
+      on('state.get', async (_$: any, e: any, next: any) => (e.key === 'view' ? { value, version: 1 } : next(e)))
+      mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
+      expect(texts(pane).length).toBe(1)
+      expect(texts(pane)[0].text.startsWith('No hierarchy status here')).toBe(true)
+    })
+  }
+
+  const asDoc = (fixture: string, over: Record<string, unknown>) => JSON.stringify({ ...JSON.parse(fixture), ...over })
+  const CAUSES: [string, () => World, string][] = [
+    ['no file', () => world({ files: {} }), 'no file'],
+    ['a file that is not JSON', () => world({ files: { [FILE]: { text: 'not json {', mtimeMs: 1 } } }), 'unreadable'],
+    ['a file that is a link', () => world({ files: { [FILE]: { text: fixtures.work, mtimeMs: 1, isLink: true } } }), 'unreadable'],
+    ['an expired doc', () => world({ files: { [FILE]: { text: asDoc(fixtures.work, { expires_at: '2026-01-01T11:00:00.000Z' }), mtimeMs: 1 } } }), 'expired'],
+    ['a doc that says the hierarchy is off', () => world({ files: { [FILE]: { text: fixtures.hidden, mtimeMs: 1 } } }), 'hierarchy off'],
+    ['a doc that is not visible while enabled', () => world({ files: { [FILE]: { text: asDoc(fixtures.hidden, { enabled: true }), mtimeMs: 1 } } }), 'not visible'],
+    ['a member session', () => world({ id: 'sess-demo-reviewer', files: { [FILE]: { text: fixtures['member-session'], mtimeMs: 1 } } }), 'member session'],
+  ]
+  for (const [label, make, cause] of CAUSES) {
+    test(`${surface}: the empty Pane names its cause: ${label} -> ${cause}`, async ($, on) => {
+      const w = make()
+      stage(on, w)
+      beneath(on)
+      mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
+      expect(texts(pane)).toEqual([{ text: `No hierarchy status here (${cause}).`, props: TONE.idle }])
+    })
+  }
+
+  test(`${surface}: the cause follows the file: a doc that becomes visible drops it, and a doc that goes away names it`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: asDoc(fixtures.hidden, { enabled: true }), mtimeMs: 1 } } })
+    stage(on, w)
+    beneath(on)
+    const clock = mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    const ui = await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })
+    expect(texts(await ui.drawn())[0].text).toBe('No hierarchy status here (not visible).')
+    w.files[FILE] = { text: fixtures.work, mtimeMs: 2 }
+    await clock.advance(2000)
+    expect(texts(await ui.drawn()).some((t) => t.text.startsWith('No hierarchy status here'))).toBe(false)
+    delete w.files[FILE]
+    await clock.advance(2000)
+    expect(texts(await ui.drawn())).toEqual([{ text: 'No hierarchy status here (no file).', props: TONE.idle }])
   })
 
   test(`${surface}: the band yields to the chain during a survey`, async ($, on) => {
@@ -608,6 +681,8 @@ function beneath(on: any) {
   on('ui.render', { component: 'Pane' }, () => CORE)
 }
 const VIEWPORT = { columns: 125, rows: 40 }
+// The vectors whose view is null, and the cause the empty Pane's line names for each.
+const NULL_CAUSE: Record<string, string> = { hidden: 'hierarchy off', 'member-session': 'member session' }
 const bandProps = (over: Record<string, unknown> = {}): any =>
   ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {}, ...over })
 const paneProps = (): any => ({ title: 'Hierarchy', isFocused: false, bodyColumns: 120, placement: 'inline', scroll: { offset: 0, bodyRows: 20 }, view: {} })

@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
-import { bandLine, cut, PANE_BUTTON, keepSeen, paneRows, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
+import { bandLine, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
 const ms = (iso: string) => Date.parse(iso)
@@ -315,4 +315,44 @@ test('keepSeen: keys whose dispatch or member is still in the doc stay, everythi
   expect(doc).not.toBe(null)
   const seen = ['reported:d1', 'stalled:d1', 'stalled:gone', `blocked:demo-architect:${at(-1000)}`, 'blocked:someone:x', 'other:d1', 7, null]
   expect(keepSeen(seen, doc!, ms(T0))).toEqual(['reported:d1', 'stalled:d1', `blocked:demo-architect:${at(-1000)}`])
+})
+
+test('a visible entry that lists no team draws one dim line saying so, and no band', async () => {
+  const noTeamKey = JSON.stringify({ ...JSON.parse(docText()), teams: undefined })
+  for (const text of [docText(), docText({ teams: [1, 'x'] }), noTeamKey]) {
+    const view = viewModel(parseDoc(text), ms(T0), 'sess-orch')
+    expect(view).not.toBe(null)
+    expect(paneRows(view, 80)).toEqual([{ text: 'No live team in the status file.', tone: 'idle' }])
+    expect(bandLine(view, 80)).toBe(null)
+  }
+})
+
+test('a held value that is not a view draws the null-view line and no band, and never throws', async () => {
+  for (const held of [{}, { pane: 'x' }, { pane: null }, 7, 'x', [], { pane: [1] }, { pane: [{}] }, { band: 3 }, { band: { head: 1, tail: [], tone: 'work' } }, { band: { head: 'h', tail: 'x', tone: 'work' } }]) {
+    const rows = paneRows(held as any, 80)
+    expect(rows.length).toBe(1)
+    expect(typeof rows[0].text).toBe('string')
+    expect(bandLine(held as any, 80)).toBe(null)
+  }
+  expect(paneRows({} as any, 80)).toEqual([{ text: 'No hierarchy status here.', tone: 'idle' }])
+  expect(paneRows({ pane: 'x' } as any, 80, 'expired')).toEqual([{ text: 'No hierarchy status here (expired).', tone: 'idle' }])
+})
+
+test('the empty line names its cause, and is cut to the width like any row', async () => {
+  expect(paneRows(null, 80)).toEqual([{ text: 'No hierarchy status here.', tone: 'idle' }])
+  expect(paneRows(null, 80, 'hierarchy off')).toEqual([{ text: 'No hierarchy status here (hierarchy off).', tone: 'idle' }])
+  expect(paneRows(null, 20, 'hierarchy off')[0].text).toBe('No hierarchy status…')
+})
+
+test('nullCause names why a document gives no view', async () => {
+  expect(nullCause(null, ms(T0), 'sess-orch')).toBe('unreadable')
+  expect(nullCause(parseDoc(docText({}, { visible: false })), ms(T0), 'sess-orch')).toBe('not visible')
+  expect(nullCause(parseDoc(docText({ enabled: false }, { visible: false })), ms(T0), 'sess-orch')).toBe('hierarchy off')
+  expect(nullCause(parseDoc(docText({ member_sessions: ['sess-m'] })), ms(T0), 'sess-m')).toBe('member session')
+  expect(nullCause(parseDoc(docText()), ms('2026-01-02T12:00:00.000Z'), 'sess-orch')).toBe('expired')
+  // Must NOT change: an expired doc is expired before it is anything else, and a doc with no `enabled` boolean is not "hierarchy off".
+  expect(nullCause(parseDoc(docText({ enabled: false, member_sessions: ['sess-m'] }, { visible: false })), ms('2026-01-03T00:00:00.000Z'), 'sess-m')).toBe('expired')
+  expect(nullCause(parseDoc(docText({ enabled: 'no' }, { visible: false })), ms(T0), 'sess-orch')).toBe('not visible')
+  // A member session sees no view, and the line it gets names no team data.
+  expect(viewModel(parseDoc(docText({ member_sessions: ['sess-m'], teams: [team()] })), ms(T0), 'sess-m')).toBe(null)
 })
