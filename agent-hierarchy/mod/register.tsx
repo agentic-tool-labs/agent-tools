@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneSections, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
+import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneSections, parseDoc, SIZE_CAP, statusText, toastMs, viewModel, type Doc } from './view.ts'
 
 // The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
 // any tone not named here draws dim.
@@ -39,6 +39,8 @@ const openPane = async ($: any, member: boolean) => {
 export const register: Register = (on, options) => {
   // Only an explicit true turns the entry on; a missing or any other value counts as off.
   const statusEntry = options?.status_entry === true || options?.status_entry === 'true'
+  // How long the status toasts and the band notice stay, from one read of the option; 0 makes no toast at all.
+  const toastFor = toastMs(options?.toast_seconds)
   // Whether the last doc read lists this session, set by every tick. Nothing is drawn from it, and a reload
   // runs session.start again, whose first tick sets it before any command can arrive.
   let member = false
@@ -114,7 +116,7 @@ export const register: Register = (on, options) => {
           const seen = [...kept, ...fresh.map((t) => t.key)]
           // Written before toasting, so a toast that fails is not shown again.
           if (JSON.stringify(seen) !== JSON.stringify(held.value)) await $.state.set({ plugin: 'ah', key: 'seen' }, seen)
-          for (const t of fresh) await $.ui.toast(t.text)
+          if (toastFor > 0) for (const t of fresh) await $.ui.toast(t.text, { timeoutMs: toastFor })
         }
       }
       // Opened unasked once per session, the first time there is something to show, unless the person has
@@ -155,7 +157,7 @@ export const register: Register = (on, options) => {
                 onPress={async () => {
                   try {
                     const r = await openPane($, member)
-                    if (!r.placed && !member) await $.ui.toast(r.text)
+                    if (!r.placed && !member && toastFor > 0) await $.ui.toast(r.text, { timeoutMs: toastFor })
                   } catch {}
                 }}
               />

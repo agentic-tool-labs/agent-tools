@@ -1,7 +1,7 @@
 {
   "name": "ah",
   "displayName": "Agent Hierarchy — Role/Model Assignment",
-  "version": "0.117.1",
+  "version": "0.118.0",
   "description": "Multi-agent role hierarchy, each on the right model. Optional herdr transport for pane-based teams.",
   "author": {
     "name": "Jim Cline"
@@ -24,6 +24,12 @@
       "title": "Status entry",
       "description": "Show the hierarchy line (⚠ ah: …) in the status area. Off by default; turn it on if claude-tui-line's ah item does not already show it.",
       "default": false
+    },
+    "toast_seconds": {
+      "type": "number",
+      "title": "Toast seconds",
+      "description": "How long hierarchy notices stay on screen, in seconds (2-60); 0 turns them off. Click a notice to dismiss it early.",
+      "default": 10
     }
   }
 }
