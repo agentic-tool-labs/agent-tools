@@ -34,6 +34,7 @@ Two changes ship together as 0.114.0.
 **W1. `Button` is drawable in the band hook only.**
 - Inside the `ui.render` hook whose matcher is `component=AbovePrompt`, `Button` may be destructured from `$.ui.resolve(e)` and returned as a JSX element.
 - Everywhere else, Button stays forbidden exactly as now. That covers the Pane `ui.render`, `session.start`, `command.run`, `ui.close` and module scope. Planted cases l.321 and l.327 must still fail unchanged.
+- The band hook's exemption covers only its own body. The span of any `on(...)` call nested inside it is excluded, so a Pane render registered inside the band hook gets no exemption. *(Added after review F3, as built.)*
 - A Button's `onPress` must be an inline arrow function. Its parameter, if it has one, must not be named `$`. Its body is lexed under every existing rule: the allow-list, no `$` destructuring or storing, and the banned tokens.
 - The other input elements (`Input`, `Select`, `Link`, `Code`, `Markdown`, `Client`, `Svg`, `Raster`, `Image`) stay non-drawable everywhere.
 - Why this stays inside the 0071 §6.3 item 6 ceiling: the guard exists so that an ordinary edit cannot act, send or answer by accident. A Button press is caused by the person, and its handler can reach only calls that are already allow-listed (`ui.open` and `state.set` are already made unasked by `tick`). The new class it opens is "code that runs on a person's press". That class is closed by the same allow-list, so no new action capability is added.
@@ -42,9 +43,12 @@ Two changes ship together as 0.114.0.
 - A call whose arguments include `$` passes the guard only if all of these hold:
   - (a) the callee is a bare identifier;
   - (b) that identifier is declared exactly once in `register.tsx`, as `const <name> = (async)? ($ …) => …`, with `$` as its first parameter;
-  - (c) no other binding of that name exists in the file: no parameter, destructuring target, `let`/`var` or import;
+  - (c) no other binding of that name exists in the file: no parameter, destructuring target, `let`/`var` or import, no `function`, `function*`, `function *` or `async function*` declaration, and no object or class method shorthand. Any `name(…)` whose closing paren is followed by a body (`{`, optionally after a `: type`) counts as a binding;
   - (d) `$` is the call's first argument.
 - Every other `f($)` still fails. That includes planted l.293, `JSON.stringify($)`, member calls `x.f($)` and computed callees.
+- A callee counts as a member call when the text before it ends in `.` or `?.`, ignoring whitespace (`x. h($)`, `x\n.h($)`). A spread `...` is not a member access.
+- Known stricter side effect, accepted: a `h($)` call followed by `: {`-shaped text, as in the ternary `c ? h($) : {}`, reads as a binding and fails. Write that shape another way.
+- *(The last three bullets and the binding list in (c) were added after review F1/F2 so the spec matches the guard as built.)*
 - The helper's body is lexed under all the existing rules, so `$` never reaches code the lexer has not seen.
 - This closes a class. It is not a one-off exemption, as 0071 §6.3 item 6 requires.
 
@@ -57,6 +61,9 @@ Two changes ship together as 0.114.0.
 6. `f($)` where `f` is declared twice, or is also a parameter name somewhere else in the file.
 7. `f($)` where `f` is declared as `const f = (env) => env.session.authorize()`: the helper's first parameter is not `$`.
 8. `f(e, $)`: `$` is not the first argument.
+9. Spaced member calls `x. h($)` and `new K(). h($)`, where an object or class method `h(env)` exists (review F1).
+10. A nested `function* h(env)`, `function *h(env)` or `async function* h(env)` that shadows a valid `$`-first helper, called as `h($)` (review F2).
+11. A Pane `ui.render` `on(...)` holding a `<Button>`, registered inside the AbovePrompt hook (review F3).
 
 **Required new allowed forms (must pass):** the band hook returning `<Box><Text>…</Text><Button onPress={() => …}>…</Button></Box>`; a `$`-first helper declared once and called as `helper($)` from two hooks.
 
@@ -121,7 +128,7 @@ Two changes ship together as 0.114.0.
   - The fresh-install "1 userConfig option not yet set" line stays informational.
 - **Tests (`agent-hierarchy/mod/tests/register.test.ts`).**
   - Add a case where options are omitted: the entry is not shown, and `w.shown` holds only `undefined` and no `⚠ ah:` text.
-  - Add a string `"true"` case: the entry is shown.
+  - The string `"true"` form has no register test. *(Amended after review F5: the `claude plugin test` harness rejects a non-boolean option, so the test cannot be written.)* The read rule still accepts it. Only N4(iii) verifies it end to end.
   - Keep the `false` and `true` cases at l.189 and l.197.
   - Every existing register test that asserts a shown entry without passing options must now pass `{ options: { status_entry: true } }`. The Implementor finds them all; none may be deleted to make the suite pass.
 - **Unaffected.** `view.test.ts` l.106 is unchanged because `statusText`'s signature is unchanged. `mod/tests/vectors.ts`, `mod/tests/fixtures.ts`, `tests/fixtures/status/*.json` and `tests/test-mod-fixtures-drift.sh` are also unchanged. The status fixtures are inputs, and the vectors call `statusText` with an explicit boolean. If any vector's expected `statusText` was computed through the register default, that is a spec gap: stop and report it.
@@ -141,12 +148,12 @@ Two changes ship together as 0.114.0.
 ## 7. Acceptance
 
 Automated, all green:
-1. `tests/test-mod-readonly.sh` passes with W1 and W2. All existing planted cases still fail. The new planted cases 1–8 in §3 each fail on the lexer layer alone, and the new allowed forms pass.
+1. `tests/test-mod-readonly.sh` passes with W1 and W2. All existing planted cases still fail. The new planted cases 1–11 in §3 each fail on the lexer layer alone, and the new allowed forms pass.
 2. `tests/test-mod-plugin-test.sh` (`claude plugin test` on the plugin root) passes, with these register tests added:
    1. `/hierarchy-pane` behaviour and texts are unchanged (the existing tests at l.303–321 and l.406–414 pass unmodified).
    2. Band press. With a fixture that draws the band (for example `work`), the rendered AbovePrompt contains a Button keyed `ah-pane`. Pressing it writes `closed=false` before one `ui.open({ id:'ah-status', title:'Hierarchy' })`. With `placed=false` it toasts the not-placed text; with `placed=true` it toasts nothing. **How the press is driven depends on N3.**
    3. No Button in a member session (`member-session` fixture), none when `hasSurvey`, none when `bodyColumns < 40` (where the band text equals the 0.113.0 output for that width), and none when `bandLine` is null.
-   4. The status entry: omitted options → not shown; `true` → shown; `"true"` → shown; `false` → not shown.
+   4. The status entry: omitted options → not shown; `true` → shown; `false` → not shown. The string `"true"` is verified by N4(iii) only, because the harness rejects non-boolean options *(amended after review F5)*.
 3. The `view.ts` tests cover the reserved-width fitting: at `bodyColumns ≥ 40` the band text width is ≤ `bodyColumns − 9`.
 4. `claude plugin validate agent-hierarchy` lists exactly the same hooks as 0.113.0.
 
