@@ -220,14 +220,14 @@ while the hierarchy is off (`/hierarchy off`).
   `.claude/hierarchy/status.json` ([format](./docs/status-file.md)) and draws
   the line. It never sends a message, answers a prompt, or runs anything named
   in the file.
-- **Turning it off.** The `status_entry` option is on by default. Turn it off
-  with `/config`, or from a shell:
+- **Turning it on.** The entry is off by default: the `status_entry` option is
+  `false` until you set it. Turn it on with `/config`, or from a shell:
 
   ```
-  echo '{"status_entry":"false"}' | claude plugin configure ah@agent-tools --values-stdin
+  echo '{"status_entry":"true"}' | claude plugin configure ah@agent-tools --values-stdin
   ```
 
-  Restart Claude Code afterwards. Turn it off when claude-tui-line's `ah` item
+  Restart Claude Code afterwards. Leave it off when claude-tui-line's `ah` item
   already shows the same counts, for example. It is a user setting: project
   and local settings files can't set it, so it applies to you in every repo.
 - **"1 userConfig option not yet set".** A fresh install prints this once. It
@@ -246,7 +246,10 @@ the status entry. A member session sees none of them (more on that
 ### The band
 
 While a dispatch is out or a member is blocked, one line sits just above the
-prompt and names the thing most worth your attention:
+prompt and names the thing most worth your attention. It ends with a `[ Pane ]`
+button: click it, or press ctrl+x then tab and Enter, to open the hierarchy Pane,
+the same as `/hierarchy-pane`. The button is only there while the band is, and
+not on a very narrow terminal.
 
 ```
 architect is waiting on a prompt · answer it through the Orchestrator
@@ -340,7 +343,7 @@ The same sessions as the status entry: the Orchestrator, plain sessions, and
 on its own and no toasts, and there `/hierarchy-pane` opens nothing and replies
 `The hierarchy view is hidden in member sessions.`
 
-The `status_entry` option turns off only the `⚠ ah:` line. The band, the Pane
+The `status_entry` option turns on only the `⚠ ah:` line. The band, the Pane
 and the toasts have no switch of their own. Like the entry, they only read the
 status file: the mod opens its own Pane and shows toasts, and never sends a
 message, answers a prompt, or runs anything named in the file.
@@ -601,6 +604,7 @@ than pass.
 - **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
 - **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
 - **0.109.0** `/pipeline` decides safe questions for you and parks dangerous ones: [Decisions made for you](#decisions-made-for-you). Plan runs get a default branch. Issue runs can merge a PR for you, one approving click each, if you opt in: [Merging](#merging-only-if-you-opt-in).
+- **0.114.0** the band's `[ Pane ]` button opens the hierarchy Pane; the `⚠ ah:` status entry is now opt-in (`status_entry` defaults to off): [The band](#the-band).
 - **0.113.0** one team file per repo, whatever worktree you spawn from, and `disband`/`dismiss` verify the close and warn loudly; finished peer work is never left unseen (four report-back layers, including a dispatch watcher): [Finished work is never left unseen](#finished-work-is-never-left-unseen), [Team home and teardown](./docs/cli-tools.md#team-home-and-teardown).
 
 The installed version is in `.claude-plugin/plugin.json`. Each feature below

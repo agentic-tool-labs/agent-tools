@@ -1283,6 +1283,8 @@ The source is the 2.1.289 types file:
    and adds no rule. A new rule must close a class, not one instance.
    The class is named in the rule, as items 3–5 do.
 
+   *(Widened in 0.114.0 by spec 0073 §3 (W1, W2).)*
+
 **Timer and reload:** the engine drops the old environment's `every` timer
 on a hot reload (E8). The module adds no cancel or guard.
 
@@ -1533,6 +1535,7 @@ r3.15: this deny-list is replaced by §6.3's allow-list.
   - `on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => <Box><Text>x</Text></Box>)`;
   - `$.clock.every(2000, () => tick())`;
   - `/[\x00-\x1f\x7f-\x9f]/g`.
+- *(Widened in 0.114.0 by spec 0073 §3 (W1, W2).)*
 - **r3.17 planted cases.** Each must fail the lexer layer alone:
   - `extra(on)`, where `extra` registers `tool.check`;
   - the same helper placed in `mod/types/extra.ts` and imported as a
@@ -2306,7 +2309,7 @@ Every commit passes the full `ah` bash suite and
    - the `⚠ ah: …` line, whose glyph comes from the engine;
    - `status_entry`: on by default; turn it off with `/config` or
      `claude plugin configure`, at user scope only, because project and
-     local settings cannot set it;
+     local settings cannot set it; *(Superseded in 0.114.0 by spec 0073 §5: the entry is opt-in.)*
    - the fresh-install "not yet set" line is informational;
    - r3.16: running the bash suite needs the `claude` CLI on PATH,
      because the mod guard's validate net fails without it.
@@ -2366,7 +2369,7 @@ run. Step 5 stays at the end of P2b.
    - its text has no `ah · ` prefix;
    - control characters are stripped.
 6. `status_entry` set to `false` suppresses the entry; a missing value or
-   `true` does not. This is a view.ts test, plus a register test if
+   `true` does not. *(Superseded in 0.114.0 by spec 0073 §5: the entry is opt-in.)* This is a view.ts test, plus a register test if
    E14(a) allows one.
 7. The read-only guard passes. As of r3.16, that means:
    - every planted case in §6.6 fails the lexer layer on its own, and

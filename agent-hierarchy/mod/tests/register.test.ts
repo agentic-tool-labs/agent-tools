@@ -21,9 +21,10 @@ type World = {
   placed: boolean
   writes: { key: string; value: unknown }[]
   toasts: string[]
+  order: string[]
 }
 const world = (over: Partial<World> = {}): World => ({
-  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], ...over,
+  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], order: [], ...over,
 })
 
 // Answers every $ call the module makes, from `w`; nothing real is read.
@@ -43,8 +44,8 @@ const stage = (on: any, w: World) => {
   })
   on('ui.status', (_$: any, e: any) => { w.shown.push(e.text); return { value: undefined } })
   on('command.register', (_$: any, e: any) => { w.registered.push(e); return { value: undefined } })
-  on('ui.open', (_$: any, e: any) => { w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
-  on('state.set', async (_$: any, e: any, next: any) => { w.writes.push({ key: e.key, value: e.value }); return next(e) })
+  on('ui.open', (_$: any, e: any) => { w.order.push('open'); w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
+  on('state.set', async (_$: any, e: any, next: any) => { w.order.push(`set:${e.key}`); w.writes.push({ key: e.key, value: e.value }); return next(e) })
   on('ui.toast', (_$: any, e: any) => { w.toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } })
 }
 const writesOf = (w: World, key: string) => w.writes.filter((x) => x.key === key).map((x) => x.value)
@@ -63,7 +64,7 @@ const CLOSER: any = {
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`${surface}: session.start returns what next returned, and sets the entry from the doc`, async ($, on) => {
+  test(`${surface}: session.start returns what next returned, and sets the entry from the doc`, { options: { status_entry: true } }, async ($, on) => {
     const w = world()
     stage(on, w)
     mock.clock(on, { now: NOW })
@@ -71,7 +72,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(w.shown).toEqual(['1 live · 1 out'])
   })
 
-  test(`${surface}: the entry is set, then cleared when the file goes`, async ($, on) => {
+  test(`${surface}: the entry is set, then cleared when the file goes`, { options: { status_entry: true } }, async ($, on) => {
     const w = world()
     stage(on, w)
     const clock = mock.clock(on, { now: NOW })
@@ -100,7 +101,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(w.reads).toBe(0)
   })
 
-  test(`${surface}: the clock moves the entry along the timeline`, async ($, on) => {
+  test(`${surface}: the clock moves the entry along the timeline`, { options: { status_entry: true } }, async ($, on) => {
     const w = world()
     stage(on, w)
     const clock = mock.clock(on, { now: NOW })
@@ -109,7 +110,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(w.shown).toEqual(['1 live · 1 out', '1 live · 1 out · 1 overdue'])
   })
 
-  test(`${surface}: the file is read again only when its mtime changes`, async ($, on) => {
+  test(`${surface}: the file is read again only when its mtime changes`, { options: { status_entry: true } }, async ($, on) => {
     const w = world()
     stage(on, w)
     const clock = mock.clock(on, { now: NOW })
@@ -136,7 +137,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   notRead('a directory', { kind: 'dir' })
   notRead('an empty file', { size: 0 })
 
-  test(`${surface}: a regular non-empty file is shown`, async ($, on) => {
+  test(`${surface}: a regular non-empty file is shown`, { options: { status_entry: true } }, async ($, on) => {
     const w = world({ files: { [FILE]: { text: fixtures.work, mtimeMs: 1, kind: 'file', isLink: false } } })
     stage(on, w)
     mock.clock(on, { now: NOW })
@@ -154,7 +155,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(w.shown).toEqual([undefined])
   })
 
-  test(`${surface}: a cwd change finds the other checkout's file`, async ($, on) => {
+  test(`${surface}: a cwd change finds the other checkout's file`, { options: { status_entry: true } }, async ($, on) => {
     const other = '/other/repo/.claude/hierarchy/status.json'
     const w = world({ git: [REPO, '/other/repo'] })
     w.files[other] = { text: fixtures.idle, mtimeMs: 5 }
@@ -176,7 +177,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(w.shown).toEqual([undefined])
   })
 
-  test(`${surface}: a session whose id becomes a member's hides the entry at the next tick`, async ($, on) => {
+  test(`${surface}: a session whose id becomes a member's hides the entry at the next tick`, { options: { status_entry: true } }, async ($, on) => {
     const w = world({ files: { [FILE]: { text: fixtures['member-session'], mtimeMs: 1 } } })
     stage(on, w)
     const clock = mock.clock(on, { now: NOW })
@@ -187,6 +188,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 
   test(`${surface}: status_entry false clears the entry at once, so a reload with it off leaves no old line`, { options: { status_entry: false } }, async ($, on) => {
+    const w = world()
+    stage(on, w)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(w.shown).toEqual([undefined])
+  })
+
+  test(`${surface}: with no options the entry is off`, async ($, on) => {
     const w = world()
     stage(on, w)
     mock.clock(on, { now: NOW })
@@ -211,13 +220,73 @@ for (const surface of ['terminal', 'desktop'] as const) {
       mock.clock(on, { now: Date.parse(v.now) })
       await start($, w, surface)
       const band = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })).drawn()
-      expect(walk(band)).toEqual([])
+      expect(walk(band, ['Button'])).toEqual([])
       expect(texts(band)).toEqual(v.band === null ? [CORE_LINE] : [{ text: v.band.text, props: TONE[v.band.tone] }, CORE_LINE])
       const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
       expect(walk(pane)).toEqual([])
       expect(texts(pane)).toEqual(v.pane.map((r) => ({ text: r.text, props: TONE[r.tone] })))
     })
   }
+
+  test(`${surface}: the band draws a Pane button after its text, and pressing it clears the closed mark before one open`, async ($, on) => {
+    const w = world()
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    const ui = await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
+    expect(buttons(await ui.drawn()).length).toBe(1)
+    const before = w.opens.length
+    w.order.length = 0
+    await ui.press({ key: 'ah-pane' })
+    expect(w.order).toEqual(['set:closed', 'open'])
+    expect(writesOf(w, 'closed')).toEqual([false])
+    expect(w.opens.slice(before)).toEqual([{ id: 'ah-status', title: 'Hierarchy' }])
+    expect(w.toasts).toEqual([])
+  })
+
+  test(`${surface}: a press that places no Pane toasts the not-placed text`, async ($, on) => {
+    const w = world({ placed: false })
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    const ui = await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
+    await ui.press({ key: 'ah-pane' })
+    expect(w.toasts).toEqual(['The hierarchy Pane is open, but this session shows no panes.'])
+  })
+
+  const draw = async ($: any, surface: string, props: any) => buttons(await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props, viewport: VIEWPORT })).drawn())
+
+  test(`${surface}: the band draws no button in a member session`, async ($, on) => {
+    const w = world({ id: 'sess-demo-reviewer', files: { [FILE]: { text: fixtures['member-session'], mtimeMs: 1 } } })
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(await draw($, surface, bandProps())).toEqual([])
+  })
+
+  test(`${surface}: the band draws no button during a survey or below 40 columns, and below 40 its text is unfitted`, async ($, on) => {
+    const w = world()
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(await draw($, surface, bandProps({ hasSurvey: true }))).toEqual([])
+    expect(await draw($, surface, bandProps({ bodyColumns: 39 }))).toEqual([])
+    const narrow = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps({ bodyColumns: 39 }), viewport: VIEWPORT })).drawn()
+    expect(texts(narrow)[0].text).toBe('1 out · architect 1:00 of 5m')
+  })
+
+  test(`${surface}: the band draws no button when there is no band`, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(await draw($, surface, bandProps())).toEqual([])
+  })
 
   test(`${surface}: the band yields to the chain during a survey`, async ($, on) => {
     const w = world({ files: { [FILE]: { text: fixtures.bad, mtimeMs: 1 } } })
@@ -551,11 +620,16 @@ function texts(n: any): { text: string; props: Record<string, unknown> }[] {
   if (n.type === 'Text') return [{ text: (n.children ?? []).join(''), props: n.props ?? {} }]
   return (n.children ?? []).flatMap(texts)
 }
+// Every Button in the tree.
+function buttons(n: any): any[] {
+  if (typeof n !== 'object' || n === null) return []
+  return [...(n.type === 'Button' ? [n] : []), ...(n.children ?? []).flatMap(buttons)]
+}
 // What a drawn tree holds that a status view may not: an element other than Box, Text or core's engine, or a
 // node carrying a press, client or raster key.
-function walk(n: any): string[] {
+function walk(n: any, extra: string[] = []): string[] {
   if (typeof n !== 'object' || n === null) return []
-  const found = ['Box', 'Text', 'engine'].includes(n.type) ? [] : [`element ${n.type}`]
-  for (const key of ['press', 'client', 'raster']) if (key in n) found.push(`${n.type} has ${key}`)
-  return [...found, ...(n.children ?? []).flatMap(walk)]
+  const found = ['Box', 'Text', 'engine', ...extra].includes(n.type) ? [] : [`element ${n.type}`]
+  for (const key of ['press', 'client', 'raster']) if (key in n && !extra.includes(n.type)) found.push(`${n.type} has ${key}`)
+  return [...found, ...(n.children ?? []).flatMap((c: any) => walk(c, extra))]
 }

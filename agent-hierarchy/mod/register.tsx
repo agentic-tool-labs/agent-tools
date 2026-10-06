@@ -1,14 +1,25 @@
 import type { Register } from 'claude-code'
-import { bandLine, keepSeen, paneRows, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
+import { bandLine, keepSeen, PANE_BUTTON, paneRows, parseDoc, SIZE_CAP, statusText, viewModel, type Doc } from './view.ts'
 
 // The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
 // any tone not named here draws dim.
 const toneProps = (tone: string) =>
   tone === 'bad' ? { color: 'warning', bold: true } : tone === 'warn' ? { color: 'warning' } : tone === 'work' ? {} : { dimColor: true }
 
+// The one way the Pane opens on the person's request, for the command and the band's button. A member session
+// sees no hierarchy view, so nothing is opened there.
+const openPane = async ($: any, member: boolean) => {
+  if (member) return { text: 'The hierarchy view is hidden in member sessions.', placed: false }
+  await $.state.set({ plugin: 'ah', key: 'closed' }, false)
+  const opened = await $.ui.open({ id: 'ah-status', title: 'Hierarchy' })
+  return opened.isPlaced
+    ? { text: 'Opened the hierarchy Pane.', placed: true }
+    : { text: 'The hierarchy Pane is open, but this session shows no panes.', placed: false }
+}
+
 export const register: Register = (on, options) => {
-  // Only an explicit false turns the entry off; a missing option counts as on.
-  const statusEntry = options?.status_entry !== false
+  // Only an explicit true turns the entry on; a missing or any other value counts as off.
+  const statusEntry = options?.status_entry === true || options?.status_entry === 'true'
   // Whether the last doc read lists this session, set by every tick. Nothing is drawn from it, and a reload
   // runs session.start again, whose first tick sets it before any command can arrive.
   let member = false
@@ -99,12 +110,31 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { value } = await $.state.get({ plugin: 'ah', key: 'view' })
-    const line = bandLine(value ?? null, e.props.bodyColumns)
+    const wide = e.props.bodyColumns >= PANE_BUTTON.minColumns
+    const line = bandLine(value ?? null, wide ? e.props.bodyColumns - PANE_BUTTON.width - PANE_BUTTON.gap : e.props.bodyColumns)
     if (line === null) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
-        <Text {...toneProps(line.tone)}>{line.text}</Text>
+        {wide ? (
+          <Box flexDirection="row">
+            <Text {...toneProps(line.tone)}>{line.text}</Text>
+            <Box marginLeft={PANE_BUTTON.gap}>
+              <Button
+                key="ah-pane"
+                label={PANE_BUTTON.label}
+                onPress={async () => {
+                  try {
+                    const r = await openPane($, member)
+                    if (!r.placed && !member) await $.ui.toast(r.text)
+                  } catch {}
+                }}
+              />
+            </Box>
+          </Box>
+        ) : (
+          <Text {...toneProps(line.tone)}>{line.text}</Text>
+        )}
         {await next(e)}
       </Box>
     )
@@ -113,10 +143,7 @@ export const register: Register = (on, options) => {
   // Asked for, so the engine places it at any width; not placed means this session's surfaces show no panes.
   // Answers with text alone and never runs another command. A member session sees no hierarchy view at all.
   on('command.run', { command: 'hierarchy-pane' }, async ($) => {
-    if (member) return { text: 'The hierarchy view is hidden in member sessions.' }
-    await $.state.set({ plugin: 'ah', key: 'closed' }, false)
-    const opened = await $.ui.open({ id: 'ah-status', title: 'Hierarchy' })
-    return { text: opened.isPlaced ? 'Opened the hierarchy Pane.' : 'The hierarchy Pane is open, but this session shows no panes.' }
+    return { text: (await openPane($, member)).text }
   })
 
   // A close by the person keeps the Pane closed for the session. Always passes the close on: answering without

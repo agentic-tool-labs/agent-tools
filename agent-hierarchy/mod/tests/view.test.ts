@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
-import { bandLine, cut, keepSeen, paneRows, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
+import { bandLine, cut, PANE_BUTTON, keepSeen, paneRows, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
 const ms = (iso: string) => Date.parse(iso)
@@ -130,6 +130,15 @@ const viewOf = (teams: unknown[], entry: Record<string, unknown> = {}, now = T0)
   viewModel(parseDoc(docText({ teams }, { out: 1, blocked: 0, ...entry })), ms(now), 'sess-orch')
 const band = (teams: unknown[], entry: Record<string, unknown> = {}, now = T0, columns = 200) => bandLine(viewOf(teams, entry, now), columns)
 const rows = (teams: unknown[], columns = 120, now = T0) => paneRows(viewOf(teams, {}, now), columns).map((r) => r.text)
+
+test('the Pane button reserves its drawn `[ Pane ]` width and a gap, so the fitted band text never overlaps it', async () => {
+  expect(PANE_BUTTON.width).toBe(`[ ${PANE_BUTTON.label} ]`.length)
+  const two = [team({ dispatches: [dispatch({ id: 'a', label: 'reviewer' }, 30000), dispatch({ id: 'b' }, 90000)] })]
+  for (let columns = PANE_BUTTON.minColumns; columns <= 120; columns++) {
+    const line = band(two, { out: 2 }, T0, columns - PANE_BUTTON.width - PANE_BUTTON.gap)
+    expect([...line!.text].length).toBeLessThanOrEqual(columns - 9)
+  }
+})
 
 test('band, working: out count, m:ss of T, oldest first, further items only while the line fits', async () => {
   const two = [team({ dispatches: [dispatch({ id: 'a', label: 'reviewer' }, 30000), dispatch({ id: 'b' }, 90000)] })]

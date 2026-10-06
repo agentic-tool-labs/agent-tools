@@ -5,6 +5,24 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.114.0]
+
+The band gets a button that opens the Pane, and the status entry becomes opt-in.
+
+### Added
+- The band's `[ Pane ]` button. It does what `/hierarchy-pane` does, and is drawn
+  only while the band is (never in a member session, during a survey, or below 40
+  columns). Click it, or ctrl+x tab then Enter.
+
+### Changed
+- The `⚠ ah:` status entry is now opt-in: `status_entry` defaults to `false`.
+  **Upgrade note:** if you relied on the `⚠ ah:` line and never set
+  `status_entry`, it disappears; set it to true to keep it. A value you stored
+  is kept.
+- The mod guard now lets the band hook draw a Button with an inline `onPress`, and
+  lets `$` be passed to one kind of callee, a once-declared `$`-first helper in
+  `register.tsx` (spec 0073 §3).
+
 ## [0.113.0]
 
 One team file per repo, teardown that verifies, and finished peer work that is
