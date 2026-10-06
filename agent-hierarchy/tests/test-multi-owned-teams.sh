@@ -272,7 +272,7 @@ printf '{"type":"dispatch","session_id":"m11","request_id":"%s","to":"architect"
 hook_as_owner stop-orchestrator-liveness.mjs "{\"session_id\":\"m11\",\"cwd\":\"$PROJ\"}"
 check "M11 stop-orchestrator-liveness counts an open exchange that exists only in foo" '[[ "$OUT" == *"\"decision\":\"block\""* ]] && [[ "$OUT" == *"$OWED_ID"* ]]'
 # A brief to foo-reviewer whose request is for the architect: resolved against foo, it is the wrong to:.
-hook_as_owner pretooluse-msg-gate.mjs "$(payload m11b SendMessage "{\"to\":\"foo-reviewer\",\"message\":\"$BRIEF\\n[hierarchy-msg $OWED]\"}")"
+hook_as_owner pretooluse-msg-gate.mjs "$(payload m11b SendMessage "{\"to\":\"foo-reviewer\",\"notify_when_idle\":true,\"message\":\"$BRIEF\\n[hierarchy-msg $OWED]\"}")"
 check "M11 msg-gate resolves a foo- name against foo's config" '[[ "$OUT" == *"wrong to:"* ]]'
 
 # ================================================================ M12 the default team's name

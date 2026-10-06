@@ -34,7 +34,7 @@
  * `--team` there.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { chainRoles, mainHierarchyDir, resolveConfig, ROUTE_VALUES, teamPrefix, validateTeamAlias } from "./lib-config.mjs";
@@ -57,7 +57,7 @@ import {
   SWEEP_DAYS,
 } from "./lib-hier.mjs";
 import { appendDecision, decisionLogPath, decisionSummary, knownRun, openRunAnchor, readDecisionInput, readDecisions } from "./lib-decisions.mjs";
-import { DEFAULT_TEAM_ARG, memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamArgName, teamListText, teamsWithMember } from "./lib-roster.mjs";
+import { DEFAULT_TEAM_ARG, memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamArgName, teamFileHome, teamListText, teamMemberByName, teamPath, teamsWithMember } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all", "summary"]);
 
@@ -169,6 +169,13 @@ function resolveTeamArg() {
 /** The hierarchy dir holding the resolved team's file when it is not this cwd's — a worktree
     peer's team belongs to the main checkout. Null means `hierarchyDir(cwd)`. */
 let teamHome = null;
+const samePath = (a, b) => {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return a === b;
+  }
+};
 /** `--team @default` was given. */
 let defaultTeamExplicit = false;
 /** The teams `list` and `roster` show when this session owns more than one and names none; null otherwise. */
@@ -197,11 +204,21 @@ try {
       // worktree's own pool is one the recipient's gates and the team file never see.
       const toNameArg = typeof opts["to-name"] === "string" ? opts["to-name"] : null;
       let rehomed = null;
-      if (type === "request" && toNameArg && !resolveMemberTeam(dir, toNameArg).found) {
+      if (type === "request" && toNameArg) {
+        // The recipient reads the pool of the checkout it runs in: its own recorded root, else the
+        // home its team file sits in (a legacy row records no root).
+        const found = resolveMemberTeam(dir, toNameArg);
         const main = mainHierarchyDir(cwd);
-        if (main && resolveMemberTeam(main, toNameArg).found) {
-          rehomed = { local: dir, target: main };
-          dir = main;
+        let target = null;
+        if (found.found) {
+          const member = teamMemberByName(dir, toNameArg, found.team);
+          target = member && member.expected_root ? hierarchyDir(member.expected_root) : teamFileHome(teamPath(dir, found.team));
+        } else if (main && resolveMemberTeam(main, toNameArg).found) {
+          target = main;
+        }
+        if (target && !samePath(target, dir)) {
+          rehomed = { local: dir, target };
+          dir = target;
         }
       }
       if (opts.req === true) fail("--req needs the request file's absolute path");

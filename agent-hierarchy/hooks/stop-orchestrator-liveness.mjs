@@ -35,8 +35,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { hierarchyDir, isPaneMember, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
-import { appendGate, CHECKIN_CADENCE, etaOf, openExchanges, readGates, readMsgFile, thresholdFor } from "./lib-hier.mjs";
-import { dispatchOrigin, dispatchRecordsFor, pendingFor } from "./lib-peer.mjs";
+import { appendGate, CHECKIN_CADENCE, etaOf, exchangeAgeSec, listExchanges, openExchanges, readGates, readMsgFile, responseLanded, thresholdFor } from "./lib-hier.mjs";
+import { dueForNudge, watcherCall } from "./lib-liveness.mjs";
+import { appendReportRecord, dispatchOrigin, dispatchRecordsFor, latestDispatchRows, pendingFor, reportShown, watcherAlive } from "./lib-peer.mjs";
 import { readTeam, teamMemberByName } from "./lib-roster.mjs";
 
 const ROSTER = join(dirname(fileURLToPath(import.meta.url)), "roster.mjs");
@@ -59,7 +60,8 @@ function block(reason) {
  * separate check needed.
  */
 function outstandingDispatches(dir, resolved, sessionId, now) {
-  const myDispatches = new Map(dispatchRecordsFor(sessionId).map((r) => [r.request_id, r]));
+  // Rows that carry no `path` predate the field; they keep the scan of this pool.
+  const myDispatches = new Map(latestDispatchRows(sessionId).filter((r) => !r.path).map((r) => [r.request_id, r]));
   const candidates = [];
   // A session that owns several live teams owes check-ins on each team's exchanges.
   const teams = resolved.ownedTeams && resolved.ownedTeams.length > 1 ? resolved.ownedTeams : [resolved.team];
@@ -91,33 +93,30 @@ function paneMemberName(dir, fm, role) {
 }
 
 /**
- * A dispatch is due for a check-in when it has never been nudged, or when the
- * gap CHECKIN_CADENCE gives for its next check-in has passed since its last
- * nudge: half a threshold before the second, a full one before each later one.
- *
- * This replaces a flat two-nudges-ever cap. That cap meant an Orchestrator
- * stopped being asked about a dispatch after the second check-in no matter how
- * long the peer had been silent — a peer that died on minute three was never
- * mentioned again, which is the opposite of what a liveness check is for. The
- * interval keeps asking for as long as the exchange stays open, while spacing
- * the asks so an Orchestrator mid-conversation is not blocked every turn.
- *
- * An unparseable or absent `ts` counts as due — nudging one extra time is the
- * harmless direction.
+ * Dispatches that record where their request lives: looked up in that request's own msgs dir, so
+ * a request written to another checkout's pool is still seen. Returns the open ones past their eta
+ * threshold, and the exchanges whose response file exists but was never shown to this session.
  */
-function dueForNudge(gates, sessionId, item, now) {
-  let lastTs = 0;
-  let count = 0;
-  for (const r of gates) {
-    if (r.type !== "liveness-nudge" || r.session_id !== sessionId || r.request_id !== item.id) continue;
-    const t = Date.parse(r.ts);
-    if (!Number.isFinite(t)) return true;
-    count++;
-    if (t > lastTs) lastTs = t;
+function pathDispatches(sessionId, now) {
+  const outstanding = [];
+  const landed = [];
+  for (const row of latestDispatchRows(sessionId)) {
+    if (!row.path) continue;
+    const e = listExchanges(dirname(dirname(row.path))).find((x) => x.id === row.request_id);
+    if (!e) continue;
+    const parsed = readMsgFile(e.request.path);
+    const fm = parsed && parsed.fm;
+    if (!fm || fm.from !== "orchestrator") continue;
+    if (!e.open) {
+      if (responseLanded(e.response.path, now) && !reportShown(sessionId, e.id)) landed.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", responsePath: e.response.path });
+      continue;
+    }
+    const ageSec = exchangeAgeSec(e, now);
+    const eta = etaOf(fm.eta);
+    if (ageSec < thresholdFor(eta) * CHECKIN_CADENCE[0]) continue;
+    outstanding.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta });
   }
-  if (count === 0) return true;
-  const gap = CHECKIN_CADENCE[Math.min(count, CHECKIN_CADENCE.length - 1)];
-  return now - lastTs >= thresholdFor(item.eta) * gap * 1000;
+  return { outstanding, landed };
 }
 
 function fmtAge(sec) {
@@ -140,6 +139,29 @@ function checkInReason(items, cwd) {
     "You will be asked again about anything still open after half an eta interval the first time, then every eta interval. To stop being asked, close the exchange: get the response, or park the dispatch by telling the user it is abandoned and writing its response file yourself.",
   ];
   return lines.join("\n");
+}
+
+/**
+ * A reminder to start the dispatch watcher, when the session has a dispatch still being watched
+ * and no live watcher. Once per (session, latest dispatch id), so one dispatch costs one block.
+ */
+function watcherNudge(sessionId, cwd, gates) {
+  const sent = dispatchRecordsFor(sessionId).filter((r) => r.path);
+  if (sent.length === 0) return null;
+  const latest = sent[sent.length - 1];
+  const watchable = latestDispatchRows(sessionId).some(
+    (r) => r.path && !reportShown(sessionId, r.request_id) && listExchanges(dirname(dirname(r.path))).some((x) => x.id === r.request_id)
+  );
+  if (!watchable || watcherAlive(sessionId)) return null;
+  if (gates.some((g) => g.type === "watcher-nudge" && g.session_id === sessionId && g.request_id === latest.request_id)) return null;
+  return { id: latest.request_id, text: `ah: no dispatch watcher is running for your open dispatches; start it now: ${watcherCall(sessionId, cwd)}` };
+}
+
+function landedReason(items) {
+  return [
+    "ah: a peer wrote its report but never sent it to you — read it now:",
+    ...items.map((it) => `- ${it.role} "${it.to_name}", request ${it.id}: ${it.responsePath}`),
+  ].join("\n");
 }
 
 try {
@@ -166,19 +188,29 @@ try {
 
   const dir = hierarchyDir(cwd);
   const now = Date.now();
-  const outstanding = outstandingDispatches(dir, resolved, sessionId, now);
-  if (outstanding.length === 0) allow();
-
+  const byPath = pathDispatches(sessionId, now);
+  const outstanding = [...outstandingDispatches(dir, resolved, sessionId, now), ...byPath.outstanding];
   const gates = readGates(dir);
+  const wn = watcherNudge(sessionId, cwd, gates);
+  if (outstanding.length === 0 && byPath.landed.length === 0 && !wn) allow();
+
   const toBlockOn = [];
   for (const item of outstanding) {
     if (!dueForNudge(gates, sessionId, item, now)) continue;
     appendGate(dir, { type: "liveness-nudge", session_id: sessionId, request_id: item.id });
     toBlockOn.push(item);
   }
-  if (toBlockOn.length === 0) allow(); // nothing outstanding is due for a check-in yet
+  if (toBlockOn.length === 0 && byPath.landed.length === 0 && !wn) allow(); // nothing is due yet
 
-  block(checkInReason(toBlockOn, cwd));
+  for (const it of byPath.landed) appendReportRecord("surfaced", sessionId, it.id);
+  const parts = [];
+  if (byPath.landed.length) parts.push(landedReason(byPath.landed));
+  if (toBlockOn.length) parts.push(checkInReason(toBlockOn, cwd));
+  if (wn) {
+    appendGate(dir, { type: "watcher-nudge", session_id: sessionId, request_id: wn.id });
+    parts.push(wn.text);
+  }
+  block(parts.join("\n\n"));
 } catch (err) {
   logHookError("stop-orchestrator-liveness.mjs", err);
   allow();

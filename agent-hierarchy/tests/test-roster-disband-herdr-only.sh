@@ -48,6 +48,10 @@ if (args[0] === "agent" && args[1] === "list") {
   process.exit(0);
 }
 if (args[0] === "pane" && args[1] === "close") {
+  try {
+    const state = process.env.FAKE_HERDR_STATE;
+    fs.writeFileSync(state, JSON.stringify(JSON.parse(fs.readFileSync(state, "utf8")).filter((a) => a.pane_id !== args[2])));
+  } catch {}
   console.log(JSON.stringify({ id: "cli:pane:close", result: { ok: true } }));
   process.exit(0);
 }
@@ -209,6 +213,7 @@ TOKEN6=$(plan_token)
 run dismiss myrepo-architect --close --confirm --plan-token "$TOKEN6"
 check "T6: dismiss --close closes exactly P7" \
   '[ "$RC" -eq 0 ] && grep -q "\[\"pane\",\"close\",\"P7\"\]" "$INVOKED_LOG"'
+agents "$(agent P7 myrepo-architect myrepo-architect "$PROJ" sid-architect-0001)"
 run dismiss P7
 check "T6: dismiss <pane_id> resolves the same agent" \
   '[ "$RC" -eq 0 ] && [ "$(jq_ "o.member.name")" = "myrepo-architect" ]'

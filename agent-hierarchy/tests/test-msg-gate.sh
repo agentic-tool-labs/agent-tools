@@ -35,7 +35,7 @@ msg() { OUT=$(HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$MSG" --cwd "$PRO
 agent_payload() { # <subagent_type> <prompt> [agent_id]
   node -e 'const[t,p,a]=process.argv.slice(1);const o={session_id:"s1",cwd:process.env.PROJ,tool_name:"Agent",tool_input:{subagent_type:t,prompt:p}};if(a)o.agent_id=a;process.stdout.write(JSON.stringify(o));' "$1" "$2" "$3"; }
 send_payload() { # <to> <message>
-  node -e 'const[t,m]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:"s1",cwd:process.env.PROJ,tool_name:"SendMessage",tool_input:{to:t,message:m}}));' "$1" "$2"; }
+  node -e 'const[t,m]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:"s1",cwd:process.env.PROJ,tool_name:"SendMessage",tool_input:{to:t,message:m,notify_when_idle:true}}));' "$1" "$2"; }
 
 gate() { OUT=$(PROJ="$PROJ" HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$GATE" 2>&1); RC=$?; }
 agent() { OUT=$(PROJ="$PROJ" agent_payload "$1" "$2" "$3" | HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$GATE" 2>&1); RC=$?; }

@@ -16,8 +16,8 @@
  */
 
 import { chainRoles, classProp, isSubagent, lookupRole, logHookError, MSG_CLI, readHookInput, resolveConfig, resolvedPeerTargets, resolveHierarchyRole, teamPrefix } from "./lib-config.mjs";
-import { hierarchyDir, validateRequestToken } from "./lib-hier.mjs";
-import { parseSentinel, stripRef } from "./lib-peer.mjs";
+import { extractMsgToken, hierarchyDir, parseMsgFilename, validateRequestToken } from "./lib-hier.mjs";
+import { appendPeerRecord, parseSentinel, readPeerRecords, stripRef } from "./lib-peer.mjs";
 
 function decide(decision, reason, systemMessage) {
   if (decision) {
@@ -41,6 +41,22 @@ function denyReason(role, why) {
   ].join("\n");
 }
 
+const NOTIFY_REASON = (id) =>
+  `ah: dispatch with \`notify_when_idle: true\`, so that a peer going idle wakes you even if it never reports. Re-send this exact SendMessage with \`notify_when_idle: true\` added. If the tool rejects that field for this target, re-send without it; request ${id} will not be asked about again.`;
+
+/** A request dispatch to a peer carries `notify_when_idle: true`; denied once per (session, request id), then it passes either way. */
+function denyWithoutIdleNotice(input, toolInput) {
+  const sessionId = typeof input.session_id === "string" ? input.session_id : "";
+  const to = typeof toolInput.to === "string" ? stripRef(toolInput.to.trim()) : "";
+  if (!sessionId || !to || to === "main" || toolInput.notify_when_idle === true) return;
+  const path = extractMsgToken(typeof toolInput.message === "string" ? toolInput.message : "");
+  const meta = path && path.endsWith("--request.md") ? parseMsgFilename(path) : null;
+  if (!meta || meta.type !== "request") return;
+  if (readPeerRecords().some((r) => r && r.type === "notify-deny" && r.session_id === sessionId && r.request_id === meta.id)) return;
+  appendPeerRecord({ type: "notify-deny", session_id: sessionId, request_id: meta.id, ts: new Date().toISOString() });
+  decide("deny", NOTIFY_REASON(meta.id));
+}
+
 try {
   const input = await readHookInput();
   if (isSubagent(input)) decide(null);
@@ -61,6 +77,8 @@ try {
 
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+
+  if (isSend) denyWithoutIdleNotice(input, toolInput);
 
   let role = null;
   let text = "";

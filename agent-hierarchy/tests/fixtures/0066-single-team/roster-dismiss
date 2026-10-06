@@ -22,6 +22,17 @@
       "prefix": "foo"
     }
   },
+  "expected": 0,
+  "strays": [],
+  "not_closable": [
+    {
+      "name": "foo-reviewer",
+      "reason": "no pane"
+    }
+  ],
+  "warnings": [
+    "W8: 1 member cannot be closed from here, because they have no pane: foo-reviewer. Close them by hand."
+  ],
   "team_id": "T-foo",
   "remaining": [
     "foo-architect",

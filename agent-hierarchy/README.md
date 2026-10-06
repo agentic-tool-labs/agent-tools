@@ -436,6 +436,71 @@ switches on for a turn delivered by a peer (a brief, a ping, or any other
 wrapped message), so chatting directly with a peer you've tasked doesn't
 trigger a nudge or use one up.
 
+### Finished work is never left unseen
+
+Four layers, each enough on its own to surface a report that was written but
+never sent. Finished work stays unseen only if all four fail.
+
+**L1, the peer cannot go idle holding an unsent report.** A peer arms its
+owed reply when a delivered brief's `[hierarchy-msg <path>]` token is the
+first thing on the first line, as before, **or** appears anywhere in the
+wrapped body, provided the path ends `--request.md`, exists, and its
+frontmatter `to` is the receiving session's own role. The role is the one
+the session started as (or the one persisted at `SessionStart`), so a quoted
+brief addressed to another role arms nothing. Once armed, the existing Stop
+block applies: at most twice per obligation, then released.
+
+**L2, the Orchestrator's Stop sees every dispatch.** Each dispatch is
+recorded with the request's path and the address it was sent to, so
+liveness looks in that request's own message pool, not only the current
+cwd's. When an exchange has a response with authored content, is at least
+120 s old, and the Orchestrator never saw it arrive, the next Stop blocks
+once with the response path: "the peer wrote this report but never sent it
+to you; read it now". One block per request, ever.
+
+**L3, an idle peer wakes an idle Orchestrator.** A `SendMessage` from an
+Orchestrator that carries a request token must set `notify_when_idle: true`;
+the first send without it is denied once with the exact fix (re-send with the
+flag, or without it if the target rejects it), then passes. When the idle
+notice arrives, ah injects what to do: the response path if the report landed
+unsent, or "may be waiting on its own background work; the dispatch watcher
+checks in at `<time>`". An unrecognised notice gets a line telling the
+Orchestrator to call `ListAgents`. A repeat of the same notice is ignored.
+The handler never queries the peer and never asks to re-subscribe, which
+would fire again at once.
+
+**L4, the dispatch watcher.** An idle Orchestrator also gets a timer. After
+the first dispatch the Orchestrator starts one background process:
+
+```
+Bash, run_in_background: true, description: "ah dispatch watcher",
+command: node "<ah root>/hooks/dispatch-watcher.mjs" --session <session id> --cwd <cwd>
+```
+
+A PostToolUse hint after the dispatch gives the exact call, and the
+Orchestrator's Stop blocks once per latest dispatch if none is running. One
+process per session; a second start exits at once ("already running"). It
+polls every 15 s and exits with code 3 to wake the session, when:
+
+- **LANDED:** a response was written, is 120 s old, and was never read:
+  the response path is injected.
+- **CHECK-IN:** a dispatch has no report after its eta (small 5 min, medium
+  10, large 20; counted from the dispatch or the peer's last message): the
+  Orchestrator is told to `ListAgents` and send one status query.
+- **SILENT:** no report and no reply half an eta after the check-in: the
+  Orchestrator is told to tell you.
+
+A peer that replies to the status query restarts the clock. The events reach
+the Orchestrator from the report-back store on its next prompt, never from a
+path named in the prompt. Every event ends with the call to restart the
+watcher. It exits on its own when its session is gone or after 12 h. It never
+blocks; at most three wakes per request per silence window.
+
+Launching a member also sets `AH_EXPECTED_ROOT` to the directory it starts in
+(see [docs/team-file.md](./docs/team-file.md)). Teams and teardown, including
+verified close and the warnings, are in
+[docs/cli-tools.md](./docs/cli-tools.md#team-home-and-teardown).
+
 ## Message files, roster, tier rule
 
 Three mechanisms, added in 0.29.0, move traffic between agents out of context
@@ -536,6 +601,7 @@ than pass.
 - **0.108.0** several owned teams: one session can own more than one team, and one sentence can create them.
 - **0.108.5** config safety: write commands refuse a config file that won't parse instead of replacing it; a missing roster selection now refuses. Upgrade notes and the full list: [CHANGELOG.md](./CHANGELOG.md).
 - **0.109.0** `/pipeline` decides safe questions for you and parks dangerous ones: [Decisions made for you](#decisions-made-for-you). Plan runs get a default branch. Issue runs can merge a PR for you, one approving click each, if you opt in: [Merging](#merging-only-if-you-opt-in).
+- **0.113.0** one team file per repo, whatever worktree you spawn from, and `disband`/`dismiss` verify the close and warn loudly; finished peer work is never left unseen (four report-back layers, including a dispatch watcher): [Finished work is never left unseen](#finished-work-is-never-left-unseen), [Team home and teardown](./docs/cli-tools.md#team-home-and-teardown).
 
 The installed version is in `.claude-plugin/plugin.json`. Each feature below
 is complete enough to use; the linked page has the detail.

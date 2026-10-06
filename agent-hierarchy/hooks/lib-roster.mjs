@@ -19,7 +19,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 
 import { homedir } from "node:os";
 
-import { checkoutRoot, CLASSES, declaredTier, isTeamAliasShape, isValidTeamAlias, KIND_DEFAULT, KIND_RE, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
+import { checkoutRoot, CLASSES, declaredTier, isTeamAliasShape, isValidTeamAlias, KIND_DEFAULT, KIND_RE, mainHierarchyDir, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
 import { statusChanged } from "./lib-status.mjs";
 
 // Spec 0043 §1.1/§1.5: `kind`/`route`-shape helpers are DEFINED in lib-config.mjs (the leaf) and
@@ -91,8 +91,31 @@ export const AUTO_MODE_VALUES = ["auto", "acceptEdits", "plan", "dontAsk", "manu
 export const ON_MISSING_VALUES = ["auto"];
 export const ON_MISSING_DEFAULT = "auto";
 
-/** `team.json` for the default team, or `teams/<team>.json` for a named one (spec 0011 §3). */
-export const teamPath = (dir, team = null) => (team ? join(dir, "teams", `${team}.json`) : join(dir, "team.json"));
+/**
+ * The team home of a hierarchy pool dir: the main checkout's hierarchy dir when `dir` is exactly a
+ * linked worktree's `<root>/.claude/hierarchy`, else `dir` itself. Idempotent, so a caller that
+ * already holds a home (from `envTeamFile`) stays correct. Every team-file primitive below applies
+ * it, which is what keeps one team's record in one place however many checkouts its members run in.
+ */
+export function teamHomeDir(dir) {
+  if (typeof dir !== "string" || basename(dir) !== "hierarchy" || basename(dirname(dir)) !== ".claude") return dir;
+  return mainHierarchyDir(dirname(dirname(dir))) || dir;
+}
+
+const rawTeamPath = (dir, team) => (team ? join(dir, "teams", `${team}.json`) : join(dir, "team.json"));
+
+/** `team.json` for the default team, or `teams/<team>.json` for a named one (spec 0011 §3), in the team home.
+    A team that exists only in the worktree pool (recorded before the home existed) stays there. */
+export function teamPath(dir, team = null) {
+  const home = teamHomeDir(dir);
+  const homePath = rawTeamPath(home, team);
+  if (home === dir || existsSync(homePath)) return homePath;
+  const legacy = rawTeamPath(dir, team);
+  return existsSync(legacy) ? legacy : homePath;
+}
+
+/** The pool's own copy of a team file, ignoring the home: the legacy copy teardown reads beside the home's. */
+export const poolTeamPath = rawTeamPath;
 
 /** The hierarchy dir a team file path sits in — the inverse of `teamPath` — or null when the path is not shaped like one. */
 export const teamFileHome = (p) => (basename(p) === "team.json" ? dirname(p) : basename(dirname(p)) === "teams" ? dirname(dirname(p)) : null);
@@ -778,7 +801,11 @@ export function validateRosterBlock(roster, resolved = null) {
 
 /** The active Team for this hierarchy dir (default, or `team` if named), or null if none/unreadable. */
 export function readTeam(dir, team = null) {
-  const path = teamPath(dir, team);
+  return readTeamFile(teamPath(dir, team));
+}
+
+/** A team file read by its own path, with no home mapping; null when absent or not a record. */
+export function readTeamFile(path) {
   if (!existsSync(path)) return null;
   try {
     const data = JSON.parse(readFileSync(path, "utf8"));
@@ -812,13 +839,22 @@ function atomicWriteJson(path, data) {
 
 /** Atomic write: `<path>.tmp` then rename. `team` names which file (default when omitted). */
 export function writeTeam(dir, teamData, team = null) {
-  atomicWriteJson(teamPath(dir, team), teamData);
+  writeTeamFile(teamPath(dir, team), teamData, dir);
+}
+
+/** `writeTeam` to an explicit team file path; `dir` is the pool whose status document it changes. */
+export function writeTeamFile(path, teamData, dir) {
+  atomicWriteJson(path, teamData);
   statusChanged(dir);
 }
 
 /** Unlink team.json (or a named team's file); no-op if absent. */
 export function clearTeam(dir, team = null) {
-  const path = teamPath(dir, team);
+  clearTeamFile(teamPath(dir, team), dir);
+}
+
+/** Unlink an explicit team file path; no-op if absent. `dir` is the pool whose status document it changes. */
+export function clearTeamFile(path, dir) {
   if (!existsSync(path)) return;
   try {
     unlinkSync(path);
@@ -856,16 +892,18 @@ export function teamMembersForRole(dir, role, team = null) {
 /** Basenames (sans `.json`) of every named team under `dir/teams/` — does NOT include the default
     team. A file whose base name no `--team` could give (`@default.json`, say) isn't a team. */
 export function listTeamNames(dir) {
-  const teamsDir = join(dir, "teams");
-  if (!existsSync(teamsDir)) return [];
-  try {
-    return readdirSync(teamsDir)
-      .filter((f) => f.endsWith(".json"))
-      .map((f) => f.slice(0, -5))
-      .filter(isTeamAliasShape);
-  } catch {
-    return [];
+  const names = [];
+  for (const d of new Set([teamHomeDir(dir), dir])) {
+    try {
+      for (const f of readdirSync(join(d, "teams"))) {
+        const n = f.slice(0, -5);
+        if (f.endsWith(".json") && isTeamAliasShape(n) && !names.includes(n)) names.push(n);
+      }
+    } catch {
+      // no teams/ dir here
+    }
   }
+  return names;
 }
 
 /** The naming prefix of a derived member name `<prefix>-<role>[-N]`, or null when the name does not end in its role. */
@@ -1035,6 +1073,31 @@ export function attributeSessionTeam(dir, role, { explicitTeam = null, paneId = 
   return byRole ? { ...byRole, via: "role-scan" } : null;
 }
 
+/** The member row of `team` that sits in pane `paneId`, or null. */
+export const sessionMemberRow = (team, paneId) =>
+  paneId && team && Array.isArray(team.members) ? team.members.find((m) => m && m.transport_id === paneId) || null : null;
+
+/** The checkout a session is expected to run in: its own member row's recorded root, else the
+    root its launcher handed it (`envRoot`, only for a session whose team came from AH_TEAM_FILE),
+    else the team's. The row wins over the launch value because a relocation can rewrite the row. A
+    row without the field (written before members recorded their own) falls through. */
+export const expectedRootFor = (team, member, envRoot = null) =>
+  (member && member.expected_root) || (typeof envRoot === "string" && envRoot) || (team && team.expected_root) || null;
+
+/**
+ * The pool's own copy of team `team` when a copy also sits in the team home — a split an older
+ * release left behind, where `teamPath` resolves to the home's. `{path, team}`, or null when there
+ * is no such second readable copy.
+ */
+export function splitTeamCopy(dir, team = null) {
+  const home = teamHomeDir(dir);
+  if (home === dir) return null;
+  const pool = rawTeamPath(dir, team);
+  if (!existsSync(rawTeamPath(home, team))) return null;
+  const record = readTeamFile(pool);
+  return record ? { path: pool, team: record } : null;
+}
+
 /** `realpath` of the longest existing ancestor of `p`, with the rest appended as written — a team
     file named at launch may not exist yet, and neither may its `teams/` dir. */
 function realPrefixPath(p) {
@@ -1070,6 +1133,9 @@ export function envTeamFile(homes, value = process.env.AH_TEAM_FILE) {
   const realHome = realPrefixPath(home);
   const match = homes.filter(Boolean).find((h) => realPrefixPath(resolve(h)) === realHome);
   if (match) return { home: match, teamName };
+  // A worktree caller's team lives in the main checkout's hierarchy dir (the team home).
+  const viaHome = homes.filter(Boolean).map(teamHomeDir).find((h) => realPrefixPath(resolve(h)) === realHome);
+  if (viaHome) return { home: viaHome, teamName };
   // A hierarchy dir is `<repo>/.claude/hierarchy`, or `~/.claude/hierarchy/<name>` outside a repo.
   const isHierarchyDir = (h) => (basename(h) === "hierarchy" && basename(dirname(h)) === ".claude") || (basename(dirname(h)) === "hierarchy" && basename(dirname(dirname(h))) === ".claude");
   if (!isHierarchyDir(home)) return malformed("it is not inside a hierarchy dir");
@@ -1177,7 +1243,7 @@ export function teamIsOrphaned(t) {
 }
 
 /** `team-history.json` for this hierarchy dir. */
-export const historyPath = (dir) => join(dir, "team-history.json");
+export const historyPath = (dir) => join(teamHomeDir(dir), "team-history.json");
 
 /** `{version, teams:[]}`, always — a missing or corrupt file reads back as empty, never throws. */
 export function readHistory(dir) {

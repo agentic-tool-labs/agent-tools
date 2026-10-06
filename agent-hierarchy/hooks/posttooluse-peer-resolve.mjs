@@ -28,8 +28,9 @@
  */
 
 import { isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
+import { watcherCall } from "./lib-liveness.mjs";
 import { extractMsgToken, hasResponseToken, parseMsgFilename } from "./lib-hier.mjs";
-import { appendDispatchRecord, appendPeerRecord, pendingFor, targetSatisfiesRecord } from "./lib-peer.mjs";
+import { appendDispatchRecord, appendPeerRecord, pendingFor, stripRef, targetSatisfiesRecord, watcherAlive } from "./lib-peer.mjs";
 
 /** An obligation with `msg` set resolves only against a reply carrying `[hierarchy-msg <path>--response.md]` for the same id, file present. */
 function replySatisfiesMsg(message, rec) {
@@ -59,7 +60,14 @@ try {
       const reqPath = extractMsgToken(message);
       if (reqPath && reqPath.endsWith("--request.md")) {
         const meta = parseMsgFilename(reqPath);
-        if (meta && meta.type === "request") appendDispatchRecord(sessionId, meta.id, meta.to);
+        if (meta && meta.type === "request") {
+          appendDispatchRecord(sessionId, meta.id, meta.to, reqPath, stripRef(to));
+          // Nothing else keeps time for this dispatch, so hand the Orchestrator the call that starts it.
+          if (!watcherAlive(sessionId)) {
+            const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+            process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: `ah: start the dispatch watcher so this dispatch is timed: ${watcherCall(sessionId, cwd)}` } }));
+          }
+        }
       }
     }
   }

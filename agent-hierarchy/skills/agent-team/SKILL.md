@@ -781,6 +781,19 @@ herdr pane id, so a tmux peer surfaces with `command: null`.
    the kept rows. `pruned` names what went. Anything in `kept` → re-plan and
    close the remainder.
 
+**Read the whole answer — plan and close alike.** Both carry `warnings`,
+`strays`, `still_live`, `not_closable`, `expected` and `team_files`. Show the
+user every `warnings` entry, every `strays` name and every `still_live` name,
+in your confirmation (step 2) and again in your report. A plan with `strays`
+closes herdr agents that no team record names — matched by name and checkout
+only — so name them in the confirmation; the plan's first warning spells out
+the risk. `closed` means **verified gone** on a fresh re-query, not that the
+close command ran: never report success unless `closed: true` and `still_live`
+is empty. `not_closable` lists sessions with no pane; they were not closed.
+A team's file lives in the main checkout's hierarchy dir whichever checkout
+spawned its members, so the same plan comes back from a worktree and from the
+main checkout; `team_files` names what was read.
+
 Never skip the plan call or its confirmation step — folding plan → confirm →
 close into fewer calls is exactly what would close sessions before a declined
 prompt could be honored. The plan form (no `--close`) never closes anything; only
@@ -993,6 +1006,10 @@ dismissed. Default off — plain `dismiss` never touches the config. Removing a
 non-last same-role config entry re-ordinals later siblings' derived names
 (§3.5.1) — the CLI warns and reports it (`config.reordinaled`); live
 `team.json` records keep their original names regardless.
+
+`dismiss --close` returns the same `closed` (verified gone), `still_live`,
+`strays` and `warnings` as `disband --close`: show them, and report success
+only when `closed: true` and `still_live` is empty.
 
 Dismissing the last member ends the Team: the plan reports
 `team_will_be_removed: true` (say so when you ask the user), and the close

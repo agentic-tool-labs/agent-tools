@@ -479,7 +479,7 @@ OUT=$(HOME="$FAKEHOME" node --input-type=module -e "const C = await import('$H/l
 check "C7b: the roster msg roster --team rel resolves is the team's recorded block, named under the team" '[ "$OUT" = "rel-implementor" ]'
 rm -f "$TEAMS/rel.json"
 
-mkdir -p "$SANDBOX/closebin"; printf '#!/bin/sh\n[ "$1" = "kill-pane" ] && exit 0\nexit 1\n' > "$SANDBOX/closebin/tmux"; chmod +x "$SANDBOX/closebin/tmux"
+mkdir -p "$SANDBOX/closebin"; printf '#!/bin/sh\n[ "$1" = "kill-pane" ] && exit 0\n[ "$1" = "list-panes" ] && exit 0\nexit 1\n' > "$SANDBOX/closebin/tmux"; chmod +x "$SANDBOX/closebin/tmux"
 write_team hotfix $$ '[{"role":"implementor","name":"hotfix-implementor","route":"peer","transport_id":"%9"},{"role":"reviewer","name":"hotfix-reviewer","route":"peer","transport_id":"%8"}]' '"roster":"hotfix"'
 node -e 'const f=process.argv[1],fs=require("fs");const t=JSON.parse(fs.readFileSync(f,"utf8"));t.transport="tmux";fs.writeFileSync(f,JSON.stringify(t))' "$TEAMS/hotfix.json"
 dismiss_close() { # <member>

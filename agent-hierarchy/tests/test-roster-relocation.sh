@@ -291,8 +291,8 @@ T11_WT="$SANDBOX/t11-wt"
 mkdir -p "$T11_WT/.claude"
 HOME="$FAKEHOME" CLAUDE_PID=$$ node "$H/roster.mjs" create --commit --transport terminal --roster-level repo \
   --verified "[\"$(basename "$T11_WT")-implementor\"]" --orchestrator-pid "$$" --cwd "$T11_WT" >/dev/null
-check "T11 precondition: the team file exists under the worktree's own hierarchy dir" '[ -f "$T11_WT/.claude/hierarchy/teams/$(basename "$T11_WT").json" ]'
-check "T11 precondition: no team file under the main checkout's hierarchy dir (0027's worktree-local split)" '[ ! -f "$T11_MAIN/.claude/hierarchy/teams/$(basename "$T11_WT").json" ]'
+check "T11 precondition: the team file exists under the main checkout's hierarchy dir (the team home)" '[ -f "$T11_MAIN/.claude/hierarchy/teams/$(basename "$T11_WT").json" ]'
+check "T11 precondition: no team file under the worktree's own hierarchy dir (one team file per checkout)" '[ ! -f "$T11_WT/.claude/hierarchy/teams/$(basename "$T11_WT").json" ]'
 sessionstart_role "$T11_MAIN" "t11-sess"
 check "T11: SessionStart still succeeds (never refuses/crashes)" '[ "$SS_RC" -eq 0 ]'
 if echo "$SS_OUT" | grep -q "Misplaced:"; then

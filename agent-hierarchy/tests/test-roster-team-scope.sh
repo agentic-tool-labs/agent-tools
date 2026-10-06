@@ -276,6 +276,7 @@ for t in alpha beta; do
   node -e '
     const fs=require("fs");const p=process.argv[1];
     const j=JSON.parse(fs.readFileSync(p,"utf8"));j.expected_root=process.argv[2];
+    for(const m of j.members)m.expected_root=process.argv[2];
     fs.writeFileSync(p,JSON.stringify(j));
   ' "$HIER/teams/$t.json" "$SANDBOX/elsewhere"
 done

@@ -53,6 +53,9 @@ mechanics; this file is the durable identity underneath it:
   <abs cwd>`, put `[hierarchy-msg <path>]` in the dispatch or brief,
   expect the reply as `[hierarchy-msg <response path>]`. The file pair under
   the hierarchy dir is the durable record; in-band text only points at it.
+  Dispatch `SendMessage` with `notify_when_idle: true`, so a peer going idle wakes
+  you even if it never reports. When ah injects lines for an idle notice, act on them; do not
+  re-subscribe to a peer that is already idle (it fires again at once).
 - The ah CLI is the only interface: `node ${CLAUDE_PLUGIN_ROOT}/hooks/roster.mjs <verb> … --cwd
   <abs cwd>`, same for `msg.mjs`; verbs: `agent-hierarchy/docs/cli-tools.md`. The `ah CLI root`
   line in your context is authoritative (newest wins); if the placeholder is
@@ -78,19 +81,17 @@ mechanics; this file is the durable identity underneath it:
   to how big the task is (default `small` if you omit it) — a Stop hook uses
   it to know how long to wait before
   flagging the dispatch as outstanding, so set it honestly. After
-  `SendMessage`-ing the brief, call `ScheduleWakeup` — **only when that tool
-  is available to you** (it exists in `/loop` dynamic mode; in an ordinary
-  interactive session it does not, and a Stop hook is your safety net there
-  instead) — with `delaySeconds` at the `eta` threshold (small=5min,
-  medium=10min, large=20min) and a `prompt` naming the request id and
-  instructing yourself to check in on wake. On wake, or whenever a Stop hook
-  blocks you naming an outstanding dispatch: `ListAgents` to confirm the peer
-  is still alive, then `SendMessage` it a short status query. If it answers,
-  nothing more to do. If it is still outstanding, check in once more (on a
-  timer, reschedule at HALF the original threshold); after that second miss,
-  stop retrying and tell the user plainly that the peer stalled — you are
-  their only channel to that fact. Never substitute `CronCreate` for this —
-  a cron entry outlives the session and fires with none of this context.
+  the first peer dispatch, start the dispatch watcher, and again after every
+  watcher wake that says to: `Bash` with `run_in_background: true`,
+  `description: "ah dispatch watcher"`, command `node
+  "${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-watcher.mjs" --session <your session id>
+  --cwd <your cwd>`. It is the timer in every session: its exit wakes you with
+  a landed report, a check-in due, or a peer gone silent, and ah injects the
+  text. On a check-in: `ListAgents` to confirm the peer is still alive, then
+  `SendMessage` it the status query given. If the watcher reports it silent
+  or gone, tell the user plainly that the peer stalled: you are their only
+  channel to that fact. Never substitute `CronCreate` for this: a cron entry
+  outlives the session and fires with none of this context.
 - **Tier rule.** Don't dispatch an advisor role at or below your own model
   tier without a stated `reason:` (context, second-opinion, parallel) in the
   request file — at equal tier you are consulting yourself at double cost.

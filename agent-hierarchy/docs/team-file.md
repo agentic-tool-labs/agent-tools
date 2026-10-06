@@ -11,6 +11,19 @@ One JSON file per live Team — `<hierarchy dir>/teams/<name>.json`, or the lega
 the orchestrator that owns it and every member, under the names they are addressed by.
 The message pool is its sibling: `<hierarchy dir>/msgs/`.
 
+## Where it lives
+
+A team file has one home: the hierarchy dir of the repo's **main checkout**. A team spawned
+from a linked worktree is recorded there too, whatever `--cwd` the spawn was given, so a team
+whose members run in the main checkout and in worktrees is still one file. Under
+`AGENT_HIERARCHY_DIR`, or outside git, the home is that dir. `msgs/`, `peers.jsonl`, gates and
+status stay per pool.
+
+A team recorded in a worktree's own dir by an older release is **legacy**: it is read and
+updated where it is (never moved), and teardown and `teams` also read it when a team has
+records in both places. Worktrees of one repo share team names, so a name that is already live in
+a sibling worktree is refused or collides like any same-checkout name.
+
 The path in the message is absolute on purpose. Every other way of finding the team
 file derives it from the session's cwd, and a cwd inside a git worktree or another
 repo resolves to a different hierarchy dir with no Team in it. **When the cwd-derived
@@ -22,13 +35,13 @@ answer and `team_file` disagree, `team_file` is right.**
 |---|---|
 | `team_id` | identifies this Team instance |
 | `orchestrator.pid` | the owning session's process; dead pid = orphaned Team |
-| `expected_root` | the directory members' sessions should be running in |
+| `expected_root` | the directory the Team was created from; a member's own `expected_root` (below) takes precedence for that member |
 | `roster_level` | which roster level the Team was stood up from (`null` for an ad hoc one) |
 | `roster` | which roster block it was built from: `rosters.<roster>`, or `null` for the default `roster` block (and for a Team replayed from history). A file without the field predates it and is read by the old rule, `rosters.<team name>` then the default |
 | `layout` | the Team's pane layout, `auto`, `columns` or `grid`; later `spawn-one` panes use it. A file without it uses `auto` |
 | `transport` | `herdr`, `tmux`, or `terminal` |
 | `partial` | true when some member never checked in — the Team is degraded |
-| `members[]` | one row per member: `role` (a built-in, or a custom role name from `roster.mjs role list`), `name`, `route`, `model`, `effort`, `autoMode`, `transport_id` (its pane); `kind` and `args` only for a non-Claude member; `tab_id`/`workspace_id` under herdr; `stream` (a `streams` key) only for a member spawned with `--stream` |
+| `members[]` | one row per member: `role` (a built-in, or a custom role name from `roster.mjs role list`), `name`, `route`, `model`, `effort`, `autoMode`, `transport_id` (its pane), `expected_root` (the directory this member was launched in; a row without it uses the team's); `kind` and `args` only for a non-Claude member; `tab_id`/`workspace_id` under herdr; `stream` (a `streams` key) only for a member spawned with `--stream` |
 | `streams` | only once a stream is opened: `{<name>: {state, branch, base, worktree, tab_id, opened, closed?}}` — `state` is `open` or `done`; `branch`/`base`/`worktree` are null for a `--no-worktree` stream; `tab_id` is null off herdr or when no tab could be opened; `closed` is present only while done. Absent means no streams |
 
 `members[].name` is the address: it is the `to` of a SendMessage and the `--to-name`
@@ -43,7 +56,11 @@ Every member the launcher starts is given this file's absolute path as `AH_TEAM_
 Team is resolved in this order: the Team it owns as orchestrator; else `AH_TEAM_FILE`,
 accepted only when it names `<hierarchy dir>/teams/<name>.json` or `<hierarchy dir>/team.json`
 of this repo (or its main checkout); else the one live Team whose member row holds this
-session's pane. `whoami` says which answered (`answered_by`) and reports a rejected
+session's pane. The launcher also sets `AH_EXPECTED_ROOT`, the directory the member was launched in. A member's session
+resolves its expected root as: its member row's `expected_root`, else `AH_EXPECTED_ROOT` (when it knew its
+Team from `AH_TEAM_FILE`), else the team's. The env value covers the first `SessionStart`, which can fire
+before the orchestrator has written the member row; without it a main-checkout member of a team created from
+a worktree could be flagged as misplaced. `whoami` says which answered (`answered_by`) and reports a rejected
 `AH_TEAM_FILE` in `env_team_invalid`, as another repo's team file or as malformed.
 
 ## What to do with it
