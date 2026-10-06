@@ -5,7 +5,7 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
-## [0.116.0]
+## [0.115.1]
 
 ### Fixed
 - The hierarchy Pane is never blank. A visible status document that lists no team now draws one line saying so,

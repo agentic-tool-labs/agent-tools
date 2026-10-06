@@ -224,7 +224,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(texts(band)).toEqual(v.band === null ? [CORE_LINE] : [{ text: v.band.text, props: TONE[v.band.tone] }, CORE_LINE])
       const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
       expect(walk(pane)).toEqual([])
-      // A null view's one line now names its cause; every other vector draws exactly its rows.
+      // A null view's one line names its cause; every other vector draws exactly its rows.
       const cause = NULL_CAUSE[name]
       expect(texts(pane)).toEqual(cause === undefined ? v.pane.map((r) => ({ text: r.text, props: TONE[r.tone] })) : [{ text: `No hierarchy status here (${cause}).`, props: TONE.idle }])
     })

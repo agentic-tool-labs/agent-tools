@@ -13,7 +13,7 @@
       "name": "ah",
       "source": "./agent-hierarchy",
       "description": "Multi-agent role hierarchy, each on the right model. Optional herdr transport for pane-based teams.",
-      "version": "0.116.0",
+      "version": "0.115.1",
       "author": {
         "name": "Jim Cline"
       },
