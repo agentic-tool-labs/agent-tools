@@ -30,6 +30,9 @@ r4 (evidence joi6 folded in):
 - **E3d:** answered.
 - A Button's hover needs a keyed Box.
 
+r6 (the Ultra-Advisor ruled **allow with changes**; the user confirmed Q4: the click is the consent, with no opt-in
+setting): C1–C7 are applied in §8.2, §8.5, §8.6, §8.9 and §10. Part 2 builds after Part 1.
+
 **Build gate.** Part 1 (§4–§7, the look) can be built once E1 has been run. **Part 2 (§8, member-click) must not be
 built until E3 has been run AND the Ultra-Advisor has answered §8.9 AND the Orchestrator re-dispatches with that
 ruling.** Part 1 must not depend on Part 2.
@@ -303,7 +306,10 @@ distinguish the states; a spinner; a borderline row wrapping; a color chosen out
 
 1. It is a string matching **exactly `^[a-z][a-z0-9_-]{0,31}$`**, the pattern of `validateHerdrName`
    (lib-config.mjs:278).
-   - The mod keeps the literal as a named constant. F10 asserts that it string-equals the lib-config.mjs source.
+   - (r6, C1) The regex literal `/^[a-z][a-z0-9_-]{0,31}$/` is written **inside the pinned helper text** (W4), never
+     as a constant outside it: an outside constant could be redefined (for example to `/.*/`) without touching the
+     pin. F10 compares the pinned literal with lib-config.mjs:276–278.
+   - (r6, C2) The helper first checks `typeof name === 'string'`, then the pattern.
    - The pattern already excludes a leading `-`, whitespace, control characters, `/`, `.` and anything over 32
      characters. F2 pins those cases.
 2. The clicked row is a member whose status record has `focusable === true` (§8.4) and `live !== false`, and its
@@ -340,10 +346,12 @@ distinguish the states; a spinner; a borderline row wrapping; a color chosen out
   a toned `<Text>`, so colors are kept (Button has no color prop, so only the name loses the tone color).
 - (r4) Hover styles apply only inside a keyed Box, so the Button sits in `<Box key={'ah-focus-' + name}>`. The key is
   the validated name, which is unique per row.
-- The `onPress` is an inline arrow that calls the **one `$`-first focus helper** with the member name only.
-  It wraps the helper in try/catch, like `openPane`.
-- Pressing gives feedback **only on failure**: `$.ui.toast('Could not focus <name>.')`, with the name cleaned. On
-  success there is no toast (the focus change is the feedback).
+- The `onPress` is an inline arrow that calls the **one `$`-first focus helper** with the member name only, the same
+  identifier as the Button's `label` (C4). Its try/catch, if any, has an **empty** catch.
+- (r6, C5) The feedback lives **inside the helper**, and appears only on failure. On success there is no toast (the
+  focus change is the feedback).
+  - If the name passed the type and pattern check: `$.ui.toast('Could not focus <name>.')`.
+  - Otherwise, fixed text with no name: `$.ui.toast('Could not focus that member.')`.
   - Failure covers: validation fails, a non-zero exit, a throw, or a timeout.
   - stderr is never shown.
 - Double-press: two runs, which is harmless (focus is idempotent). No debounce.
@@ -351,12 +359,29 @@ distinguish the states; a spinner; a borderline row wrapping; a color chosen out
 ### 8.6 Guard widening (exact text for test-mod-readonly.sh; the Reviewer checks the lexer implements each rule)
 
 - **W3. Button in the Pane render, for the member name only.**
-  - The W1 position rules (P-a destructure and P-b tag, (i)–(v)) apply unchanged to the **Pane render hook**
-    (`ui.render`, `component: 'Pane'`, `requestId: 'ah-status'`), as they do for the band hook.
+  - The W1 position rules (P-a destructure and P-b tag, (i)–(v)) apply to the **Pane render hook**
+    (`ui.render`, `component: 'Pane'`, `requestId: 'ah-status'`) as they do for the band hook, **with one exception,
+    to P-b(ii)** (r7, an Implementor gap: the Pane draws one Button per row, so the tag always sits in a callback).
+    - **P-b(ii) in the Pane hook only:** between `return` and the `<Button` tag, the only function literals that may
+      open are **arrow callbacks passed directly as the sole argument of a `.map(` call**, written as the literal
+      token `.map(` and not computed. **At most two are allowed:** sections, then rows.
+    - Each such `.map(` call lies inside the hook's own return argument, so P-b(i) and (iii)–(v) still hold. The
+      `.map(` call's parenthesis counts as an allowed call paren, and only `.map(` qualifies.
+    - Each callback's parameter list contains no `$`. The innermost callback **destructures** the row name it labels
+      (for example `({ name, … }) =>`), so W3's "label is a bare identifier" and C4's "label identifier == helper
+      argument" hold unchanged.
+    - A `function` keyword callback, a block-bodied arrow (`=> {`), or any other function literal on that path fails.
+      An expression-bodied arrow is required, so the callback returns the JSX directly.
+    - The band hook keeps P-b(ii) unchanged: no function literal before its Button.
+  - Why this stays simple: the guard is a tripwire against accidental edits. The exec boundary is the pinned helper
+    text (argv plus pattern; Ultra-Advisor ruling 1k39). The exception only allows the shape a list of rows needs, and
+    still forbids passing `Button` out to a named row-drawer (the binding leak W1 exists to stop).
   - The Pane `Button` must carry `plain`. Its `label` must be a bare identifier (not a call, template or literal
     expression).
   - Its `onPress` must be an inline arrow whose body is exactly one call to the focus helper, optionally wrapped in
-    try/catch.
+    try/catch with an empty catch.
+  - (r6, C4) The Button's `label` identifier and the helper call's name argument must be **the same identifier**: what
+    is shown is what is focused.
   - Every other hook keeps `Button` forbidden.
 - **W4 (r3): the focus helper is fixed text, matched whole.** This replaces lexer data-flow rules, which a token
   lexer cannot check soundly.
@@ -366,11 +391,26 @@ distinguish the states; a spinner; a borderline row wrapping; a color chosen out
   - Any edit to the helper means editing the literal in the test, so the Reviewer always sees both.
   - The helper's required content (the Implementor writes it; the test pins it):
     - it takes `($, name)`;
-    - it checks `name` against the §8.2 pattern constant, and returns a failure if it does not match;
+    - it checks `typeof name === 'string'` and `name` against the §8.2 pattern, written as an inline regex literal inside the pinned text (no outside constant), and returns a failure if either does not hold;
     - it calls `$.process.run(['herdr', 'agent', 'focus', name], { timeoutMs: 5000 })`;
     - it returns success only on `exitCode === 0`;
     - it catches every throw as a failure.
     - It does nothing else: no `fs`, no `state`, no other `$` call apart from `ui.toast` on failure.
+  - **(r6, C3) How the match and the exemption work:**
+    - (a) "exactly once" is counted on the **comment-blanked** source, with strings kept, so a copy inside a comment
+      does not count;
+    - (b) that one matched span is **excised by offset** before the lexer runs, so the rest of the guard never sees
+      it, and nothing else is exempted;
+    - (c) `process.run` is **not** added to `ALLOWED_CALLS`, so the exec is allowed only by excision of the pinned
+      span.
+  - **(r6, C2)** `prototype` joins the guard's whole-word `BANNED_TOKENS` for `mod/`, so the regex check cannot be
+    voided (for example `RegExp.prototype.test = () => true`). The Implementor first confirms there is no existing hit
+    in `mod/`; if there is one, stop and report.
+  - **(r6, C6) The invariant is written down** at the top of `test-mod-readonly.sh` and in the mod's doc (the README
+    section or doc that describes the mod):
+    - "The mod runs nothing without a user press. Exactly one process may run: the pinned focus helper.
+    - A second exec site, or any change to the pinned argv or init, needs a new security ruling, not a guard edit."
+    - The existing planted `agent get` case (test-mod-readonly.sh:289) stays.
   - **(r5) The token `process` appears nowhere in `mod/` outside that exact text.** It is checked as a whole word
     **after blanking comments but before blanking strings**, so `$.process`, `$['process']`, `"process"` and
     `const p = $.process` all fail.
@@ -394,7 +434,27 @@ distinguish the states; a spinner; a borderline row wrapping; a color chosen out
     member call).
 12. The focus helper declared twice, or bound another way (W2 rules).
 13. A Button in any hook other than the band and the Pane.
-(Cases 6–8 and 14 of r2 are folded into 3 and 5. The existing planted `$.process.run(['herdr','agent','get'])`
+6. (r6, C3) The pinned text placed inside a comment or a string, with an **altered** live helper.
+7. (r6, C4) A Button with `label={a}` and `onPress={() => focus($, b)}`.
+8. (r6, C1) The pattern written as a constant outside the pinned text (for example `const NAME_RE = /.*/` used by the
+   helper).
+14. (r6, C2) `prototype` anywhere in `mod/` (for example `RegExp.prototype.test = () => true`).
+
+15. (r7) A map callback stored or defined outside the return (`const draw = (r) => <Button…/>`, then `rows.map(draw)`).
+16. (r7) Three nested `.map(` callbacks before the Button.
+17. (r7) A Button in a non-map callback: `.filter(r => <Button/>)`, `.flatMap(…)`, `.forEach(…)`, an IIFE
+    `(() => <Button/>)()`.
+18. (r7) A `function` keyword map callback, or a block-bodied arrow `=> { return <Button/> }`.
+19. (r7) A computed map: `rows['map'](r => <Button/>)`.
+20. (r7) A map callback whose parameter is `$` or contains `$`.
+21. (r7) A Button inside a map callback in the **band** hook (the exception is Pane only).
+22. (r7) A row-drawer: `Button` passed as an argument (`drawRow(Button, r)`) or captured in a helper.
+
+**Must PASS (r7):** `return (<Box>{sections.map((s) => <Box …>{s.rows.map(({ name, … }) => <Box key={…}><Button
+plain label={name} onPress={() => focus($, name)} …/></Box>)}</Box>)}</Box>)` inside the Pane hook. This is
+illustrative; the exact attribute set follows W3 and §8.5.
+
+(Cases 6–8 and 14 of r2 were folded into 3 and 5. The numbers are reused above for r6's cases. The existing planted `$.process.run(['herdr','agent','get'])`
 case, test-mod-readonly.sh:289, stays failing.)
 
 **Must PASS:** the exact helper text once, the W3 Button form, and the band unchanged.
@@ -433,7 +493,16 @@ case, test-mod-readonly.sh:289, stays failing.)
 
 ### 8.9 Question for the Ultra-Advisor
 
-This applies only if E3c finds the API usable. Context: the ah mod is today a read-only renderer under a lexer
+**RULED (r6), by the Ultra-Advisor (response 1k39): allow with changes C1–C7, all applied.**
+- Q1 yes: status.json is treated as fully untrusted, and the pattern bounds the effect to which agent gets focus.
+- Q2 yes.
+- Q3 yes: the exec is enforced by a pinned, exactly-matched helper text, with C1 and C3, not by lexer data-flow
+  rules. (This answers the reviewer's wording nit.)
+- Q4: no opt-in setting; the user confirmed that the click is the consent.
+- The guard is a tripwire against accidental edits, not a boundary against a hostile author (0071). The safety of the
+  exec rests on the fixed argv plus the pattern, both pinned.
+
+Original question, for the record. This applied only if E3c found the API usable. Context: the ah mod is today a read-only renderer under a lexer
 guard. The proposal is that on an explicit user click it runs `herdr agent focus <name>`, a fixed argv via
 `$.process.run` with no shell, from one fixed-text helper (W4).
 
@@ -470,6 +539,8 @@ the data.
    - Apply §6's rules to the answers: drop or swap any key that is plain or unreadable. That is a one-line table
      edit, with no redesign.
 
-**Part 2 (only after the §8.9 ruling and a re-dispatch):** E3 is recorded (E3c usable, or Part 2 is dropped); every
+**Part 2 (ruled; builds after Part 1):** (r6, C7) Part 2 is **not accepted** without a recorded run of
+`tests/test-mod-readonly.sh`, with its exit code in the Reviewer's evidence. That run includes every planted case
+above, and the C6 invariant text is present. E3 is recorded (E3c usable, or Part 2 is dropped); every
 §8.6 planted case fails; the helper text is pinned; F1–F3 and F7–F11 pass; `focusable` is in status-file.md. Manual M2: click a herdr member's name, and its pane gets
 focus; click a tmux member, and there is nothing to click.
