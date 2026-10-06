@@ -9,7 +9,8 @@
  *
  * Message files live at `<dir>/msgs/<id>--<to>--<slug>--<type>.md` with a
  * flat YAML frontmatter and `## [N] key` section anchors; a request and its
- * response share the id, and the response's existence closes the exchange.
+ * response share the id, and the response closes the exchange (for a
+ * member-addressed request, only once it holds a report — `listExchanges`).
  * `peers.jsonl` and `gates.jsonl` are append-only JSONL, latest-per-key on
  * read, exactly like `lib-peer.mjs`.
  *
@@ -21,16 +22,33 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realp
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
+import { availabilityView, chainRoles, customTierText, hierarchyDir, mainHierarchyDir, MSG_ROLES, ownedTeamConfigs, ownedTeamsLead, PEER_ELIGIBLE_ROLES, registryRoles, resolveConfig, ROLES, ROLE_LABELS, ROUTE_VALUES, TIER, resolvedPeerTargets, roleFromName, routeHasPane, teamIsPartial, teamPrefix, tierOf } from "./lib-config.mjs";
 import { listTeamNames, paneResolver, readTeam, resolveMemberTeam, teamArgName, teamIsOrphaned, teamFileHome, teamMemberByName, teamPath } from "./lib-roster.mjs";
+import { statusChanged, sweepActivity } from "./lib-status.mjs";
 
-export { hierarchyDir };
+export { hierarchyDir, MSG_ROLES };
 
-export const MSG_ROLES = ["orchestrator", ...ROLES];
 export const MSG_TYPES = ["request", "response"];
 export const REASONS = ["context", "second-opinion", "parallel"];
 /** Complexity scaling for a peer dispatch (spec 0028 §5.6): the liveness check-in threshold. Absent/unrecognised treated as "small". */
 export const ETAS = ["small", "medium", "large"];
+/** small=5min, medium=10min, large=20min. */
+export const ETA_THRESHOLD_SEC = { small: 5 * 60, medium: 10 * 60, large: 20 * 60 };
+/** A request's eta as one of ETAS: an absent or unrecognised one is treated as small. */
+export function etaOf(eta) {
+  return ETAS.includes(eta) ? eta : "small";
+}
+export function thresholdFor(eta) {
+  return ETA_THRESHOLD_SEC[etaOf(eta)];
+}
+/**
+ * Check-in gaps in multiples of a dispatch's eta threshold T: the first check-in falls due T after
+ * the dispatch origin, the second T/2 after the first, and every later one T after the previous
+ * (the last entry repeats).
+ */
+export const CHECKIN_CADENCE = [1, 0.5, 1];
+/** The activity state a session's own hook event signals. */
+export const SELF_STATE = { UserPromptSubmit: "working", Stop: "idle", Notification: "blocked" };
 export const REQUEST_KEYS = ["tldr", "goal", "context", "constraints", "files", "acceptance", "want_back"];
 export const RESPONSE_KEYS = ["tldr", "status", "changes", "evidence", "gaps", "open_questions"];
 export const SLUG_RE = /^[a-z0-9-]{1,32}$/;
@@ -181,12 +199,6 @@ function skeletonBody(keys) {
     lines.push("", `## [${i + 1}] ${key}`, "- none");
   });
   return lines.join("\n") + "\n";
-}
-
-/** What a response file is created with below its frontmatter's closing line (a blank line, then
-    the skeleton): while that is unchanged, nothing has been reported in it. */
-export function responseSkeleton() {
-  return "\n" + skeletonBody(RESPONSE_KEYS);
 }
 
 /** What the team file is and how a session acts on it — shipped with the plugin, named in every message that names a team file. */
@@ -347,6 +359,7 @@ export function createMessage(dir, opts) {
   if (!opts.reqPath) {
     mkdirSync(targetMsgs, { recursive: true });
     writeFileSync(path, body, "utf8");
+    statusChanged(dirname(targetMsgs));
     return { id: fields.id, path, fields };
   }
   // §2.1.5: same duplicate rule as the local pool, applied to the pool the file actually lands in.
@@ -364,6 +377,7 @@ export function createMessage(dir, opts) {
   const localPool = resolve(dir);
   const targetPool = resolve(dirname(targetMsgs));
   const divergent = localPool !== targetPool ? { local: localPool, target: targetPool } : null;
+  statusChanged(dirname(targetMsgs));
   return { id: fields.id, path, fields, divergent };
 }
 
@@ -401,7 +415,13 @@ export function responseFrontmatter(fields, now = new Date()) {
   return frontmatterText({ ...fields, created: localIso(now) });
 }
 
-/** Pair requests with responses by id: `[{id, request, response, meta}]`, newest id first. */
+/**
+ * Pair requests with responses by id: `[{id, request, response, open, to, slug}]`, newest id first.
+ * Open iff there is no response, or the request is addressed to a member (not `orchestrator`) and
+ * its response holds no report. An orchestrator-addressed exchange (the pipeline's own run
+ * records, a role's request to the Orchestrator) closes on any response: nobody owes the
+ * Orchestrator a report on those, so a bodyless response there is a close marker.
+ */
 export function listExchanges(dir) {
   const byId = new Map();
   for (const f of requestFiles(dir)) {
@@ -412,7 +432,25 @@ export function listExchanges(dir) {
   return [...byId.values()]
     .filter((e) => e.request)
     .sort((a, b) => (a.id < b.id ? 1 : -1))
-    .map((e) => ({ ...e, open: !e.response, to: e.request.meta.to, slug: e.request.meta.slug }));
+    .map((e) => {
+      const to = e.request.meta.to;
+      const open = !e.response || (to !== "orchestrator" && noReportYet(e.response.path, e.id));
+      return { ...e, open, to, slug: e.request.meta.slug };
+    });
+}
+
+/** A response over this many bytes holds a report: no skeleton is that long, so it is never read to tell. */
+const REPORT_BYTES = 4096;
+
+/** Whether a member's response holds no report yet, by `reportStatus` unless its size already says it does. */
+function noReportYet(path, id) {
+  // ponytail: a body over 4 KB made only of skeleton lines would read as a report; nobody writes 4 KB of `- none`.
+  try {
+    if (statSync(path).size > REPORT_BYTES) return false;
+  } catch {
+    // unreadable size: reportStatus decides
+  }
+  return reportStatus(path, id) === "no-report";
 }
 
 /**
@@ -491,9 +529,11 @@ export function listDownstreamDispatches(dir) {
  * `null` (§7.6 degradation), so it matches the default team. This is what
  * closes the `to_name: null` cross-team fan-out (spec 0011 §7.7): callers
  * that bucket peers by team must filter here BEFORE reading `to_name`.
+ * `exchanges`, when given, is `dir`'s `listExchanges` result already in hand,
+ * used instead of listing again.
  */
-export function openExchanges(dir, team) {
-  const list = listExchanges(dir).filter((e) => e.open);
+export function openExchanges(dir, team, exchanges = null) {
+  const list = (exchanges || listExchanges(dir)).filter((e) => e.open);
   if (team === undefined) return list;
   return list.filter((e) => {
     const parsed = readMsgFile(e.request.path);
@@ -527,17 +567,18 @@ function createdMs(path) {
   }
 }
 
-/** Move closed pairs whose response is older than `days` into msgs/archive/. Returns the count of pairs moved. */
+/** Move closed pairs whose response is older than `days` into msgs/archive/, and delete activity records not written since then. Returns the count of pairs moved. */
 export function sweep(dir, days = SWEEP_DAYS, now = Date.now()) {
   const cutoff = now - days * 86400 * 1000;
   let moved = 0;
   for (const e of listExchanges(dir)) {
-    if (!e.response) continue;
+    if (e.open) continue;
     if (createdMs(e.response.path) > cutoff) continue;
     mkdirSync(archiveDir(dir), { recursive: true });
     for (const f of [e.request, e.response]) renameSync(f.path, join(archiveDir(dir), basename(f.path)));
     moved++;
   }
+  sweepActivity(dir, cutoff);
   return moved;
 }
 
@@ -652,6 +693,23 @@ function hasAuthoredContent(body) {
 }
 
 /**
+ * Whether a response file holds a report: missing or unreadable → `no-report`; a frontmatter that
+ * does not parse, or does not carry the exchange's id → `malformed-report`; a body with no
+ * authored content (`hasAuthoredContent`) → `no-report`; otherwise `reported`.
+ */
+export function reportStatus(path, id) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return "no-report";
+  }
+  const fm = parseFrontmatter(text);
+  if (!fm || fm.fields.id !== id) return "malformed-report";
+  return hasAuthoredContent(bodyAfterFrontmatter(text)) ? "reported" : "no-report";
+}
+
+/**
  * True when text carries `[hierarchy-msg <path>]` naming an existing
  * `--response.md` (optionally for one id) whose body — beyond its
  * frontmatter — the author actually wrote something into. Spec 0028 §4.2:
@@ -685,6 +743,7 @@ export function readGates(dir) {
 
 export function appendGate(dir, rec) {
   appendJsonl(gatesPath(dir), { ...rec, ts: new Date().toISOString() });
+  if (rec && rec.type === "liveness-nudge") statusChanged(dir);
 }
 
 export function hasGate(dir, pred) {
@@ -777,6 +836,7 @@ export function readRoster(dir) {
 
 export function appendRosterRecord(dir, rec) {
   appendJsonl(peersPath(dir), { type: "peer", ...rec, ts: new Date().toISOString() });
+  statusChanged(dir);
 }
 
 /**
@@ -877,6 +937,15 @@ export function recordLiveness(rec, now = Date.now()) {
     live = ageSec < ROSTER_FRESH_SEC;
   }
   return { live, how, ageSec };
+}
+
+/**
+ * One named team member's attributed peers row (from an `attributedRoster` result) and whether it
+ * is live: no row, or a `down` one, is not live; otherwise `recordLiveness` decides.
+ */
+export function attributedLiveness(roster, name) {
+  const rec = roster.find((r) => r.name === name) || null;
+  return { rec, live: Boolean(rec) && rec.status !== "down" && recordLiveness(rec).live };
 }
 
 /**

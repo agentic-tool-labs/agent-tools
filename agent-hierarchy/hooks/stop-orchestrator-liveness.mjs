@@ -31,9 +31,15 @@
  * nothing.
  */
 
-import { hierarchyDir, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
-import { appendGate, exchangeAgeSec, openExchanges, readGates, readMsgFile } from "./lib-hier.mjs";
-import { dispatchRecordsFor, pendingFor } from "./lib-peer.mjs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { hierarchyDir, isPaneMember, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
+import { appendGate, CHECKIN_CADENCE, etaOf, openExchanges, readGates, readMsgFile, thresholdFor } from "./lib-hier.mjs";
+import { dispatchOrigin, dispatchRecordsFor, pendingFor } from "./lib-peer.mjs";
+import { readTeam, teamMemberByName } from "./lib-roster.mjs";
+
+const ROSTER = join(dirname(fileURLToPath(import.meta.url)), "roster.mjs");
 
 function allow() {
   process.exit(0);
@@ -42,13 +48,6 @@ function allow() {
 function block(reason) {
   process.stdout.write(JSON.stringify({ decision: "block", reason }));
   process.exit(0);
-}
-
-/** small=5min, medium=10min, large=20min; absent/unrecognised treated as small — spec §5.6. */
-const ETA_THRESHOLD_SEC = { small: 5 * 60, medium: 10 * 60, large: 20 * 60 };
-
-function thresholdFor(eta) {
-  return ETA_THRESHOLD_SEC[eta] || ETA_THRESHOLD_SEC.small;
 }
 
 /**
@@ -61,48 +60,64 @@ function thresholdFor(eta) {
  */
 function outstandingDispatches(dir, resolved, sessionId, now) {
   const myDispatches = new Map(dispatchRecordsFor(sessionId).map((r) => [r.request_id, r]));
-  const out = [];
+  const candidates = [];
   // A session that owns several live teams owes check-ins on each team's exchanges.
   const teams = resolved.ownedTeams && resolved.ownedTeams.length > 1 ? resolved.ownedTeams : [resolved.team];
   for (const e of teams.flatMap((team) => openExchanges(dir, team))) {
     if (!myDispatches.has(e.id)) continue; // no dispatch record from THIS session for this id (T14, T28)
     const parsed = readMsgFile(e.request.path);
     const fm = parsed && parsed.fm;
-    if (!fm || fm.from !== "orchestrator") continue;
-    const ageSec = exchangeAgeSec(e, now);
-    const eta = fm.eta || "small";
-    if (ageSec < thresholdFor(eta)) continue; // too young to flag (T13)
-    out.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta });
+    if (fm && fm.from === "orchestrator") candidates.push({ e, fm });
+  }
+  const origins = dispatchOrigin(candidates.map(({ e, fm }) => ({ id: e.id, created: fm.created })));
+  const out = [];
+  for (const { e, fm } of candidates) {
+    const origin = Date.parse(origins.get(e.id));
+    if (!Number.isFinite(origin)) continue;
+    const ageSec = Math.max(0, (now - origin) / 1000);
+    const eta = etaOf(fm.eta);
+    if (ageSec < thresholdFor(eta) * CHECKIN_CADENCE[0]) continue; // too young to flag (T13)
+    out.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta, pane: paneMemberName(dir, fm, e.to) });
   }
   return out;
 }
 
+/** The name of the pane-driven member a request is addressed to (by to_name, then by role), else null. */
+function paneMemberName(dir, fm, role) {
+  const team = fm.team || null;
+  const t = readTeam(dir, team);
+  const member = teamMemberByName(dir, fm.to_name, team) || (t ? t.members.find((m) => m && m.role === role) : null);
+  return isPaneMember(member) ? member.name : null;
+}
+
 /**
  * A dispatch is due for a check-in when it has never been nudged, or when the
- * last nudge for it is a full eta threshold old.
+ * gap CHECKIN_CADENCE gives for its next check-in has passed since its last
+ * nudge: half a threshold before the second, a full one before each later one.
  *
  * This replaces a flat two-nudges-ever cap. That cap meant an Orchestrator
  * stopped being asked about a dispatch after the second check-in no matter how
  * long the peer had been silent — a peer that died on minute three was never
  * mentioned again, which is the opposite of what a liveness check is for. The
  * interval keeps asking for as long as the exchange stays open, while spacing
- * the asks so an Orchestrator mid-conversation is not blocked every turn: one
- * threshold apart means small dispatches are re-checked every 5 minutes, large
- * ones every 20.
+ * the asks so an Orchestrator mid-conversation is not blocked every turn.
  *
  * An unparseable or absent `ts` counts as due — nudging one extra time is the
  * harmless direction.
  */
 function dueForNudge(gates, sessionId, item, now) {
   let lastTs = 0;
+  let count = 0;
   for (const r of gates) {
     if (r.type !== "liveness-nudge" || r.session_id !== sessionId || r.request_id !== item.id) continue;
     const t = Date.parse(r.ts);
     if (!Number.isFinite(t)) return true;
+    count++;
     if (t > lastTs) lastTs = t;
   }
-  if (lastTs === 0) return true;
-  return now - lastTs >= thresholdFor(item.eta) * 1000;
+  if (count === 0) return true;
+  const gap = CHECKIN_CADENCE[Math.min(count, CHECKIN_CADENCE.length - 1)];
+  return now - lastTs >= thresholdFor(item.eta) * gap * 1000;
 }
 
 function fmtAge(sec) {
@@ -111,13 +126,18 @@ function fmtAge(sec) {
   return `${Math.floor(sec / 86400)}d`;
 }
 
-function checkInReason(items) {
+function checkInReason(items, cwd) {
+  const panes = items.filter((it) => it.pane).length;
   const lines = [
     "ah: you have outstanding peer dispatch(es) past their eta threshold — check in before stopping:",
-    ...items.map((it) => `- ${it.role} "${it.to_name}", request ${it.id}, sent ${fmtAge(it.ageSec)} ago (${it.path})`),
-    "For each: call ListAgents to confirm the peer session is still alive, then SendMessage it a short status query.",
+    ...items.map((it) => {
+      const line = `- ${it.role} "${it.to_name}", request ${it.id}, sent ${fmtAge(it.ageSec)} ago (${it.path})`;
+      if (!it.pane) return line;
+      return `${line} — a pane member: check it with \`node "${ROSTER}" deliver ${it.pane} --req "${it.path}" --wait-only --timeout 10 --cwd "${cwd}"\` and act on its \`status\`: \`blocked\` → relay the prompt through AskUserQuestion and \`answer\`; \`not-live\` → surface it to the user; \`busy\` or \`timeout\` → it is still working; \`no-report\` → the member is idle with no report: re-deliver the brief or ping it; \`not-sent\` → the brief never arrived: send it with \`deliver\`; any other status → act as the returned \`message\` says.`;
+    }),
+    ...(panes === items.length ? [] : [`For each${panes ? " of the others" : ""}: call ListAgents to confirm the peer session is still alive, then SendMessage it a short status query.`]),
     "If it answers, work continues — nothing more to do here. If it is gone or silent after checking, that is a fact you (the conduit) should surface to the user.",
-    "You will be asked again about anything still open after another eta interval. To stop being asked, close the exchange: get the response, or park the dispatch by telling the user it is abandoned and writing its response file yourself.",
+    "You will be asked again about anything still open after half an eta interval the first time, then every eta interval. To stop being asked, close the exchange: get the response, or park the dispatch by telling the user it is abandoned and writing its response file yourself.",
   ];
   return lines.join("\n");
 }
@@ -158,7 +178,7 @@ try {
   }
   if (toBlockOn.length === 0) allow(); // nothing outstanding is due for a check-in yet
 
-  block(checkInReason(toBlockOn));
+  block(checkInReason(toBlockOn, cwd));
 } catch (err) {
   logHookError("stop-orchestrator-liveness.mjs", err);
   allow();

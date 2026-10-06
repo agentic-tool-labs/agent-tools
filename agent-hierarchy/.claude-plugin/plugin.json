@@ -1,7 +1,7 @@
 {
   "name": "ah",
   "displayName": "Agent Hierarchy — Role/Model Assignment",
-  "version": "0.109.0",
+  "version": "0.112.1",
   "description": "Multi-agent role hierarchy, each on the right model. Optional herdr transport for pane-based teams.",
   "author": {
     "name": "Jim Cline"
@@ -15,5 +15,15 @@
     "review",
     "cost",
     "herdr"
-  ]
+  ],
+  "hooks": "./mod/hooks.json",
+  "types": "./mod/types/index.d.ts",
+  "userConfig": {
+    "status_entry": {
+      "type": "boolean",
+      "title": "Status entry",
+      "description": "Show the hierarchy line (⚠ ah: …) above the prompt. Turn it off when claude-tui-line's ah item already shows it.",
+      "default": true
+    }
+  }
 }

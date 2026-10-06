@@ -85,6 +85,8 @@
  *                       [--cwd <path>]
  *                       Re-renders one stream's tab label; what hooks/stream-label.mjs runs.
  *   roster.mjs teams   [--cwd <path>] [--orchestrator-pid <pid>]
+ *   roster.mjs status  [--plain] [--now <ISO>] [--cwd <path>]
+ *                       Computes the hierarchy status document, writes <hier>/status.json, prints it.
  *   roster.mjs reap    [--commit] [--cwd <path>]
  *                       (bare: lists orphaned team records — dead/null orchestrator pid,
  *                       age never a factor — and deletes nothing; --commit removes them.)
@@ -158,10 +160,11 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
-import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, recordLiveness, responsePlan, responseSkeleton, synthesizedPeerName } from "./lib-hier.mjs";
+import { activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, isPaneMember, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
+import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
+import { clearActivity, computeStatus, plainStatus, recordActivity, saveStatus } from "./lib-status.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam } from "./lib-roster.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
@@ -3799,6 +3802,39 @@ function blockedFields(p) {
   return { blocked_by: p.blocked_by, screen: p.screen, screen_hash: p.screen_hash, options: p.options };
 }
 
+/** The screen line a recognised prompt starts on (the line holding its heading), or null. */
+function promptNote(member, p) {
+  const prompts = (KIND_HARNESS[resolveKind(member)] || {}).prompts || {};
+  const spec = p && p.recognized ? prompts[p.recognized] : null;
+  if (!spec || typeof spec.heading !== "string") return null;
+  const line = String(p.screen || "").split("\n").find((l) => l.includes(spec.heading));
+  return line ? line.trim() : null;
+}
+
+const PANE_ACTIVITY = { working: "working", idle: "idle", done: "idle", blocked: "blocked", agent_not_found: "unknown" };
+
+/**
+ * A pane member's activity record as `deliver` learns its state from Herdr: `see` records each
+ * observation, and `final` records the last one again as the run ends. `recordActivity` writes only
+ * a state the record does not already hold, so neither ever refreshes the time a state began.
+ */
+function paneActivityObserver(dir, member) {
+  const subject = `pane-${member.name}`;
+  let latest = null;
+  return {
+    see(agentStatus, p = null) {
+      const activity = PANE_ACTIVITY[agentStatus];
+      if (!activity) return;
+      const blocked = activity === "blocked";
+      latest = { activity, blocked_by: blocked ? (p && p.blocked_by) || null : null, note: blocked ? promptNote(member, p) : null };
+      recordActivity(dir, subject, latest);
+    },
+    final() {
+      if (latest) recordActivity(dir, subject, latest);
+    },
+  };
+}
+
 /**
  * What the Orchestrator does about a member stopped at a prompt. A prompt with answers to offer is
  * relayed: the user picks in AskUserQuestion and `answer` sends that row's keys; one with none is
@@ -3951,9 +3987,10 @@ async function launchMember(member, transport) {
  * Per-member layout+launch+retry (spec 0009 §6.3 step 5): place `peerMembers.length` panes via the
  * transport, assign each member's `transport_id`, then launch+retry each with `launchMember`.
  * Mutates `peerMembers` in place (`transport_id`); returns launch results aligned to `peerMembers`.
- * Shared by `createSpawn` (spec 0005) and `spawn-one` (spec 0009 §6) — one implementation.
+ * Shared by `createSpawn` (spec 0005) and `spawn-one` (spec 0009 §6) — one implementation. Every
+ * pane-driven member (isPaneMember) it launches is recorded idle in `dir`'s activity records.
  */
-async function layoutAndLaunch(allMembers, transport, mode, splitCwd, callerLabel, layoutOpts = {}) {
+async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, callerLabel, layoutOpts = {}) {
   // Spec 0043 §1.4/§4.3: a refused member has nothing shelled for it — and a pane IS something
   // shelled for it, so the refusal must land BEFORE the layout step, not inside launchMember.
   // Partitioned here rather than at each call site because this is the one seam `create --spawn`,
@@ -4001,6 +4038,9 @@ async function layoutAndLaunch(allMembers, transport, mode, splitCwd, callerLabe
   });
 
   const settled = await Promise.allSettled(peerMembers.map((m) => launchMember(m, transport)));
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled" && r.value.launch_status !== "failed" && isPaneMember(peerMembers[i])) recordActivity(dir, `pane-${peerMembers[i].name}`, { activity: "idle" });
+  });
   const launched = settled.map((r, i) => (r.status === "fulfilled" ? r.value : { ...peerMembers[i], launch_status: "failed", launch_result: null, retried: false, error: String(r.reason) }));
   // Results stay aligned to the caller's original array so an index-keyed caller still lines up.
   return allMembers.map((m) => (m.spawn && m.spawn.refuse ? { ...m, transport_id: null, launch_status: "failed", launch_result: { reason: "refused", ...(m.spawn.refusal || {}), detail: m.spawn.refuse }, retried: false, error: m.spawn.refuse } : launched[peerMembers.indexOf(m)]));
@@ -4058,8 +4098,7 @@ function warnMixedPrefixSpawnOne(dir, member) {
 /** Spec 0009 §6.3 step 4: the same up/pid, seen|briefed/freshness liveness rule `roster()`
     (lib-hier.mjs) applies per-record, applied here to one named team member. */
 function memberIsLive(dir, name) {
-  const rec = attributedRoster(dir).find((r) => r.name === name);
-  return Boolean(rec) && rec.status !== "down" && recordLiveness(rec).live;
+  return attributedLiveness(attributedRoster(dir), name).live;
 }
 
 /**
@@ -4446,8 +4485,9 @@ function reconcileAfterClose(dir, snapshot, results) {
 }
 
 /** Writes `team` with only `rows`, or clears its file when no row is left: a team's last departure
-    ends it. True when the file was cleared. */
+    ends it. A pane member that leaves takes its activity record with it. True when the file was cleared. */
 function writeTeamRows(dir, team, rows) {
+  for (const m of team.members) if (m && m.name != null && !rows.includes(m)) clearActivity(dir, `pane-${m.name}`);
   if (rows.length === 0) clearTeam(dir, teamFile);
   else writeTeam(dir, { ...team, members: rows }, teamFile);
   return rows.length === 0;
@@ -4464,7 +4504,7 @@ async function createSpawn(dir, withWarnings) {
   const tierBlocked = peerMembers.find(adviseTierBlocked);
   if (tierBlocked) refuseAdviseTier(tierBlocked);
 
-  const launched = await layoutAndLaunch(peerMembers, transport, layout.mode, cwd, "create --spawn");
+  const launched = await layoutAndLaunch(dir, peerMembers, transport, layout.mode, cwd, "create --spawn");
   storeTeamLayout(layout);
   const launchByName = new Map(peerMembers.map((m, i) => [m.name, launched[i]]));
 
@@ -4536,7 +4576,7 @@ function allTeamRows(dir, invoker) {
 /** A stream's name: git-branch-safe, directory-safe, and short enough that `<glyph> <name>` stays
     well under Herdr's 80-character metadata limit. */
 const STREAM_NAME_RE = /^[a-z][a-z0-9_-]{0,39}$/;
-const STREAM_SELF_STATES = ["working", "idle", "blocked"];
+const STREAM_SELF_STATES = Object.values(SELF_STATE);
 
 function rejectUnknownFlags(allowed, verb) {
   for (const key of Object.keys(opts)) {
@@ -4983,7 +5023,7 @@ async function spawnOneCore(role, callerLabel, adHocMember = null) {
     : [];
 
   const anchor = stream && transport === "herdr" ? streamAnchor(dir, stream, team) : null;
-  const [launched] = await layoutAndLaunch([planEntry], transport, mode, cwd, callerLabel, { seedPanes, anchor });
+  const [launched] = await layoutAndLaunch(dir, [planEntry], transport, mode, cwd, callerLabel, { seedPanes, anchor });
   if (launched.launch_status === "failed") {
     // Spec 0043 §1.4/§1.9: the orphaned-pane id, its close command and the args-blame diagnostic
     // live in `launch_result`. `fail()` prints one line, so they have to be folded into it —
@@ -5081,11 +5121,11 @@ function paneMemberOrFail(dir, name, verb) {
   const members = Array.isArray(team.members) ? team.members.filter((m) => m && typeof m === "object") : [];
   const member = members.find((m) => m.name === name);
   if (!member) {
-    const pane = members.filter((m) => resolveKind(m) !== KIND_DEFAULT && m.route === "pane").map((m) => m.name);
+    const pane = members.filter(isPaneMember).map((m) => m.name);
     fail(`${verb}: ${teamPath(dir, teamFile)} has no member named ${JSON.stringify(name)} — its pane members are: ${pane.join(", ") || "(none)"}`);
   }
   if (resolveKind(member) === KIND_DEFAULT) fail(`${verb}: ${name} is a Claude session — SendMessage it`);
-  if (member.route !== "pane") fail(`${verb}: ${name} (kind ${resolveKind(member)}) is recorded with route ${JSON.stringify(member.route)}, not "pane"`);
+  if (!isPaneMember(member)) fail(`${verb}: ${name} (kind ${resolveKind(member)}) is recorded with route ${JSON.stringify(member.route)}, not "pane"`);
   return member;
 }
 
@@ -5113,29 +5153,6 @@ function requireUltraApproval(dir, member) {
       `Ask the user first (agent-team's "When a role can't take the work"): AskUserQuestion, header "Ultra-Advisor", with the options "Yes, rest of session", "Ask me each time" and "No, not this session". ` +
       `Record the answer with node "${gateCli}" set --session "${sessionId}" --choice <session|each|off>, then re-run this command.`
   );
-}
-
-/**
- * Whether a response file holds a report. It is created with a fixed body below its frontmatter, so
- * a body that is still that skeleton, trailing whitespace aside, is no report; a frontmatter that no
- * longer parses, or no longer carries the request's id, is a malformed one. The skeleton is the
- * baseline for a file this run did not create as well, a reused one or one `--wait-only` reads.
- */
-function reportStatus(path, id) {
-  let text;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return "no-report";
-  }
-  const fm = parseFrontmatter(text);
-  if (!fm || fm.fields.id !== id) return "malformed-report";
-  const norm = (body) => {
-    const lines = body.split("\n").map((l) => l.replace(/\s+$/, ""));
-    while (lines.length && lines[lines.length - 1] === "") lines.pop();
-    return lines.join("\n");
-  };
-  return norm(text.split("\n").slice(fm.end).join("\n")) === norm(responseSkeleton()) ? "no-report" : "reported";
 }
 
 /** The member's last 20 lines, for diagnosis only: a report is only ever the file. */
@@ -6482,6 +6499,11 @@ try {
       }
       const dir = hierarchyDir(cwd);
       const member = paneMemberOrFail(dir, opts._[0], "deliver");
+      const seen = paneActivityObserver(dir, member);
+      const report = (res) => {
+        seen.final();
+        out(res);
+      };
       if (typeof opts.req !== "string") fail("deliver: --req <abs request path> is required");
       const req = opts.req;
       const plan = responsePlan(req);
@@ -6503,8 +6525,12 @@ try {
       const base = { name: member.name, request: req, response };
       const self = argWord(fileURLToPath(import.meta.url));
       const deadline = Date.now() + timeoutSec * 1000;
-      const notLive = (sent) => ({ status: "not-live", sent, ...base, agent_status: null, ...respawnCommand(dir, member) });
+      const notLive = (sent) => {
+        seen.see("agent_not_found");
+        return { status: "not-live", sent, ...base, agent_status: null, ...respawnCommand(dir, member) };
+      };
       const blocked = (agentStatus, p, sent) => {
+        seen.see("blocked", p);
         const b = blockedFields(p);
         // Answered, the prompt is re-checked by the command that stopped at it: this same command when
         // nothing was sent, or a wait on the brief that was.
@@ -6526,6 +6552,7 @@ try {
         // screen is checked too. A working member shows no prompt Herdr would not call blocked.
         const onScreen = state.agent_status === "working" ? null : readPrompt(member, state.agent_status);
         if (onScreen && onScreen.blocked_by) return blocked(state.agent_status, onScreen, false);
+        seen.see(state.agent_status);
         if (waitOnly) return { go: true };
         if (state.agent_status === "working" || !state.ready) return null;
         // A brief or ping is typed only into the idle, empty composer.
@@ -6534,11 +6561,11 @@ try {
         return screen.go ? screen : blocked(state.agent_status, screen, false);
       }, deadline, Number(process.env.AH_DELIVER_POLL_MS || 2000));
       if (!pre) {
-        out({ status: "busy", sent: false, ...base, agent_status: state.agent_status, message: "The member stayed working or not ready until --timeout, so nothing was sent. Re-run this same command." });
+        report({ status: "busy", sent: false, ...base, agent_status: state.agent_status, message: "The member stayed working or not ready until --timeout, so nothing was sent. Re-run this same command." });
         break;
       }
       if (!pre.go) {
-        out(pre);
+        report(pre);
         break;
       }
       // After the wait: `sent` says whether this run sent its brief or ping.
@@ -6557,6 +6584,7 @@ try {
         return evaluate(agentStatus, sent);
       };
       const evaluate = (agentStatus, sent) => {
+        seen.see(agentStatus);
         const status = reportStatus(response, plan.fields.id);
         return { status, sent, ...base, agent_status: agentStatus, ...(status === "no-report" ? { pane_tail: paneTail(member) } : {}) };
       };
@@ -6573,15 +6601,15 @@ try {
         // No response file means no brief was ever delivered for this request: that is not a report
         // owed, and never counts toward the pings.
         if (!existsSync(response)) {
-          out({ status: "not-sent", sent: false, ...base, agent_status: state.agent_status, message: "Nothing was delivered for this request: send the brief, without --wait-only." });
+          report({ status: "not-sent", sent: false, ...base, agent_status: state.agent_status, message: "Nothing was delivered for this request: send the brief, without --wait-only." });
           break;
         }
         if (state.agent_status !== "working") {
-          out(evaluate(state.agent_status, false));
+          report(evaluate(state.agent_status, false));
           break;
         }
         const w = call(["agent", "wait", member.name]);
-        out(w.error ? { status: "timeout", sent: false, ...base, agent_status: null, why: w.error.message, pane_tail: paneTail(member) } : finish(w.res, w.args, false));
+        report(w.error ? { status: "timeout", sent: false, ...base, agent_status: null, why: w.error.message, pane_tail: paneTail(member) } : finish(w.res, w.args, false));
         break;
       }
       if (!existsSync(response)) {
@@ -6596,7 +6624,7 @@ try {
           ? `Ping ${ping}/3: you owe a report on task ${plan.fields.slug} — write it to ${response}, then end your turn.`
           : [`[hierarchy-msg ${req}]`, `Report to: ${response}`, `Standing instructions: ${instructionsPath(member.name)} — read it first if you have not read it this session.`].join("\n");
       const sentCall = call(["agent", "prompt", member.name, text, "--wait"]);
-      out(sentCall.error ? { status: "timeout", sent: true, ...base, agent_status: null, why: sentCall.error.message, pane_tail: paneTail(member) } : finish(sentCall.res, sentCall.args, true));
+      report(sentCall.error ? { status: "timeout", sent: true, ...base, agent_status: null, why: sentCall.error.message, pane_tail: paneTail(member) } : finish(sentCall.res, sentCall.args, true));
       break;
     }
 
@@ -6643,6 +6671,7 @@ try {
       for (const key of row.keys) herdrCall(["agent", "send-keys", member.name, key]);
       // One look afterwards. A prompt still shown is reported, never answered again; an agent that
       // is gone (distrust quits Codex) is reported not live.
+      recordActivity(dir, `pane-${member.name}`, { activity: "working" });
       const after = herdrAgentState(member.name);
       const read = readPrompt(member, after.agent_status);
       out({ status: "answered", ...base, agent_status: after.agent_status, live: after.indeterminate ? null : after.live, prompt_after: read.recognized, screen: read.screen });
@@ -6718,6 +6747,21 @@ try {
       team.orchestrator = { ...(team.orchestrator || {}), pid: suppliedPid };
       writeTeam(dir, team, teamFile);
       out({ adopted: true, team_id: team.team_id, orchestrator: team.orchestrator });
+      break;
+    }
+
+    case "status": {
+      // The hierarchy status document (docs/status-file.md): computed, written to <hier>/status.json,
+      // printed. --now evaluates it as of that instant, for tests.
+      let nowMs = Date.now();
+      if (opts.now !== undefined) {
+        nowMs = typeof opts.now === "string" ? Date.parse(opts.now) : NaN;
+        if (!Number.isFinite(nowMs)) fail(`status: --now takes an ISO-8601 time, got ${JSON.stringify(opts.now)}`);
+      }
+      const doc = computeStatus(cwd, nowMs);
+      saveStatus(hierarchyDir(cwd), doc);
+      if (opts.plain === true) process.stdout.write(plainStatus(doc, nowMs) + "\n");
+      else out(doc);
       break;
     }
 

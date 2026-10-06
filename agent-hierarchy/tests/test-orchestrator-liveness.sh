@@ -77,9 +77,12 @@ EOF
 # replacement for the old peer-pending-record cross-reference (spec 0028
 # §5.3, finding 3): a dispatch record is written by the SENDER's own hook the
 # moment it sends the request, keyed on the sender's session_id, independent
-# of whether the recipient ever received or acknowledged it.
+# of whether the recipient ever received or acknowledged it. The row carries
+# the request's own (possibly backdated) `created`: the liveness clock starts
+# at the dispatch row, so a test's dispatch is as old as its request.
 mark_dispatch() {
-  printf '{"type":"dispatch","session_id":"%s","request_id":"%s","to":"%s","created":"%s"}\n' "$3" "$1" "$2" "$(now_iso)" >> "$PENDING"
+  local created; created=$(sed -n 's/^created: //p' "$HIER_DIR"/msgs/"$1"--*--request.md 2>/dev/null | head -1)
+  printf '{"type":"dispatch","session_id":"%s","request_id":"%s","to":"%s","created":"%s"}\n' "$3" "$1" "$2" "${created:-$(now_iso)}" >> "$PENDING"
 }
 
 liveness_hook() {

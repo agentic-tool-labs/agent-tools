@@ -5,6 +5,145 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.112.1]
+
+The status file's readers no longer open anything but a non-empty regular
+file. A symbolic link, FIFO, directory or device at `status.json` or
+`activity/<x>.json` counts as absent, a linked `activity/` directory is
+never swept, and the temp files `ah` writes are created exclusively so a
+committed link at a temp name can no longer redirect a write.
+`clearActivity` no longer follows a linked `activity` dir. See
+[Reading it](./docs/status-file.md#reading-it).
+
+## [0.112.0]
+
+The `ah` mod now shows the hierarchy's status as a band above the prompt, a
+Pane, and toasts. See
+[The band, the Pane and toasts](./README.md#the-band-the-pane-and-toasts).
+
+### Added
+
+- **The band.** One line above the prompt while dispatches are out or a member
+  is blocked. It names the most severe item: a stalled dispatch, then an
+  overdue one, then a blocked member. With none of those, it lists the working
+  dispatches and their elapsed time. It is drawn above whatever else shows
+  there, never in its place, and it steps aside while a survey is up. It
+  appears on the terminal and desktop only.
+- **The Pane and `/hierarchy-pane`.** The Pane lists the pipeline, the team's
+  members and the outstanding dispatches. It opens on its own once per
+  session, the first time there is status to show. The engine places an
+  unasked Pane from 144 columns, or from 110 once you have opened it yourself;
+  below that it waits until the terminal is wide enough. `/hierarchy-pane`
+  opens it at any width. Closing the Pane by hand keeps it closed for the
+  session, until `/hierarchy-pane`.
+- **Toasts.** One toast when a dispatch reports, when a member is blocked, and
+  when a dispatch stalls. Each shows at most once per session, also across a
+  reload. The first status a session sees toasts nothing, so old events are
+  not replayed.
+- Team members' own sessions see none of this. `/hierarchy-pane` there opens
+  nothing and says the view is hidden in member sessions.
+
+### Changed
+
+- **The mod's read-only guard** allows the `ui.close` hook only with the exact
+  matcher `{ id: 'ah-status' }`.
+
+### Known risks
+
+- **A close by hand is checked only by hand.** The plugin test kit cannot
+  raise a close by a person, so no automated test shows that closing the Pane
+  by hand keeps it closed. The manual check in the spec (P3 AC 4) covers it.
+- **Drawing is not tested.** The tests check the trees the mod returns, not
+  how a surface paints or places them, so the width floors and placement are
+  also covered only by that manual check.
+- **The same client risk as 0.111.0.** The mod needs Claude Code 2.1.289 or
+  later. An older client may reject the mod file outright, and whether the
+  command hooks still load then is untested. The mod has been tested only with
+  `--plugin-dir`, not yet as an installed marketplace copy.
+
+## [0.111.0]
+
+`ah` now carries a small read-only mod that shows the hierarchy's status in
+the session. See
+[The status entry: the team at a glance](./README.md#the-status-entry-the-team-at-a-glance).
+
+### Added
+
+- **The status entry.** The engine shows a `⚠ ah: …` line, such as
+  `2 live · 1 out · 1 blocked`, read from `<hier>/status.json` every two seconds.
+  It shows in the Orchestrator's and other non-member sessions, and is hidden in
+  team members' own sessions. Nothing shows when there is no status file or it
+  has expired.
+- **The `status_entry` option.** It is on by default. Turn it off with `/config`
+  or `claude plugin configure` (user scope only) to hide the line, for example
+  when claude-tui-line's `ah` item already shows the counts.
+- **Minimum client version.** The mod half of `ah` needs Claude Code 2.1.289 or
+  later. An older client may reject the mod file outright. Whether the command
+  hooks still load then is untested; this is an accepted risk. The bundled mod
+  has been tested only with `--plugin-dir`, not yet as an installed marketplace
+  copy.
+
+### Fixed
+
+- **A Claude member with `route: pane` is treated as a Claude session.** In the
+  status file it is attributed by its session and hidden like any member
+  session, and it gets the Claude check-in wording. Spawning it no longer
+  records pane activity for it.
+
+## [0.110.0]
+
+`ah` keeps one status file describing the live hierarchy, for status lines and
+the coming `ah` mod to show.
+
+### Added
+
+- **The hierarchy status file.** `<hier>/status.json` describes the live teams,
+  their members (live or gone, working, idle or blocked), the work dispatched to
+  them (working, overdue, stalled or reported) and any `/pipeline` run. Changes
+  that only depend on time are scheduled inside the document, so a reader picks
+  the entry current at its own clock and works nothing out. `ah` rewrites it
+  whenever hierarchy state changes: peers rows, message files, team files,
+  decision rows, check-ins, activity records, every session start, and
+  `/hierarchy` config changes. A failed write never affects what triggered it.
+  Schema, rules and the shared test fixtures:
+  [docs/status-file.md](./docs/status-file.md).
+- **`roster.mjs status [--plain] [--now <ISO>]`.** Computes the document, writes
+  it and prints it. `--plain` prints the one-line `ah · …` text.
+- **Activity records.** A Claude role session records its own activity in
+  `<hier>/activity/` from its UserPromptSubmit, Stop and permission-prompt
+  events. A new PostToolUse hook on every tool call, registered async, marks it
+  working again after a permission prompt. Each run of that hook loads `ah`'s
+  libraries (tens of milliseconds) but doesn't delay the next tool. The
+  UserPromptSubmit, Stop and permission-prompt hooks run in line. In any session
+  of a repo that has a hierarchy directory, role or not, UserPromptSubmit and
+  Stop also rewrite status.json: about 6 ms warm and 13 ms cold at p95, measured
+  on a live pool. Every `ah` hook now loads the full library set, which adds up
+  to about 3 ms per hook process at p95. Pane members are recorded by `deliver`,
+  `answer`, spawn, `dismiss` and `disband`.
+
+### Changed
+
+- **A member's exchange stays open until its response holds a report.** A
+  skeleton response stub addressed to a member no longer closes the exchange,
+  and `msg.mjs sweep` no longer archives such a pair. A response over 4 KB
+  counts as a report without being read. Exchanges addressed to the
+  Orchestrator, which includes every `/pipeline` run record, still close on any
+  response.
+
+  After upgrading, older unfilled stubs of member exchanges show as open again in
+  `msg.mjs list`, and their roles count as busy. To clear one that was
+  abandoned, write a line of content into its response file. There is no
+  automatic migration.
+- **Stop-hook check-ins.**
+  - The clock starts at the first dispatch, not when the request file was
+    written.
+  - The second check-in comes half an eta interval after the first.
+  - Work sent to a pane member with `roster.mjs deliver` is now checked in on
+    too, with the `deliver … --wait-only` command to run instead of
+    ListAgents/SendMessage.
+- **`merge-check` sign-off.** Only a closed `-ok` addressed to a member, with a
+  report in its response, counts as the Architect's sign-off.
+
 ## [0.109.0]
 
 `/pipeline` decides safe questions for you instead of waiting.

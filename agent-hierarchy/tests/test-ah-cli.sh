@@ -188,7 +188,19 @@ T7_EXEMPT=(
   'hooks/lib-config.mjs|export const MCP_TOOL_PREFIX = "mcp__";'
   'hooks/hooks.json|        "matcher": "mcp__.*",'
 )
-HITS=$(cd "$PLUGIN" && grep -rn 'mcp__\|mcpServers\|server\.mjs\|AH_MCP' agents/ skills/ commands/ hooks/ README.md docs/*.md .claude-plugin/ 2>/dev/null | {
+# T7's file set. In a git work tree: the files git would track there (tracked, or untracked and not
+# ignored), so a --plugin-dir load's ignored output (.claude-plugin/types/) is never read. Outside one
+# (a git archive copy): every file under the same paths.
+t7_grep() {
+  local pat='mcp__\|mcpServers\|server\.mjs\|AH_MCP'
+  if [ "$(git -C "$PLUGIN" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
+    git -C "$PLUGIN" ls-files -z --cached --others --exclude-standard -- agents skills commands hooks README.md ':(glob)docs/*.md' .claude-plugin |
+      (cd "$PLUGIN" && xargs -0 grep -Hn "$pat" 2>/dev/null)
+  else
+    (cd "$PLUGIN" && grep -rn "$pat" agents/ skills/ commands/ hooks/ README.md docs/*.md .claude-plugin/ 2>/dev/null)
+  fi
+}
+HITS=$(t7_grep | {
   used=""
   while IFS= read -r hit; do
     file=${hit%%:*}; rest=${hit#*:}; text=${rest#*:}

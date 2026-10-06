@@ -530,8 +530,7 @@ It opens no PR, so the report lives only in this message.
 
 **A plan run then closes its anchor.** Once both steps pass and its last
 push is made, write a response file for the anchor with
-`msg.mjs new --type response` (body `closed: run complete`), as § End of run
-does for issue runs. A run that halts leaves its anchor open: the next run's
+`msg.mjs new --type response`, as § End of run does for issue runs. A run that halts leaves its anchor open: the next run's
 check reports it, so the user sees any unpushed work first.
 
 ## Push regime
@@ -768,8 +767,8 @@ run's anchor is still open in this checkout, with its id and age. Give the
 exact command that closes it, ready to paste into the user's own terminal:
 every placeholder filled in, and `<ah root>` replaced by the absolute path on
 this session's `ah CLI root` line (the plugin-root variable is not set there):
-`node <ah root>/hooks/msg.mjs new --type response --id <id> --to orchestrator --from orchestrator --slug pipeline-run-anchor --team <team> --req <request path> --cwd <root>`,
-with `closed: stale anchor` as the response body. Tell the user to close it
+`node <ah root>/hooks/msg.mjs new --type response --id <id> --to orchestrator --from orchestrator --slug pipeline-run-anchor --team <team> --req <request path> --cwd <root>`.
+Tell the user to close it
 only if no other pipeline run is live in this checkout, and then to run
 again. Nothing closes an anchor automatically: a stale anchor and a live
 concurrent run look the same.
@@ -903,7 +902,7 @@ else as written there.
    push-mode decision (§ Push mode for issue runs).
 4. **Step 5a — early anchor.** Write the run anchor here, before any
    exchange that needs the run tag, not at step 6: the same `msg.mjs new`
-   shape, the same reserved slug `pipeline-run-anchor`, the same
+   shape and address (§ Run records), the same reserved slug `pipeline-run-anchor`, the same
    exactly-one location procedure, and the same check for an open anchor
    before writing it. Its `## constraints` holds these lines
    and **no `branch:` line**:
@@ -1116,6 +1115,13 @@ the anchor — `msg.mjs new`, never `SendMessage`d, left open for the run —
 so it is invisible to liveness for the same reason the anchor is. All slugs
 fit `^[a-z0-9-]{1,32}$`; none can equal `pipeline-run-anchor`.
 
+Every record request, the anchor included, is addressed to the Orchestrator
+itself:
+`node <ah root>/hooks/msg.mjs new --type request --to orchestrator --from orchestrator --slug <slug> --team <team> --cwd <root>`.
+The address is load-bearing: an orchestrator-addressed exchange closes on
+any response, while a member-addressed one closes only on an authored
+report.
+
 | Record | Slug | `## constraints` |
 |---|---|---|
 | Anchor | `pipeline-run-anchor` | as step 5a |
@@ -1230,7 +1236,9 @@ In order:
    item's rework; gate rounds are capped at 3.
 3. **Architect:** sign-off on that review, slug `<tag>-i<N>-ok` — on the
    review and the reported evidence, never on the builds (§ Completion
-   gate's rule).
+   gate's rule). The Architect's response must carry content: a skeleton
+   `-ok` response is not a sign-off, and `merge-check` reports
+   `not-signed-off`.
 4. **Unattended mode:** the final push (§ Per-item execution), then § PR
    creation, then § on_item_done.
 5. **Degraded mode:** the item stays `signed-off` until § Degraded
@@ -1465,7 +1473,7 @@ status; the PR URL or branch; the reason code; stack relationships.
 
 Then close the anchor, the `<tag>-verdicts` record, and every item,
 exception and `-done` record: write a response file for each with
-`msg.mjs new --type response` (body `closed: run complete`). Also delete
+`msg.mjs new --type response`. Also delete
 any `<root>/.claude/hierarchy/secret-scan-*.patch` left behind by an
 interruption.
 

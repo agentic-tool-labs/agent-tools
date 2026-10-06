@@ -316,8 +316,8 @@ node -e '
   const p=process.argv[1]; const ts=process.argv[2];
   fs.writeFileSync(p, fs.readFileSync(p,"utf8").replace(/^created:.*$/m, "created: "+ts));
 ' "$OLD_REQ" "$OLD_TS"
-dispatch_record() { # <session_id>
-  seed "{\"type\":\"dispatch\",\"session_id\":\"$1\",\"request_id\":\"$OLD_ID\",\"to\":\"architect\",\"created\":\"$TS\"}"
+dispatch_record() { # <session_id>: dispatched when the request was written, so the dispatch is as old as it
+  seed "{\"type\":\"dispatch\",\"session_id\":\"$1\",\"request_id\":\"$OLD_ID\",\"to\":\"architect\",\"created\":\"$OLD_TS\"}"
 }
 
 dispatch_record "s16a"

@@ -1,0 +1,3 @@
+# Written into the plugin by Claude Code on every --plugin-dir load, and specific to the client version.
+/tsconfig.json
+/.claude-plugin/types/

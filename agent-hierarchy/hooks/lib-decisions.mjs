@@ -11,6 +11,7 @@ import { dirname, join, sep } from "node:path";
 
 import { mainHierarchyDir } from "./lib-config.mjs";
 import { hierarchyDir, ID_RE, listExchanges, openExchanges, PIPELINE_ANCHOR_SLUG, readMsgFile } from "./lib-hier.mjs";
+import { statusChanged } from "./lib-status.mjs";
 
 /** Decided lines allowed per item and per run. Parked and merge lines count toward neither. */
 export const DECISION_ITEM_CAP = 4;
@@ -27,9 +28,9 @@ export function decisionLogPath(dir, runId) {
   return join(dir, "pipeline", runId, "decisions.jsonl");
 }
 
-/** The live run: the one open `pipeline-run-anchor` exchange of `team` in `dir`, as `{ id }`, or `{ error }` for none or several. */
-export function openRunAnchor(dir, team) {
-  const anchors = openExchanges(dir, team).filter((e) => e.slug === PIPELINE_ANCHOR_SLUG);
+/** The live run: the one open `pipeline-run-anchor` exchange of `team` in `dir`, as `{ id }`, or `{ error }` for none or several. `exchanges` is `dir`'s exchange list when the caller already holds it. */
+export function openRunAnchor(dir, team, exchanges = null) {
+  const anchors = openExchanges(dir, team, exchanges).filter((e) => e.slug === PIPELINE_ANCHOR_SLUG);
   if (anchors.length === 1) return { id: anchors[0].id };
   return {
     error: anchors.length
@@ -232,6 +233,7 @@ function appendLine(path, obj) {
   mkdirSync(dirname(path), { recursive: true });
   const torn = existsSync(path) && !/(^|\n)$/.test(readFileSync(path, "utf8"));
   appendFileSync(path, (torn ? "\n" : "") + JSON.stringify(obj) + "\n");
+  statusChanged(dirname(dirname(dirname(path))));
 }
 
 export const DECISION_INPUT_MAX = 64 * 1024;

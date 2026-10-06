@@ -82,6 +82,8 @@ check "response: to_name/from_name swapped from request" 'grep -q "^from_name: r
 check "response: 6 anchors" '[ "$(grep "^## \[" "$RESP" | tr "\n" " ")" = "## [0] tldr ## [1] status ## [2] changes ## [3] evidence ## [4] gaps ## [5] open_questions " ]'
 msg new --type response --id "$ID"
 check "response: duplicate rejected" '[ $RC -ne 0 ]'
+# A member-addressed exchange closes only once its response holds a report.
+printf -- '- done: roster shipped\n' >> "$RESP"
 msg list --plain
 check "list default (--open): closed exchange gone" '[ -z "$OUT" ]'
 msg list --closed --plain
@@ -106,6 +108,7 @@ check "sweep: open request untouched" 'ls "$HD/msgs" | grep -q "still-open--requ
 msg new --to reviewer --from orchestrator --slug fresh
 FID=$(node -e 'const o=JSON.parse(process.argv[1]);process.stdout.write(o.id)' "$OUT")
 msg new --type response --id "$FID"
+printf -- '- done: reviewed\n' >> "$(node -e 'const o=JSON.parse(process.argv[1]);process.stdout.write(o.path)' "$OUT")"
 msg sweep --days 7
 check "sweep --days 7: a fresh closed pair stays" 'echo "$OUT" | grep -q "\"archived\":0"'
 msg sweep --plain --days 0
