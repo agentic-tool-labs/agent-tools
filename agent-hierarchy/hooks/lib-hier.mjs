@@ -34,6 +34,8 @@ export const REASONS = ["context", "second-opinion", "parallel"];
 export const ETAS = ["small", "medium", "large"];
 /** small=5min, medium=10min, large=20min. */
 export const ETA_THRESHOLD_SEC = { small: 5 * 60, medium: 10 * 60, large: 20 * 60 };
+/** A peer's PostToolUse rewrites its activity record at most this often while its activity is unchanged. */
+export const TOOL_WRITE_INTERVAL_SEC = 15;
 /** A request's eta as one of ETAS: an absent or unrecognised one is treated as small. */
 export function etaOf(eta) {
   return ETAS.includes(eta) ? eta : "small";

@@ -92,6 +92,11 @@ mechanics; this file is the durable identity underneath it:
   or gone, tell the user plainly that the peer stalled: you are their only
   channel to that fact. Never substitute `CronCreate` for this: a cron entry
   outlives the session and fires with none of this context.
+- **Peer notes.** A peer `note:` message (`note <request id>: …`) is news,
+  not a report: it never closes a
+  dispatch and needs no reply. Answer a BLOCKED or NEEDS-DECISION report with
+  a new request (`msg.mjs new --type request --parent <blocked id>`), never a
+  re-send under the closed id.
 - **Tier rule.** Don't dispatch an advisor role at or below your own model
   tier without a stated `reason:` (context, second-opinion, parallel) in the
   request file — at equal tier you are consulting yourself at double cost.
