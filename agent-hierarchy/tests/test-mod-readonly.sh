@@ -188,7 +188,6 @@ for (const f of files) {
   // Position rule: in a band hook, Button stands only as an unrenamed `const { … } = $.ui.resolve(x)` property at the hook's own
   // function depth, or as a JSX tag in the hook's own return (or expression body) with no function literal before it, no call paren
   // open around it and no assignment in that return. So a Button value or element cannot leave the hook by a binding.
-  // ponytail: a `<` before a letter is read as a JSX tag, so `a <B` in a return can hide an `=` until the next `>`.
   const GROUP = new Set(["return", "if", "while", "for", "switch", "typeof", "await", "void"]);
   const CTRL = new Set(["if", "for", "while", "switch", "catch", "with"]);
   const matchOpen = (close) => { let d = 0; for (let k = close; k >= 0; k--) { const ch = code[k]; if (")]}".includes(ch)) d++; else if ("([{".includes(ch) && --d === 0) return k; } return -1; };
@@ -208,6 +207,11 @@ for (const f of files) {
     const bs = after + /^\s*(?::[^=;{]*)?(?:=>)?\s*/.exec(code.slice(after))[0].length;
     return { bs, block: code[bs] === "{" };
   };
+  // Whether an operand may start after `prefix`: a `<` there opens a JSX tag, anywhere else it is the less-than operator.
+  const startsOperand = (prefix) => {
+    const t = prefix.replace(/\s+$/, "");
+    return t === "" || /[(,{}?:>&|=[;!]$/.test(t) || /(?:^|[^\w$.])(?:return|typeof|await|void|yield|case|else)$/.test(t);
+  };
   // Whether `text` assigns outside a JSX attribute name= and outside an onPress body.
   const hasAssign = (text) => {
     let inTag = false, bd = 0;
@@ -221,7 +225,7 @@ for (const f of files) {
         if (ch === "}") { bd--; continue; }
         if (bd === 0 && ch === ">") { inTag = false; continue; }
         if (bd === 0 && ch === "=") continue;
-      } else if (ch === "<" && /[A-Za-z]/.test(nx || "") && !/[\w$)\]]/.test(pv)) { inTag = true; bd = 0; continue; }
+      } else if (ch === "<" && /[A-Za-z]/.test(nx || "") && startsOperand(text.slice(0, k))) { inTag = true; bd = 0; continue; }
       if (ch !== "=") continue;
       if (nx === "=") { k++; if (text[k + 1] === "=") k++; continue; }
       if (nx === ">") continue;
@@ -488,6 +492,7 @@ let el; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { 
 const keep = (x) => x; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return keep(<Box><Button onPress={() => 0} /></Box>) })
 let B; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button: B } = $.ui.resolve(e); return <B onPress={() => 0} /> })
 let x; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return <Button onPress={() => { x = <Button onPress={() => 0} /> }} /> })
+let s; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); const q = 1, w = 2; return (q <w, s = <Button onPress={() => 0} />) }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => s)
 EOF
 
 # The band hook may draw a Button with an inline arrow onPress; a $-first helper declared once may be called with $ from two hooks.
