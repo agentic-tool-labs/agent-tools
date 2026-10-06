@@ -359,6 +359,8 @@ pinned focus helper, which a click on a team member's name triggers
 (`herdr agent focus <name>`, a fixed argument list with no shell, and only for a
 name that passes herdr's agent-name rule). A second exec site, or any change to
 the pinned argv or init, needs a new security ruling, not a guard edit.
+The guard also allows the helper exactly one caller, the click handler of the
+Pane's member name, and bans every literal name that reaches a prototype.
 
 ## Durable agents (retired)
 

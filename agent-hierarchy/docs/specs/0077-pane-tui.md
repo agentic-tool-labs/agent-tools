@@ -403,9 +403,24 @@ distinguish the states; a spinner; a borderline row wrapping; a color chosen out
       it, and nothing else is exempted;
     - (c) `process.run` is **not** added to `ALLOWED_CALLS`, so the exec is allowed only by excision of the pinned
       span.
-  - **(r6, C2)** `prototype` joins the guard's whole-word `BANNED_TOKENS` for `mod/`, so the regex check cannot be
-    voided (for example `RegExp.prototype.test = () => true`). The Implementor first confirms there is no existing hit
-    in `mod/`; if there is one, stop and report.
+  - **(r6, C2; r8 widened)** The guard's whole-word `BANNED_TOKENS` for `mod/` gains **every literal name that can
+    obtain or rebind a prototype**: `prototype`, `__proto__`, `getPrototypeOf`, `setPrototypeOf`, `defineProperty`,
+    `defineProperties`, `getOwnPropertyDescriptor`, `getOwnPropertyDescriptors`. This stops the pinned pattern check
+    from being voided, for example `RegExp.prototype.test = () => true`, `/a/.__proto__.test = …`, or
+    `Object.getPrototypeOf(/a/).test = …`.
+    - (r8) These tokens, like `process`, are matched **after blanking comments but before blanking strings**, so
+      `x['__proto__']` and `Object['getPrototypeOf']` fail too. `mod/types/` is excluded. The pinned span is excised
+      first.
+    - The Implementor first confirms there is no existing hit in `mod/` for any of them. If there is one, stop and
+      report.
+    - **Ceiling (unchanged, UA 1k39):** a name computed at run time (for example `RegExp[a + b]`) evades any token
+      ban. The guard is a tripwire, not a boundary.
+  - **(r8) Exactly one reference to the focus helper.** Outside the pinned span, the helper's identifier occurs
+    **exactly once in `mod/`**: as the callee of the Pane `onPress` call (W3).
+    - Any other occurrence fails: a call from another hook, an alias (`const f = <helper>`), passing it as a value,
+      exporting it, or a second call site in the Pane.
+    - So `process.run`, which exists only inside the excised helper, is reachable from the Pane `onPress` and nowhere
+      else. This matches the Reviewer's blocking fix.
   - **(r6, C6) The invariant is written down** at the top of `test-mod-readonly.sh` and in the mod's doc (the README
     section or doc that describes the mod):
     - "The mod runs nothing without a user press. Exactly one process may run: the pinned focus helper.
@@ -449,6 +464,17 @@ distinguish the states; a spinner; a borderline row wrapping; a color chosen out
 20. (r7) A map callback whose parameter is `$` or contains `$`.
 21. (r7) A Button inside a map callback in the **band** hook (the exception is Pane only).
 22. (r7) A row-drawer: `Button` passed as an argument (`drawRow(Button, r)`) or captured in a helper.
+
+23. (r8) `/a/.__proto__.test = () => true`; `x['__proto__']`.
+24. (r8) `Object.getPrototypeOf(/a/).test = …`; `Object['getPrototypeOf'](x)`.
+25. (r8) `Object.setPrototypeOf(…)`; `Object.defineProperty(RegExp, …)`; `Object.defineProperties(…)`;
+    `Object.getOwnPropertyDescriptor(…)` and the plural form.
+26. (r8) The focus helper referenced a second time: called from the band hook; called at module scope; aliased
+    (`const f = <helper>`); passed as a value (`run(<helper>)`); exported; a second Pane call site.
+27. (r8) No reference at all: the helper is pinned but the Pane never calls it (an unused exec site).
+
+**Must PASS (r8):** the one Pane call, plus a comment that mentions the helper's name. The reference count is taken
+on code with comments and strings blanked, so a mention there is not a reference.
 
 **Must PASS (r7):** `return (<Box>{sections.map((s) => <Box …>{s.rows.map(({ name, … }) => <Box key={…}><Button
 plain label={name} onPress={() => focus($, name)} …/></Box>)}</Box>)}</Box>)` inside the Pane hook. This is

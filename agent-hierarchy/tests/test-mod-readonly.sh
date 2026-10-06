@@ -35,7 +35,10 @@ RENDER_ELEMENTS="Box Text engine Button Input Select Link Code Markdown Client S
 DRAWABLE="Box Text engine"
 BAND_DRAWABLE="Button"
 RETURN_KEYS="context exitCode press client raster deny"
-BANNED_TOKENS="globalThis eval Reflect Proxy arguments this prototype"
+BANNED_TOKENS="globalThis eval Reflect Proxy arguments this"
+# Every literal name that can obtain or rebind a prototype (so the pinned pattern check cannot be voided). Matched as whole words on the
+# comment-blanked source with strings kept, so x['__proto__'] fails too; the computed-name ceiling (RegExp[a + b]) stays.
+PROTO_TOKENS="prototype __proto__ getPrototypeOf setPrototypeOf defineProperty defineProperties getOwnPropertyDescriptor getOwnPropertyDescriptors"
 # The one process the mod may run (spec: the focus helper). Held whole: any edit to the helper means editing this text, so
 # both always show in one diff. Matched once in mod/register.tsx on the comment-blanked source (strings kept), then cut out
 # by offset before the rest of the lexer reads the file; `process.run` is deliberately not in ALLOWED_CALLS.
@@ -62,9 +65,9 @@ HELPER_END
 # <mod dir>: every lexer violation in the module source under it, as file:line: reason; empty when clean.
 violations() {
   local out rc
-  out=$(node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" "$BAND_DRAWABLE" "$PINNED_NAME" "$HELPER" 2>&1 <<'JS'
+  out=$(node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" "$BAND_DRAWABLE" "$PINNED_NAME" "$HELPER" "$PROTO_TOKENS" 2>&1 <<'JS'
 const fs = require("fs"), path = require("path");
-const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg, bandDrawableArg, pinnedName, helperText] = process.argv.slice(2);
+const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg, bandDrawableArg, pinnedName, helperText, protoArg] = process.argv.slice(2);
 const set = (s) => new Set(s.split(" "));
 const CALLS = set(callsArg), EVENTS = set(eventsArg), TOKENS = set(tokensArg), DRAWABLE = set(drawableArg), BAND_DRAWABLE = set(bandDrawableArg);
 const BAND_MATCHER = "component=AbovePrompt", PANE_MATCHER = "component=Pane,requestId=ah-status";
@@ -172,6 +175,7 @@ for (const f of files) {
   // string), then cut out by offset so nothing else in this file is read as part of it. A copy elsewhere than register.tsx,
   // or a count other than one there, is a violation.
   let pinnedLive = false;
+  const legitRefs = new Set();
   {
     const pinned = new RegExp(helperText.split("\n").map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[ \\t]*\\r?\\n"), "g");
     const hits = [...kept.matchAll(pinned)].filter((h) => code.slice(h.index, h.index + 24) === kept.slice(h.index, h.index + 24));
@@ -186,7 +190,7 @@ for (const f of files) {
       pinnedLive = true;
     }
     for (const m of kept.matchAll(/(?<![\w$])process(?![\w$])/g)) at(m.index, "the word process outside the pinned focus helper");
-    for (const m of kept.matchAll(/(?<![\w$])prototype(?![\w$])/g)) at(m.index, "banned token prototype");
+    for (const tok of protoArg.split(" ")) for (const m of kept.matchAll(new RegExp(`(?<![\\w$])${tok}(?![\\w$])`, "g"))) at(m.index, `banned token ${tok}`);
   }
   // The value of the string literal that is the whole argument span, else null.
   const literalAt = ([s, e]) => { const k = s + /^\s*/.exec(code.slice(s))[0].length; return strings.has(k) && /^(['"])\s*\1$/.test(code.slice(k, e).trim()) ? strings.get(k) : null; };
@@ -359,6 +363,7 @@ for (const f of files) {
         if (press) { let dd = 0; for (let k = press.index + press[0].length - 1; k < attrs.length; k++) { if (attrs[k] === "{") dd++; else if (attrs[k] === "}" && --dd === 0) { pressText = attrs.slice(press.index + press[0].length, k); break; } } }
         const id = labels.length === 1 && labelCount === 1 ? labels[0][1] : null, esc = (x) => x.replace(/\$/g, "\\$");
         const call = id === null ? null : new RegExp(`^\\s*(?:async\\s*)?\\(\\s*\\)\\s*=>\\s*(?:\\{\\s*(?:try\\s*\\{\\s*)?(?:await\\s+)?${pinnedName}\\(\\s*\\$\\s*,\\s*${esc(id)}\\s*\\)\\s*;?\\s*(?:\\}\\s*catch\\s*(?:\\(\\s*[\\w$]*\\s*\\))?\\s*\\{\\s*\\}\\s*)?\\}|(?:await\\s+)?${pinnedName}\\(\\s*\\$\\s*,\\s*${esc(id)}\\s*\\))\\s*$`);
+        if (call !== null && pressText !== null && call.test(pressText)) legitRefs.add(i + 6 + press.index + press[0].length + pressText.search(new RegExp(`(?<![\\w$])${pinnedName}(?![\\w$])`)));
         if (!/(?:^|\s)plain(?=\s|=|$)/.test(flat)) at(i, "a Pane Button without plain");
         else if (id === null) at(i, "a Pane Button whose label is not a bare identifier");
         else if (pressText === null || !call.test(pressText)) at(i, `a Pane Button onPress that is not exactly one ${pinnedName}($, <label>) call`);
@@ -366,6 +371,13 @@ for (const f of files) {
       }
     }
   }
+
+  // The focus helper is referenced exactly once outside its pinned text: as the callee of the Pane Button's onPress. Counted on code with
+  // comments and strings blanked, so a mention there is no reference; a call from another hook, an alias, a value pass, an export or a second
+  // call site all fail, and so does a pinned helper that nothing calls.
+  for (const h of code.matchAll(new RegExp(`(?<![\\w$])${pinnedName}(?![\\w$])`, "g"))) if (!legitRefs.has(h.index)) at(h.index, "the focus helper is referenced outside the one Pane onPress call");
+  if (rel === "register.tsx" && pinnedLive && legitRefs.size === 0) at(0, "the pinned focus helper is never called by the Pane (an unused exec site)");
+  if (legitRefs.size > 1) at([...legitRefs][1], "the focus helper is called from more than one Pane onPress");
 
   // A Button's onPress is an inline arrow whose parameter, if any, is not named $; its body is lexed like any other code.
   for (const m of code.matchAll(/(?<![\w$.])onPress\s*(?:=\s*\{|:)\s*/g)) {
@@ -500,7 +512,7 @@ valnet() {
           if (!(M[ev] || []).includes(canon)) bad.push(`hook ${item}: matcher is not one of ${(M[ev] || ["(none)"]).join(" | ")}`);
         }
       }
-      if (c && c[1].trim() !== "nothing on $") for (const x of c[1].split(",").map((s) => s.trim().replace(/^\$\./, "")).filter(Boolean)) if (!calls.includes(x) && !net.includes(x)) bad.push(`call ${x}: not an allowed call`);
+      if (c && c[1].trim() !== "nothing on $") for (const x of c[1].split(",").map((s) => s.trim().replace(/^\$\./, "")).filter(Boolean)) if (!calls.includes(x.replace(/ \(via [\w$]+\)$/, "")) && !net.includes(x)) bad.push(`call ${x}: not an allowed call`);
     }
     if (!hooks) bad.push("validate printed no hooks");
     process.stdout.write(bad.join("\n"));
@@ -513,6 +525,14 @@ check "the module source passes the lexer" '[ -z "$OUT" ]'
 OUT=$(valnet "$PLUGIN")
 check "validate passes, and every hook and call it reports is on the lists, matchers included" '[ -z "$OUT" ]'
 
+# The one Pane Button call the real register.tsx makes, as a scratch hook.
+PANE_OK="on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember(\$, name)} /></Box>)}</Box>) })"
+# <line>...: the lexer's verdict on a scratch module holding only those lines (in register) and the pinned helper.
+paneonly() {
+  copy_mod
+  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@"; echo "}"; printf '%s\n' "$HELPER"; } > "$SANDBOX/mod/register.tsx"
+  violations "$SANDBOX/mod"
+}
 # <line>...: the lexer's verdict on a scratch copy of mod/ with those lines appended to register.tsx.
 copy_mod() { rm -rf "${SANDBOX:?}/mod"; cp -R "$PLUGIN/mod" "$SANDBOX/mod"; }
 planted() { copy_mod; printf '%s\n' "$@" >> "$SANDBOX/mod/register.tsx"; violations "$SANDBOX/mod"; }
@@ -664,7 +684,7 @@ check "the repo's own register.tsx holds the helper exactly once and the word pr
 # an onPress that is exactly one focus-helper call with that identifier. Each other form must fail the lexer on its own.
 while IFS= read -r line; do
   [ -n "$line" ] || continue
-  OUT=$(planted "$line")
+  OUT=$(paneonly "$line")
   check "lexer alone catches: $line  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
 done <<'EOF'
 on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ a, b }) => <Button plain label={a} onPress={() => focusMember($, b)} />)}</Box> })
@@ -698,12 +718,58 @@ EOF
 
 # The same hook, in the allowed form, passes: nested maps (sections, then rows), a keyed Box around the Button, plain, a bare label identifier destructured by the
 # innermost callback, and an onPress that is one helper call, awaited or wrapped in a try with an empty catch.
-OUT=$(planted "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button, Text } = \$.ui.resolve(e); return (<Box>{e.props.sections.map((s) => <Box key={s.key}>{s.rows.map(({ name, text }) => <Box key={name}><Button plain label={name} hover={{ underline: true }} onPress={() => focusMember(\$, name)} /><Text>{text}</Text></Box>)}</Box>)}</Box>) })")
+OUT=$(paneonly "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button, Text } = \$.ui.resolve(e); return (<Box>{e.props.sections.map((s) => <Box key={s.key}>{s.rows.map(({ name, text }) => <Box key={name}><Button plain label={name} hover={{ underline: true }} onPress={() => focusMember(\$, name)} /><Text>{text}</Text></Box>)}</Box>)}</Box>) })")
 check "lexer passes the Pane Button form: nested .map callbacks, a keyed Box, plain, a destructured label, one focus call" '[ -z "$OUT" ]'
-OUT=$(planted "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={async () => { try { await focusMember(\$, name) } catch {} }} /></Box>)}</Box>) })")
+OUT=$(paneonly "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={async () => { try { await focusMember(\$, name) } catch {} }} /></Box>)}</Box>) })")
 check "lexer passes a Pane Button whose onPress awaits the focus call inside a try with an empty catch" '[ -z "$OUT" ]'
-OUT=$(planted "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember(\$, name)} /></Box>)}</Box>) })")
+OUT=$(paneonly "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember(\$, name)} /></Box>)}</Box>) })")
 check "lexer passes a one-level .map Pane Button" '[ -z "$OUT" ]'
+
+# The focus helper is referenced exactly once outside its pinned text, as the Pane onPress callee: a process cannot run without a press (r8).
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches a second reference to the focus helper: $line  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "referenced outside the one Pane onPress call\|more than one Pane"'
+done <<'EOF'
+on('session.start', async ($, e, next) => { await focusMember($, 'x'); return next(e) })
+on('session.start', async ($, e, next) => { $.clock.every(1000, () => focusMember($, 'x')); return next(e) })
+const openPane2 = async ($, member) => { await focusMember($, 'x') }
+export const wrapper = ($, n) => focusMember($, n)
+const f = focusMember
+const g = { run: focusMember }
+export { focusMember as run }
+const callIt = (fn) => fn; callIt(focusMember)
+await focusMember($, 'x')
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { await focusMember($, 'x'); return next(e) })
+on('command.run', { command: 'hierarchy-pane' }, async ($, e, next) => { await focusMember($, 'x'); return ({ text: 'ok' }) })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember($, name)} /></Box>)}</Box>) })
+const k = [focusMember]
+const m = focusMember.bind(null, $)
+EOF
+OUT=$(paneonly "on('session.start', (\$, e, next) => next(e))")
+check "lexer alone catches: a pinned helper that the Pane never calls  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "never called"'
+OUT=$(paneonly "$PANE_OK" "// focusMember is the only helper; see focusMember above" "/* focusMember( */" "const note = 'focusMember'")
+check "lexer passes the one Pane call plus a comment and a string that name the helper" '[ -z "$OUT" ]'
+OUT=$(paneonly "$PANE_OK")
+check "lexer passes the one Pane call alone" '[ -z "$OUT" ]'
+
+# The prototype-reaching names (r8): each fails whole-word on the comment-blanked source, strings kept.
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches: $line  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "banned token"'
+done <<'EOF'
+RegExp.prototype.test = () => true
+/a/.__proto__.test = () => true
+const x = {}; x['__proto__']
+Object.getPrototypeOf(/a/).test = () => true
+Object['getPrototypeOf'](x)
+Object.setPrototypeOf(x, null)
+Object.defineProperty(RegExp, 'a', {})
+Object.defineProperties(x, {})
+Object.getOwnPropertyDescriptor(x, 'a')
+Object.getOwnPropertyDescriptors(x)
+EOF
 
 # The band hook may draw a Button with an inline arrow onPress; a $-first helper declared once may be called with $ from two hooks.
 OUT=$(planted "const help = async (\$, x) => { await \$.state.set(x, 1) }" \
@@ -745,7 +811,8 @@ p3 "on('session.start', (\$, e, next) => next(e))" \
    "on('command.run', { command: 'hierarchy-pane' }, (\$, e, next) => ({ text: 'ok' }))" \
    "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, (\$, e, next) => next(e))" \
    "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))" \
-   "on('ui.close', { id: 'ah-status' }, (\$, e, next) => next(e))"
+   "on('ui.close', { id: 'ah-status' }, (\$, e, next) => next(e))" \
+   "$PANE_OK"
 OUT="$(violations "$SANDBOX/p3/mod")$(valnet "$SANDBOX/p3")"
 check "a register with the ui.close matcher, both ui.render matchers and the command.run matcher passes the lexer and the validate net" '[ -z "$OUT" ]'
 p3 "on('session.start', (\$, e, next) => next(e))" "on('ui.render', (\$, e, next) => next(e))"
