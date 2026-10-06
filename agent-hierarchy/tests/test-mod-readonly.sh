@@ -22,22 +22,25 @@ check() {
 # The one copy of what the mod may do, from the 2.1.289 types. Calls are `$.<noun>.<method>`; events are
 # what `on(...)` may name; an event listed in MATCHERS must carry exactly one of its matchers (k=v pairs,
 # keys sorted), any other takes none. RENDER_ELEMENTS is every RenderElement type; the banned words are
-# RETURN_KEYS plus every element type not in DRAWABLE.
+# RETURN_KEYS plus every element type not in DRAWABLE. BAND_DRAWABLE is also drawable, but only inside the
+# ui.render hook matched by component=AbovePrompt, and only with an inline arrow onPress.
 ALLOWED_CALLS="session.cwd session.id fs.stat fs.read fs.exists clock.every clock.now state.get state.set ui.status ui.toast ui.open ui.resolve command.register"
 ALLOWED_EVENTS="session.start ui.close command.run ui.render"
 MATCHERS="command.run:command=hierarchy-pane ui.render:component=Pane,requestId=ah-status ui.render:component=AbovePrompt ui.close:id=ah-status"
 RENDER_ELEMENTS="Box Text engine Button Input Select Link Code Markdown Client Svg Raster Image"
 DRAWABLE="Box Text engine"
+BAND_DRAWABLE="Button"
 RETURN_KEYS="context exitCode press client raster deny"
 BANNED_TOKENS="globalThis eval Reflect Proxy arguments this"
 
 # <mod dir>: every lexer violation in the module source under it, as file:line: reason; empty when clean.
 violations() {
-  node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" <<'JS'
+  node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" "$BAND_DRAWABLE" <<'JS'
 const fs = require("fs"), path = require("path");
-const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg] = process.argv.slice(2);
+const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg, bandDrawableArg] = process.argv.slice(2);
 const set = (s) => new Set(s.split(" "));
-const CALLS = set(callsArg), EVENTS = set(eventsArg), TOKENS = set(tokensArg), DRAWABLE = set(drawableArg);
+const CALLS = set(callsArg), EVENTS = set(eventsArg), TOKENS = set(tokensArg), DRAWABLE = set(drawableArg), BAND_DRAWABLE = set(bandDrawableArg);
+const BAND_MATCHER = "component=AbovePrompt";
 const BANNED = new Set([...set(keysArg), ...[...set(elementsArg)].filter((x) => !DRAWABLE.has(x))]);
 const MATCHERS = {};
 for (const m of matchersArg.split(" ")) { const [ev, canon] = m.split(/:(.*)/s); (MATCHERS[ev] = MATCHERS[ev] || []).push(canon); }
@@ -140,11 +143,25 @@ for (const f of files) {
   // The value of the string literal that is the whole argument span, else null.
   const literalAt = ([s, e]) => { const k = s + /^\s*/.exec(code.slice(s))[0].length; return strings.has(k) && /^(['"])\s*\1$/.test(code.slice(k, e).trim()) ? strings.get(k) : null; };
 
+  // A matcher object's canonical form (k=v pairs, keys sorted), or null when it is not plain string pairs.
+  const canonOf = ([ms, me]) => {
+    const body = /^\s*\{([\s\S]*)\}\s*$/.exec(src.slice(ms, me));
+    const pairs = body ? body[1].split(",").map((x) => x.trim()).filter(Boolean).map((x) => /^(?:(['"])(\w+)\1|(\w+))\s*:\s*(['"])([^'"]*)\4$/.exec(x)) : [null];
+    return pairs.every(Boolean) ? pairs.map((p) => `${p[2] || p[3]}=${p[5]}`).sort().join(",") : null;
+  };
+  // The hook spans of the on('ui.render', { component: 'AbovePrompt' }, hook) registrations: the only place BAND_DRAWABLE may be drawn.
+  const bandSpans = [];
+  for (const m of code.matchAll(/(?<![\w$.])on\s*\(/g)) {
+    const a = callArgs(code, m.index + m[0].length - 1);
+    if (a && a.list.length === 3 && literalAt(a.list[0]) === "ui.render" && canonOf(a.list[1]) === BAND_MATCHER) bandSpans.push(a.list[2]);
+  }
+  const inBand = (i) => bandSpans.some(([s, e]) => i >= s && i < e);
+
   for (const m of src.matchAll(/\\u/g)) at(m.index, "a \\u escape");
   for (const m of code.matchAll(/(?<![\w$.])[A-Za-z_$][\w$]*/g)) if (TOKENS.has(m[0])) at(m.index, `banned token ${m[0]}`);
   for (const m of code.matchAll(/\bFunction\s*\(/g)) at(m.index, "banned token Function(");
   // The banned words, by token: identifiers, property names and JSX tags here; strings and plain templates below.
-  for (const m of code.matchAll(/(?<![\w$])[A-Za-z_$][\w$]*(?![\w$])/g)) if (BANNED.has(m[0])) at(m.index, `banned word ${m[0]}`);
+  for (const m of code.matchAll(/(?<![\w$])[A-Za-z_$][\w$]*(?![\w$])/g)) if (BANNED.has(m[0]) && !(BAND_DRAWABLE.has(m[0]) && inBand(m.index))) at(m.index, `banned word ${m[0]}`);
   for (const [k, v] of strings) if (BANNED.has(v)) at(k, `banned word '${v}'`);
 
   // Imports: register.tsx takes values only from ./view; any other import is `import type`, from
@@ -165,6 +182,27 @@ for (const f of files) {
   for (const m of code.matchAll(/(?<![\w$.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=(?!=)/g)) { const p = fnParams(code, m.index + m[0].length); if (p && p.length) withParams.add(m[1]); }
   for (const m of code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)) { const a = callArgs(code, m.index + m[0].length - 1); if (a && a.list.length) withParams.add(m[1]); }
 
+  // A Button's onPress is an inline arrow whose parameter, if any, is not named $; its body is lexed like any other code.
+  for (const m of code.matchAll(/(?<![\w$.])onPress\s*(?:=\s*\{|:)\s*/g)) {
+    const s = m.index + m[0].length, p = fnParams(code, s);
+    if (!p || /^\s*(?:async\s+)?function\b/.test(code.slice(s))) at(m.index, "onPress is not an inline arrow function");
+    else if (p.some(([t]) => paramName(t) === "$")) at(m.index, "onPress takes a parameter named $");
+  }
+
+  // A same-file helper that may be handed $: declared exactly once, as const <name> = (async)? ($ …) => …, and never bound again.
+  const helperOk = (name) => {
+    let decls = 0, other = 0;
+    for (const h of code.matchAll(new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$])`, "g"))) {
+      const before = code.slice(0, h.index), after = code.slice(h.index + name.length);
+      const eq = /(?<![\w$.])const\s+$/.test(before) ? /^\s*(?::[^=;]+)?=(?!=)/.exec(after) : null;
+      if (eq) {
+        const at0 = h.index + name.length + eq[0].length, p = fnParams(code, at0);
+        if (p && p.length && paramName(p[0][0]) === "$" && !/^\s*(?:async\s+)?function\b/.test(code.slice(at0))) decls++; else other++;
+      } else if (!(/^\s*\(/.test(after) && !/\bfunction\s+$/.test(before))) other++;
+    }
+    return decls === 1 && other === 0;
+  };
+
   for (const m of code.matchAll(/(?<![\w$])\$(?![\w$])/g)) {
     const i = m.index, rest = code.slice(i + 1);
     if (rel === "view.ts") { at(i, "view.ts holds a $"); continue; }
@@ -180,7 +218,11 @@ for (const f of files) {
       continue;
     }
     if (/^\s*\./.test(rest)) { at(i, "$.<noun> without a method"); continue; }
-    if (!isParam(code, i, rest)) at(i, "$ used other than as a first parameter or $.<noun>.<method>");
+    if (isParam(code, i, rest)) continue;
+    // name($ …): $ is the first argument of a call to a once-declared, $-first helper of this file.
+    const callee = /^\s*[,)]/.test(rest) ? /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(\s*$/.exec(code.slice(0, i)) : null;
+    if (callee && !/\b(?:new|function)\s+$/.test(code.slice(0, callee.index)) && helperOk(callee[1])) continue;
+    at(i, "$ used other than as a first parameter, $.<noun>.<method> or the first argument of a $-first helper of this file");
   }
 
   // register's definitions: (on) or (on, options). Their `on` is the one place `on` may stand other than as a callee.
@@ -211,10 +253,8 @@ for (const f of files) {
     const wants = MATCHERS[ev] ? 3 : 2;
     if (a.list.length !== wants) { at(i, `on('${ev}') takes ${MATCHERS[ev] ? "exactly one of its matchers and" : "no matcher, only"} an inline hook`); continue; }
     if (MATCHERS[ev]) {
-      const [ms, me] = a.list[1], body = /^\s*\{([\s\S]*)\}\s*$/.exec(src.slice(ms, me));
-      const pairs = body ? body[1].split(",").map((x) => x.trim()).filter(Boolean).map((x) => /^(?:(['"])(\w+)\1|(\w+))\s*:\s*(['"])([^'"]*)\4$/.exec(x)) : [null];
-      const canon = pairs.every(Boolean) ? pairs.map((p) => `${p[2] || p[3]}=${p[5]}`).sort().join(",") : null;
-      if (!MATCHERS[ev].includes(canon)) at(ms, `on('${ev}') matcher is not one of ${MATCHERS[ev].join(" | ")}`);
+      const canon = canonOf(a.list[1]);
+      if (!MATCHERS[ev].includes(canon)) at(a.list[1][0], `on('${ev}') matcher is not one of ${MATCHERS[ev].join(" | ")}`);
     }
     const hook = a.list[a.list.length - 1], p = fnParams(code, hook[0]);
     if (!p) at(hook[0], `on('${ev}') hook is not an inline arrow or function literal`);
@@ -331,7 +371,24 @@ on('ui.close', ($, e, next) => next(e))
 on('ui.close', { id: 'other' }, ($, e, next) => next(e))
 import { update } from 'claude-code'
 on('ui.render', { component: 'Pane', requestId: 'other' }, ($, e, next) => next(e))
+on('command.run', { command: 'hierarchy-pane' }, async ($, e, next) => { const { Button } = $.ui.resolve(e); return ({ text: 'ok' }) })
+on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => <Button onPress={() => $.session.authorize()}>x</Button>)
+on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => <Button onPress={($) => $.ui.toast('x')}>x</Button>)
+on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => <Button onPress={go}>x</Button>)
+on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => <Input />)
+JSON.stringify($)
+x.f($)
+const f = ($) => 1; const f = ($) => 2; f($)
+const f = ($) => 1; const g = (f) => f; f($)
+const f = (env) => env.session.authorize(); f($)
+const f = ($, e) => 1; f(e, $)
 EOF
+
+# The band hook may draw a Button with an inline arrow onPress; a $-first helper declared once may be called with $ from two hooks.
+OUT=$(planted "const help = async (\$, x) => { await \$.state.set(x, 1) }" \
+  "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button, Text } = \$.ui.resolve(e); return <Box><Text>x</Text><Button key=\"k\" label=\"L\" onPress={async () => { await help(\$, 1); await \$.ui.toast('x') }} /></Box> })" \
+  "on('command.run', { command: 'hierarchy-pane' }, async (\$, e, next) => { await help(\$, 2); return ({ text: 'ok' }) })")
+check "lexer passes a band Button with an inline arrow onPress and a \$-first helper called from two hooks" '[ -z "$OUT" ]'
 
 # The import rule closes a helper kept outside the scan: mod/types/ is not scanned, so a value import from
 # it is the violation.

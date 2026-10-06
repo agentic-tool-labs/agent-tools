@@ -255,6 +255,9 @@ export function cut(s: string, n: number): string {
   return c.length <= n ? s : n <= 0 ? '' : c.slice(0, n - 1).join('') + '…'
 }
 
+/** The band's Pane button: its label, its drawn width (`[ Pane ]`), the gap before it, and the narrowest band that draws it. */
+export const PANE_BUTTON = { label: 'Pane', width: 8, gap: 1, minColumns: 40 }
+
 /** The band's one line at `columns` and its tone, or null when there is no band. */
 export function bandLine(view: View | null, columns: number): { text: string; tone: Tone } | null {
   if (view === null || view.band === null) return null
