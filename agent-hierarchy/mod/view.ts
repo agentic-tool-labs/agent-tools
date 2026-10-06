@@ -448,3 +448,23 @@ export function paneSections(view: View | null, columns: number, why: string | n
     return flat()
   }
 }
+
+/** The toast_seconds the status toasts and the band notice last: 10 s by default. */
+export const TOAST_DEFAULT_MS = 10000
+/** The longest toast the host accepts, in seconds: ui.toast drops a timeoutMs above 60000. */
+export const TOAST_MAX_S = 60
+// A string, not a regex literal: the guard's lexer reads a $ in a regex literal as code.
+const PLAIN_DECIMAL = new RegExp('^\\s*-?\\d+(\\.\\d+)?\\s*$')
+
+/**
+ * How long a toast stays, in ms, from the raw `toast_seconds` option: 0 turns toasts off, else a whole number of
+ * seconds from 2 to 60 (the host rejects a toast longer than 60 s). A value counts as a number only when it is a finite number or a plain decimal string (a
+ * value set through configure arrives as a string); Number() is never used, since it reads '' and [] as 0 and would
+ * switch toasts off. Only an exact 0 is off; a negative or anything non-numeric is the default.
+ */
+export function toastMs(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && PLAIN_DECIMAL.test(raw) ? parseFloat(raw) : NaN
+  if (!Number.isFinite(n) || n < 0) return TOAST_DEFAULT_MS
+  if (n === 0) return 0
+  return Math.min(TOAST_MAX_S, Math.max(2, Math.round(n))) * 1000
+}

@@ -21,10 +21,11 @@ type World = {
   placed: boolean
   writes: { key: string; value: unknown }[]
   toasts: string[]
+  toastCalls: any[]
   order: string[]
 }
 const world = (over: Partial<World> = {}): World => ({
-  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], order: [], ...over,
+  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], toastCalls: [], order: [], ...over,
 })
 
 // Answers every $ call the module makes, from `w`; nothing real is read.
@@ -46,7 +47,7 @@ const stage = (on: any, w: World) => {
   on('command.register', (_$: any, e: any) => { w.registered.push(e); return { value: undefined } })
   on('ui.open', (_$: any, e: any) => { w.order.push('open'); w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
   on('state.set', async (_$: any, e: any, next: any) => { w.order.push(`set:${e.key}`); w.writes.push({ key: e.key, value: e.value }); return next(e) })
-  on('ui.toast', (_$: any, e: any) => { w.toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } })
+  on('ui.toast', (_$: any, e: any) => { w.toasts.push(typeof e === 'string' ? e : e.text); w.toastCalls.push(e); return { value: undefined } })
 }
 const writesOf = (w: World, key: string) => w.writes.filter((x) => x.key === key).map((x) => x.value)
 const start = ($: any, w: World, surface: string) => $.session.start({ cwd: w.cwd, surface, isInteractive: true })
@@ -891,4 +892,75 @@ test('a focusable member row draws its name as the Button and the rest as toned 
   await ui.unmount()
   const narrow = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: { ...paneProps(), bodyColumns: 12 }, viewport: { columns: 12, rows: 40 } })
   expect(await narrow.findAll({ type: 'Button' })).toHaveLength(0)
+})
+
+// ---- toast_seconds
+const TOASTING = { options: { toast_seconds: 30 } }
+// (The kit rejects a string for a number option, so string forms are covered by the pure mapping's tests.)
+const toasting = async ($: any, on: any, w: World) => {
+  stage(on, w)
+  beneath(on)
+  const clock = mock.clock(on, { now: NOW })
+  await start($, w, 'terminal')
+  w.files[FILE] = { text: fixtures.warn, mtimeMs: 2 }
+  await clock.advance(2000)
+  return clock
+}
+for (const [label, opts, ms] of [['a stored 30', { toast_seconds: 30 }, 30000], ['nothing stored', {}, 10000], ['a negative', { toast_seconds: -3 }, 10000], ['1', { toast_seconds: 1 }, 2000], ['500', { toast_seconds: 500 }, 60000]] as const) {
+  test(`R1 ${label}: the status toast passes the same timeoutMs, from one value`, { options: opts }, async ($, on) => {
+    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+    await toasting($, on, w)
+    expect(w.toastCalls).toEqual([{ text: 'architect blocked · Allow edits to config.toml? (y/n)', timeoutMs: ms }])
+  })
+  test(`R1 ${label}: the band's not-placed notice passes it too`, { options: opts }, async ($, on) => {
+    const w = world({ placed: false })
+    stage(on, w)
+    beneath(on)
+    mock.clock(on, { now: NOW })
+    await start($, w, 'terminal')
+    const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
+    await ui.press({ key: 'ah-pane' })
+    expect(w.toastCalls).toEqual([{ text: 'The hierarchy Pane is open, but this session shows no panes.', timeoutMs: ms }])
+  })
+}
+
+test('R3 with toast_seconds 0 a doc change that would toast makes no toast call, and the view is the same as with toasts on', { options: { toast_seconds: 0 } }, async ($, on) => {
+  const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+  await toasting($, on, w)
+  expect(w.toastCalls).toEqual([])
+  expect(writesOf(w, 'seen')).toEqual([[], [vectors.warn.toasts[0].key]])
+  const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
+  expect(texts(await ui.drawn())[0].text).toBe(vectors.warn.band?.text ?? '')
+})
+
+test('R3 with toast_seconds 0 the band button\'s not-placed path makes no toast call', { options: { toast_seconds: 0 } }, async ($, on) => {
+  const w = world({ placed: false })
+  stage(on, w)
+  beneath(on)
+  mock.clock(on, { now: NOW })
+  await start($, w, 'terminal')
+  const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
+  await ui.press({ key: 'ah-pane' })
+  expect(w.toastCalls).toEqual([])
+  expect(w.opens.length).toBeGreaterThan(0)
+})
+
+test('R3 notices seen while off are not replayed when toasts are on again', { options: { toast_seconds: 0 } }, async ($, on) => {
+  const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+  await toasting($, on, w)
+  expect(w.toastCalls).toEqual([])
+  const seen = writesOf(w, 'seen').at(-1)
+  expect(seen).toEqual([vectors.warn.toasts[0].key])
+})
+
+test('R3 the pinned helper is unchanged: its two toasts keep the engine default and show whatever toast_seconds is', { options: { toast_seconds: 0 } }, async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: { [FILE]: { text: JSON.stringify({ ...JSON.parse(fixtures.work), teams: [{ ...JSON.parse(fixtures.work).teams[0], members: [{ ...JSON.parse(fixtures.work).teams[0].members[0], name: 'A', focusable: true, route: 'peer', kind: 'claude' }] }] }), mtimeMs: 1 } } })
+  stage(on, w)
+  beneath(on)
+  mock.clock(on, { now: Date.parse(vectors.work.now) })
+  on('process.run', () => ({ value: { exitCode: 1 } }))
+  await start($, w, 'terminal')
+  const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })
+  await ui.press({ key: 'ah-name-A' })
+  expect(w.toastCalls).toEqual([{ text: 'Could not focus that member.' }])
 })

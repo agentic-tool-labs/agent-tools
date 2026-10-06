@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
-import { bandLine, BORDER_MIN, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
+import { bandLine, BORDER_MIN, toastMs, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
 const ms = (iso: string) => Date.parse(iso)
@@ -544,4 +544,28 @@ test('S13 a session listed in member_sessions draws no band, toast, Pane view or
   expect(bandLine(viewModel(parseDoc(text), ms(T0), 'sess-orch'), 120)).toBe(null)
   expect(paneRows(viewModel(parseDoc(text), ms(T0), 'sess-orch'), 120, nullCause(parseDoc(text), ms(T0), 'sess-orch')).map((r) => r.text)).toEqual(['No hierarchy status here (member session).'])
   expect(statusText(parseDoc(text), ms(T0), 'some-other-session', true)).not.toBe(undefined)
+})
+
+// ---- toast_seconds
+const MS = (...vals: unknown[]) => vals.map(toastMs)
+test('T1 a missing or non-numeric value is the default', async () => {
+  expect(MS(undefined, null, '', 'abc', NaN, Infinity, -Infinity, true, {})).toEqual(Array(9).fill(10000))
+})
+test('T2 ten is ten seconds', async () => { expect(MS(10, '10')).toEqual([10000, 10000]) })
+test('T3 a number or a plain decimal string, trimmed, in range', async () => { expect(MS(30, ' 30 ', '30')).toEqual([30000, 30000, 30000]) })
+test('T4 a fraction rounds to a whole second', async () => { expect(MS(2.4, 2.6)).toEqual([2000, 3000]) })
+test('T5 below two seconds is two', async () => { expect(MS(1, '1', 1.4)).toEqual([2000, 2000, 2000]) })
+test('T6 above 60 seconds is 60 (the host rejects a longer toast)', async () => { expect(MS(61, 121, 1e9, '120')).toEqual([60000, 60000, 60000, 60000]) })
+test('T7 the result is 0 or a whole number of seconds from 2 to 60, for any input', async () => {
+  const inputs: unknown[] = [undefined, null, '', 0, '0', -1, 0.4, 1, 2, 59.5, 120, 121, 1e300, -1e300, 'x', [], {}, [1], '12', ' 7.5 ', true, false, NaN]
+  for (const v of inputs) {
+    const ms = toastMs(v)
+    expect(ms === 0 || (Number.isInteger(ms) && ms % 1000 === 0 && ms >= 2000 && ms <= 60000)).toBe(true)
+  }
+})
+test('T8 exactly zero is off', async () => { expect(MS(0, '0', ' 0 ', '0.0', -0)).toEqual([0, 0, 0, 0, 0]) })
+test('T9 any negative is the default, not off', async () => { expect(MS(-1, -5, '-30', -0.4, '-0.4')).toEqual(Array(5).fill(10000)) })
+test('T10 a positive that rounds below two is two, not off', async () => { expect(MS(0.4, '0.4')).toEqual([2000, 2000]) })
+test('T11 values Number() would coerce, or that are not plain decimals, are the default and never off', async () => {
+  expect(MS('', '  ', false, [], [0], '1e3', '0x10', '10s', '+5', '.5', '5.', '1,5')).toEqual(Array(12).fill(10000))
 })

@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.118.0]
+
+### Added
+- Toasts last 10 s by default, configurable with `toast_seconds` (2-60); 0 turns the hierarchy notices off. Click a
+  notice to dismiss it, hover to keep it. Click feedback for a member focus is not affected.
+
 ## [0.117.1]
 
 ### Fixed
