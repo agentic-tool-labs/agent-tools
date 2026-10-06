@@ -5,6 +5,15 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.116.0]
+
+### Added
+- Per-peer progress in the status file and the Pane: the last finished tool and its age, refreshed at most every
+  15 s (tool name only, never arguments). A working peer reads `working 6m · last Edit 12s`.
+- Peers send one-line notes only for news that needs no answer (a surprise that changes the plan, or once at the
+  midpoint of a large brief); blocked or decision news goes out as a report. The Orchestrator treats a note as news
+  and answers a BLOCKED or NEEDS-DECISION report with a new request.
+
 ## [0.115.1]
 
 ### Fixed

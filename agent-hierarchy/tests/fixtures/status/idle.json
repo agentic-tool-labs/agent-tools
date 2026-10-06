@@ -19,6 +19,8 @@
           "activity": "idle",
           "activity_at": "2026-01-01T11:55:00.000Z",
           "blocked_by": null,
+          "last_tool": null,
+          "last_tool_at": null,
           "blocked_note": null
         },
         {
@@ -32,6 +34,8 @@
           "activity": "idle",
           "activity_at": "2026-01-01T11:55:00.000Z",
           "blocked_by": null,
+          "last_tool": null,
+          "last_tool_at": null,
           "blocked_note": null
         }
       ],

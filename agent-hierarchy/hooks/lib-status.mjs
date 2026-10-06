@@ -18,7 +18,7 @@ import { basename, dirname, join } from "node:path";
 
 import { hierarchyDir, isPaneMember, resolveConfig } from "./lib-config.mjs";
 import { decisionLogPath, decisionSummary, openRunAnchor, readDecisions } from "./lib-decisions.mjs";
-import { attributedRoster, CHECKIN_CADENCE, etaOf, listExchanges, attributedLiveness, readGates, readMsgFile, SELF_STATE, thresholdFor } from "./lib-hier.mjs";
+import { attributedRoster, CHECKIN_CADENCE, etaOf, listExchanges, attributedLiveness, readGates, readMsgFile, SELF_STATE, thresholdFor, TOOL_WRITE_INTERVAL_SEC } from "./lib-hier.mjs";
 import { dispatchOrigin } from "./lib-peer.mjs";
 import { listTeamNames, readTeam, teamIsLive } from "./lib-roster.mjs";
 
@@ -111,20 +111,28 @@ function activityFile(subject) {
 /**
  * Write a subject's activity record atomically and refresh the status file. Only the subject's own
  * events write its record. A record already holding this `activity`, `blocked_by` and `note` is left
- * alone, so its `at` stays the moment that state began. Writes nothing without the hierarchy dir.
- * Never throws; true when written.
+ * alone, so its `at` stays the moment that state began, except that a `tool` (a PostToolUse's tool
+ * name, never its input) is written when the record has none or its own is TOOL_WRITE_INTERVAL_SEC old.
+ * A write without a `tool` keeps the record's `tool` and `tool_at`. Writes nothing without the
+ * hierarchy dir. Never throws; true when written.
  */
-export function recordActivity(dir, subject, { activity, blocked_by = null, note = null }) {
+export function recordActivity(dir, subject, { activity, blocked_by = null, note = null, tool = null }) {
   const file = activityFile(subject);
   if (!file || !dir || !existsSync(dir)) return false;
   const current = readActivity(dir, file);
-  if (current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note) return false;
+  const name = clean(tool, NAME_CAP) || null;
+  const nowMs = Date.now();
+  const toolStale = !current || !current.tool_at || !(nowMs - Date.parse(current.tool_at) < TOOL_WRITE_INTERVAL_SEC * 1000);
+  if (current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note && !(name && toolStale)) return false;
+  const kept = !name && current ? { tool: current.tool ?? null, tool_at: current.tool_at ?? null } : null;
   try {
     if (lstatOrNull(join(dir, "activity")) === null) mkdirSync(join(dir, "activity"), { recursive: true });
     const activityDir = activityDirOf(dir);
     if (!activityDir) return false;
     const tmp = join(activityDir, `${file}.${process.pid}.tmp`);
-    writeTempExclusive(tmp, JSON.stringify({ activity, at: new Date().toISOString(), blocked_by, note }) + "\n");
+    const at = new Date(nowMs).toISOString();
+    const toolFields = name ? { tool: name, tool_at: at } : kept || { tool: null, tool_at: null };
+    writeTempExclusive(tmp, JSON.stringify({ activity, at, blocked_by, note, ...toolFields }) + "\n");
     renameSync(tmp, join(activityDir, file));
   } catch {
     return false;
@@ -197,6 +205,8 @@ function describeMembers(dir, team, roster) {
       activity,
       activity_at: rec ? clean(rec.at) : null,
       blocked_by: activity === "blocked" ? clean(rec.blocked_by, NAME_CAP) : null,
+      last_tool: clean(rec?.tool, NAME_CAP) || null,
+      last_tool_at: rec && typeof rec.tool_at === "string" ? clean(rec.tool_at) : null,
       blocked_note: route === "pane" && activity === "blocked" ? clean(rec.note, NOTE_CAP) : null,
     };
   });

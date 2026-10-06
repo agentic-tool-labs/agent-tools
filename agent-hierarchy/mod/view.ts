@@ -122,6 +122,7 @@ type Dispatch = {
 type Member = {
   name: string; label: string; kind: string; route: string; live: unknown
   activity: string; activityMs: number; activityAt: string; blockedBy: string; note: string
+  lastTool: string; lastToolMs: number
 }
 type Team = { name: string; pipeline: Record<string, unknown> | null; members: Member[]; dispatches: Dispatch[] }
 
@@ -133,6 +134,7 @@ function readTeams(doc: Doc, nowMs: number): Team[] {
       name: str(m.name), label: str(m.label), kind: str(m.kind), route: str(m.route), live: m.live,
       activity: str(m.activity), activityMs: instantMs(m.activity_at), activityAt: str(m.activity_at),
       blockedBy: str(m.blocked_by), note: str(m.blocked_note),
+      lastTool: str(m.last_tool), lastToolMs: instantMs(m.last_tool_at),
     })),
     dispatches: records(t.dispatches).map((d) => {
       let state = '', reason = ''
@@ -217,7 +219,10 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
   for (const t of teams) {
     pane.push(heading('Team', t))
     for (const m of t.members) {
-      const state = m.live === false ? 'gone' : `${m.activity}${m.route === 'pane' && !Number.isNaN(m.activityMs) ? ` ${age(nowMs - m.activityMs)}` : ''}`
+      const progress = m.route !== 'pane' && m.activity === 'working' && m.lastTool !== '' && !Number.isNaN(m.activityMs) && !Number.isNaN(m.lastToolMs) && m.lastToolMs >= m.activityMs
+      const state = m.live === false ? 'gone'
+        : progress ? `working ${age(nowMs - m.activityMs)} · last ${m.lastTool} ${age(nowMs - m.lastToolMs)}`
+        : `${m.activity}${m.route === 'pane' && !Number.isNaN(m.activityMs) ? ` ${age(nowMs - m.activityMs)}` : ''}`
       pane.push({ row: 'member', tone: memberTone(m), name: m.name, kind: m.kind, route: m.route, state })
     }
   }

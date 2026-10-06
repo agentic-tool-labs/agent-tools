@@ -85,7 +85,8 @@ which today's readers treat as absent.
 | `member_sessions` | session ids of the live Claude members of every live team, whatever their route |
 | `teams[]` | one entry per live team |
 | `teams[].team` | the team's name; `null` for the default team (`team.json`), shown as `default` |
-| `teams[].members[]` | `name`, `role`, `label`, `kind`, `route`, `session_id`, `live`, `activity`, `activity_at`, `blocked_by`, `blocked_note` |
+| `teams[].members[]` | `name`, `role`, `label`, `kind`, `route`, `session_id`, `live`, `activity`, `activity_at`, `last_tool`, `last_tool_at`, `blocked_by`, `blocked_note` |
+| `teams[].members[].last_tool`, `last_tool_at` | a Claude member's last finished tool and when it finished: the tool name only, never its arguments, paths or output; `null` for a member with none and for a pane member |
 | `teams[].members[].route` | how `ah` reaches the member: `pane` only for a pane-driven (non-Claude) member, else `peer`; a Claude member running in a pane reads `peer` |
 | `teams[].dispatches[]` | `id`, `slug`, `to`, `to_name`, `member`, `label`, `eta`, `eta_ms`, `created`, `sent_at`, `checkins`, `reported_at`, `states[]` |
 | `teams[].dispatches_truncated` | how many dispatches were left off the list (it holds at most 50) |
@@ -113,6 +114,10 @@ liveness check-ins use.
   (Herdr no longer has the agent), `true` for any other record, and `null` when it has none.
 - **`activity`:** from the member's record in `<hier>/activity/`. It is `unknown` when there is no
   record. A member with `live: false` is shown as gone.
+- **`last_tool`:** written by the member's PostToolUse hook, at most every 15 s while its activity is unchanged. It is the last
+  *finished* tool that won a write, so it can lag by up to 15 s plus one tool, and a long-running tool leaves the previous one
+  showing with a growing age. It is kept when the member goes idle; a reader shows it only while the member is `working` and
+  `last_tool_at` is not before `activity_at`.
 - **`label`:** the member's role, unless another live member of the team has the same role; then
   its name.
 

@@ -2,7 +2,8 @@
 // agent-hierarchy — records a Claude role session's own activity for the hierarchy status file
 // (docs/status-file.md), in <hier>/activity/<session_id>.json: UserPromptSubmit → working, Stop →
 // idle, a permission prompt (Notification, matcher permission_prompt) → blocked, and PostToolUse →
-// working again when the record says anything else. Every activity change refreshes status.json.
+// working again when the record says anything else. PostToolUse also records the tool's name (never its
+// input) at most every TOOL_WRITE_INTERVAL_SEC, so the Pane can show the last finished tool. Every activity change refreshes status.json.
 //
 // UserPromptSubmit and Stop also refresh status.json in sessions that record nothing: a Claude peer
 // files its report with the Write tool, which no ah hook sees, so its turn ending is what surfaces it.
@@ -29,7 +30,7 @@ try {
     if (sessionId && readSessionRole(sessionId)) {
       // PostToolUse means working again; recordActivity leaves a record already in that state alone.
       const activity = event === "PostToolUse" ? "working" : SELF_STATE[event];
-      if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null });
+      if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null, tool: event === "PostToolUse" ? input.tool_name : null });
     }
     if (!recorded && (event === "UserPromptSubmit" || event === "Stop")) statusChanged(dir);
   }

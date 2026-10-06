@@ -246,6 +246,29 @@ test('Pane: member states and tones, and the age shown for pane members only', a
   ])
 })
 
+test('Pane: a working peer shows its last finished tool from the current turn, and nothing else changes', async () => {
+  const peer = (over: Record<string, unknown>) => member({ name: 'peer', route: 'peer', kind: 'claude', activity_at: at(-360000), ...over })
+  const state = (m: Record<string, unknown>) => paneRows(viewOf([team({ members: [m], dispatches: [] })]), 120)[3].text.replace('peer · claude · peer · ', '')
+  // V1: the tool is from this turn
+  expect(state(peer({ last_tool: 'Edit', last_tool_at: at(-12000) }))).toBe('working 6m · last Edit 12s')
+  expect(state(peer({ last_tool: 'Edit', last_tool_at: at(-360000) }))).toBe('working 6m · last Edit 6m')
+  // V2: no tool
+  expect(state(peer({}))).toBe('working')
+  expect(state(peer({ last_tool: null, last_tool_at: null }))).toBe('working')
+  // V3: an idle member keeps today's text
+  expect(state(peer({ activity: 'idle', last_tool: 'Edit', last_tool_at: at(-12000) }))).toBe('idle')
+  // V4: a pane member keeps today's text
+  expect(state(peer({ route: 'pane', last_tool: 'Edit', last_tool_at: at(-12000) })).replace('peer · claude · pane · ', '')).toBe('working 6m')
+  // V5: a tool from the previous turn
+  expect(state(peer({ last_tool: 'Edit', last_tool_at: at(-361000) }))).toBe('working')
+  // V6: unparseable timestamps, no throw
+  expect(state(peer({ last_tool: 'Edit', last_tool_at: 'soon' }))).toBe('working')
+  expect(state(peer({ activity_at: 'soon', last_tool: 'Edit', last_tool_at: at(-12000) }))).toBe('working')
+  expect(state(peer({ last_tool: 'Edit', last_tool_at: 42 }))).toBe('working')
+  // a gone member is gone
+  expect(state(peer({ live: false, last_tool: 'Edit', last_tool_at: at(-12000) }))).toBe('gone')
+})
+
 test('Pane, dispatches: expired rows hidden, reported kept, newest first, state tones', async () => {
   const many = [team({ dispatches: [
     dispatch({ id: 'w', slug: 'old-work' }, 200000),
