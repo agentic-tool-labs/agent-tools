@@ -5,6 +5,15 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.119.0]
+
+### Added
+- A role with a shell only for self-care. The Architect (and any custom role whose registry row sets
+  `shell: "self-care"`, via `role set --shell self-care`) can run its own `roster.mjs checkin`,
+  `whoami` and `status`, and `msg.mjs new --type response` for its own brief, plus the read-only
+  `msg.mjs` listings. A hook that runs first on every Bash call refuses everything else and never
+  approves a command on its own.
+
 ## [0.118.0]
 
 ### Added

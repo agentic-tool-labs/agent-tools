@@ -115,6 +115,19 @@ R role remove <name>   # refused while a roster member uses it; never deletes a 
 
 A role that fails its contract shows `UNAVAILABLE: n errors`.
 
+### Self-care shell for a role without one
+
+A role whose agent file denies `Bash` cannot run any command, so it cannot run `checkin` or write
+its own response with `msg.mjs`. To give it the self-care commands only (see "Self-care (any peer)"
+in `cli-tools.md`):
+
+1. remove `Bash` from the agent file's `disallowedTools`;
+2. mark the registry row: `R role set <name> --shell self-care` (or `"shell": "self-care"` in the row).
+
+The marker is the exact string `self-care`; `role set` rejects any other value, and rejects the flag
+on a built-in. A role with the marker whose agent file still denies `Bash` simply has no shell;
+nothing is gated. The built-in Architect is gated by default.
+
 ## 4. Using it
 
 Add it to the roster, then start it:

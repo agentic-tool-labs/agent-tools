@@ -38,7 +38,7 @@ check "architect: still denies NotebookEdit, does not deny Edit (spec: allowed t
 # NEEDS-EVIDENCE hand-back and the no-execution-via-runner clause (a live
 # Architect was observed running test cycles through task-runner, licensed by
 # the old "execution legwork" wording).
-check "architect: denies Bash (never executes)" 'fm architect.md | grep -E "^disallowedTools:" | grep -qw Bash'
+check "architect: keeps Bash for self-care only (the self-care gate refuses the rest); still denies NotebookEdit and advisor" 'fm architect.md | grep -E "^disallowedTools:" | grep -qw NotebookEdit && fm architect.md | grep -E "^disallowedTools:" | grep -qw advisor && ! fm architect.md | grep -E "^disallowedTools:" | grep -qw Bash'
 check "architect: body carries NEEDS-EVIDENCE hand-back rule" 'grep -q "NEEDS-EVIDENCE" "$A/architect.md"'
 check "architect: delegation is read-only retrieval, not execution" 'grep -q "READ-ONLY retrieval" "$A/architect.md" && ! grep -q "execution legwork" "$A/architect.md"'
 # Only the architect loses Bash. The reviewer KEEPS it — but scoped by contract

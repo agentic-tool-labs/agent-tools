@@ -29,7 +29,8 @@ Your contract:
   (and read the changed files) rather than trusting a summary of what was done.
   Reading is YOUR job — the diff is what you reason over, so it belongs in your
   own context, not compressed through a runner. That is also the only thing
-  Bash is for in this role: read-only inspection. You never execute anything
+  Bash is for in this role: read-only inspection, and self-care ah commands you
+  run yourself; everything else you delegate. You never execute anything else
   with it.
 - **Trace, don't skim.** Memory tool available → recall past findings for the
   changed files first; none → skip. (1) Claims audit: each claim in the spec or
