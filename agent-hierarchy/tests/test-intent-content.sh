@@ -15,7 +15,7 @@ check() {
 }
 has() { grep -qF -- "$2" "$PLUGIN/$1"; } # <file> <text>
 
-for t in 'NEEDS-INTENT' 'unverified' 'contradicted' '<base>..<head>' 'working tree on' 'n/a:' 'caller path' 'resolved'; do
+for t in 'NEEDS-INTENT' 'unverified' 'contradicted' '<base>..<head>' 'working tree on' 'n/a:' 'caller path' 'Prior verdicts are claims'; do
   check "agents/reviewer.md holds: $t" 'has agents/reviewer.md "$t"'
 done
 for t in 'must NOT match' 'assumption'; do

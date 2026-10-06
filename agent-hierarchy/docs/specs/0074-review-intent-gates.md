@@ -203,14 +203,14 @@ New ceilings are the measured size after the change, rounded **up** to the next 
   - msg-gate cases go in the existing test that covers `pretooluse-msg-gate.mjs` (the Implementor finds it; the name is unverified);
   - deliver cases go in the existing test that covers `roster.mjs deliver` (same).
 - **Content assertions.** Add one small test script, or add to an existing agent-content test if one fits. Grep for:
-  - reviewer.md: `NEEDS-INTENT`, `unverified`, `contradicted`, `<base>..<head>`, `working tree on`, `n/a:`, "caller path", "resolved";
+  - reviewer.md: `NEEDS-INTENT`, `unverified`, `contradicted`, `<base>..<head>`, `working tree on`, `n/a:`, "caller path", "Prior verdicts are claims" (R5; amended from "resolved", which base reviewer.md already holds, so it could not fail at base; the new phrase has 0 hits at base d481f93 in reviewer.md, orchestrator.md and contracts/review.md);
   - implementor.md: "must NOT match", "assumption";
   - architect.md: "Invariants and negative cases";
   - contracts/review.md: `NEEDS-INTENT`;
   - contracts/design.md: "negative cases";
   - contracts/implement.md: "negative test";
   - `buildDirective` output in both modes: "covers only the range", "never Determined", "Invariants and negative cases", `NEEDS-INTENT`.
-  - Each assertion must be seen FAILING at HEAD before the edit, and passing after.
+  - Each assertion must be seen FAILING at HEAD before the edit, and passing after. Pick tokens only the new rule text introduces; a common word the base file already contains does not qualify.
 - **Generic review scenario (§4.10).** Its deterministic self-check script.
 - **Generic-text check.** A grep over every file this spec adds or changes (the agent files, contracts, lib-config directive text, the two hooks and CLI, docs, CHANGELOG 0.115.0 section, tests, fixtures) for a deny-list kept in the test itself. The list holds the specific names and words the user ruled out; the Orchestrator supplies it in the Implementor brief, not in any committed file other than that test. It fails if any word matches.
   - The test keeps the list as data. The words must not appear in any other committed file.
