@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
-import { vectors } from './vectors.ts'
+import { sectionsFor, vectors } from './vectors.ts'
 import { utf8Bytes } from '../view.ts'
 
 const NOW = Date.parse('2026-01-01T12:00:00.000Z')
@@ -226,7 +226,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(walk(pane)).toEqual([])
       // A null view's one line names its cause; every other vector draws exactly its rows.
       const cause = NULL_CAUSE[name]
-      expect(texts(pane)).toEqual(cause === undefined ? v.pane.map((r) => ({ text: r.text, props: TONE[r.tone] })) : [{ text: `No hierarchy status here (${cause}).`, props: TONE.idle }])
+      if (cause === undefined) expect(boxes(pane)).toEqual(sectionsFor[name].map((b) => ({ ...b, bordered: true })))
+      else expect(texts(pane)).toEqual([{ text: `No hierarchy status here (${cause}).`, props: TONE.idle }])
     })
   }
 
@@ -689,6 +690,22 @@ const paneProps = (): any => ({ title: 'Hierarchy', isFocused: false, bodyColumn
 // The Text props each tone draws with, as the spec's table pins them.
 const TONE: Record<string, Record<string, unknown>> = { bad: { color: 'warning', bold: true }, warn: { color: 'warning' }, work: {}, idle: { dimColor: true } }
 
+// The Pane's sections as drawn: per top-level Box, its border color (null: dim), whether it has a border, its bold
+// title, and each row Box's Texts joined (indent, icon, text).
+function boxes(n: any): { title: string; color: string | null; bordered: boolean; lines: string[] }[] {
+  return (n.children ?? []).map((b: any) => {
+    const kids = (b.children ?? []).filter(Boolean)
+    const title = kids[0]?.type === 'Text' && kids[0].props?.bold === true ? kids[0] : null
+    const rows = title ? kids.slice(1) : kids
+    return {
+      title: title ? (title.children ?? []).join('') : '',
+      color: b.props?.borderColor ?? null,
+      bordered: b.props?.borderStyle === 'round',
+      lines: rows.map((r: any) => (r.children ?? []).filter(Boolean).map((t: any) => (t.children ?? []).join('')).join('')),
+    }
+  })
+}
+
 // Every Text in the tree, in document order, with its props.
 function texts(n: any): { text: string; props: Record<string, unknown> }[] {
   if (typeof n !== 'object' || n === null) return []
@@ -708,3 +725,170 @@ function walk(n: any, extra: string[] = []): string[] {
   for (const key of ['press', 'client', 'raster']) if (key in n && !extra.includes(n.type)) found.push(`${n.type} has ${key}`)
   return [...found, ...(n.children ?? []).flatMap((c: any) => walk(c, extra))]
 }
+
+// ---- the sectioned Pane as drawn
+// The `work` fixture with its member in stream `api`; its one dispatch stays in that stream, or with `leftover`
+// goes to a member that is in no stream, so it draws in DISPATCHES.
+const withStreams = (leftover = true): string => {
+  const doc = JSON.parse(fixtures.work)
+  doc.teams[0].members[0].stream = 'api'
+  if (leftover) doc.teams[0].dispatches[0].member = 'nobody'
+  return JSON.stringify(doc)
+}
+const drawnPane = async ($: any, on: any, w: World, columns: number) => {
+  stage(on, w)
+  beneath(on)
+  mock.clock(on, { now: Date.parse(vectors.work.now) })
+  await start($, w, 'terminal')
+  return (await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: { ...paneProps(), bodyColumns: columns }, viewport: { columns, rows: 40 } })).drawn()
+}
+const anyBorder = (n: any): boolean => typeof n === 'object' && n !== null && (n.props?.borderStyle !== undefined || (n.children ?? []).some(anyBorder))
+
+test('the Pane draws each section in a round box with its own color, a bold title in that color, and colored icons', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: { [FILE]: { text: withStreams(), mtimeMs: 1 } } })
+  const pane = await drawnPane($, on, w, 60)
+  expect(walk(pane)).toEqual([])
+  expect(boxes(pane).map((b: any) => [b.title, b.color, b.bordered])).toEqual([
+    ['TEAM default', 'permission', true], ['STREAM api', 'suggestion', true], ['DISPATCHES', null, true],
+  ])
+  expect(pane.children.map((b: any) => b.props.key)).toEqual(['team:0', 'stream:0:api', 'dispatches:0'])
+  const box = pane.children[1]
+  expect(box.props).toMatchObject({ flexDirection: 'column', borderStyle: 'round', borderColor: 'suggestion' })
+  expect(box.children[0].props).toMatchObject({ bold: true, color: 'suggestion' })
+  expect(box.children[1].children[0]).toMatchObject({ type: 'Text', props: { color: 'success' }, children: ['● '] })
+  const dispatchBox = pane.children[2]
+  expect(dispatchBox.props).toMatchObject({ borderStyle: 'round', borderDimColor: true })
+  expect(dispatchBox.props.borderColor).toBe(undefined)
+  expect(dispatchBox.children[0].props).toMatchObject({ bold: true, dimColor: true })
+  expect(dispatchBox.children[1].children[0].props).toMatchObject({ color: 'error' })
+})
+
+test('a dispatch to a streamed member draws inside its stream box, indented, with no DISPATCHES box', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: { [FILE]: { text: withStreams(false), mtimeMs: 1 } } })
+  const pane = await drawnPane($, on, w, 60)
+  expect(boxes(pane).map((b: any) => b.title)).toEqual(['TEAM default', 'STREAM api'])
+  const row = pane.children[1].children[2]
+  expect(row.children[0]).toMatchObject({ type: 'Text', children: ['  '] })
+  expect(row.children[1]).toMatchObject({ props: { color: 'error' }, children: ['▲ '] })
+})
+
+test('below 40 columns the Pane draws no border, and the title keeps its color', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: { [FILE]: { text: withStreams(), mtimeMs: 1 } } })
+  const pane = await drawnPane($, on, w, 39)
+  expect(anyBorder(pane)).toBe(false)
+  expect(boxes(pane).map((b: any) => [b.title, b.color, b.bordered])).toEqual([['TEAM default', null, false], ['STREAM api', null, false], ['DISPATCHES', null, false]])
+  const title = pane.children[1].children[0]
+  expect(title.props).toMatchObject({ bold: true, color: 'suggestion' })
+})
+
+test('a null view draws one line with no border and no icon', async ($, on) => {
+  const w = world({ id: vectors.work.sessionId, files: {} })
+  const pane = await drawnPane($, on, w, 60)
+  expect(anyBorder(pane)).toBe(false)
+  expect(texts(pane).length).toBe(1)
+})
+
+// ---- clicking a member's name focuses its pane (the pinned helper, through the Pane's Button)
+// The `work` fixture's one member, marked focusable (or not) and renamed.
+const focusDoc = (over: Record<string, unknown> = {}, base: string = fixtures.work): string => {
+  const doc = JSON.parse(base)
+  Object.assign(doc.teams[0].members[0], { name: 'demo-architect', route: 'peer', kind: 'claude', focusable: true, ...over })
+  return JSON.stringify(doc)
+}
+const OK = { value: { exitCode: 0, stdout: '', stderr: '' } }
+// Mounts the Pane over `text`, answering process.run with `run`; returns what was run and toasted.
+const focusPane = async ($: any, on: any, text: string, run: (e: any) => any = () => OK, id: string = vectors.work.sessionId) => {
+  const w = world({ id, files: { [FILE]: { text, mtimeMs: 1 } } })
+  const calls: any[] = []
+  stage(on, w)
+  beneath(on)
+  mock.clock(on, { now: Date.parse(vectors.work.now) })
+  on('process.run', (_$: any, e: any) => { calls.push(e); return run(e) })
+  await start($, w, 'terminal')
+  const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })
+  return { w, calls, ui }
+}
+const buttonCount = async (ui: any) => (await ui.findAll({ type: 'Button' })).length
+
+test('F1 a click on a focusable member runs exactly the fixed argv with the fixed timeout, once, and shows nothing', async ($, on) => {
+  const { w, calls, ui } = await focusPane($, on, focusDoc())
+  expect(await buttonCount(ui)).toBe(1)
+  await ui.press({ key: 'ah-name-demo-architect' })
+  expect(calls).toEqual([{ argv: ['herdr', 'agent', 'focus', 'demo-architect'], init: { timeoutMs: 5000 } }])
+  expect(w.toasts).toEqual([])
+})
+
+for (const name of ['-x', 'a b', '../t', 'A', 'a'.repeat(33), '', 'a.b', '-', '1a']) {
+  test(`F2 the name ${JSON.stringify(name)} fails the pattern: nothing runs, and the toast carries no name`, async ($, on) => {
+    const { w, calls, ui } = await focusPane($, on, focusDoc({ name }))
+    expect(await buttonCount(ui)).toBe(1)
+    await ui.press({ key: `ah-name-${name}` })
+    expect(calls).toEqual([])
+    expect(w.toasts).toEqual(['Could not focus that member.'])
+  })
+}
+
+for (const name of ['a', 'a'.repeat(32), 'a1_b-2']) {
+  test(`F2b the name ${JSON.stringify(name)} is at the pattern's edge and runs`, async ($, on) => {
+    const { calls, ui } = await focusPane($, on, focusDoc({ name }))
+    await ui.press({ key: `ah-name-${name}` })
+    expect(calls.map((c) => c.argv[3])).toEqual([name])
+  })
+}
+
+for (const focusable of ['true', 1, 'yes', false, null, {}, [true], undefined]) {
+  test(`F3 focusable ${JSON.stringify(focusable) ?? 'absent'} is not exactly true: no Button`, async ($, on) => {
+    const doc = JSON.parse(focusDoc({ focusable }))
+    if (focusable === undefined) delete doc.teams[0].members[0].focusable
+    const { ui } = await focusPane($, on, JSON.stringify(doc))
+    expect(await buttonCount(ui)).toBe(0)
+  })
+}
+
+const FAILS: [string, (e: any) => any][] = [
+  ['a non-zero exit', () => ({ value: { exitCode: 1, stdout: '', stderr: 'secret' } })],
+  ['an exit with no code', () => ({ value: { exitCode: 127 } })],
+  ['a refusal', () => ({ deny: 'boom' })],
+  ['a throw', () => { throw new Error('boom') }],
+  ['no result', () => ({ value: undefined })],
+]
+for (const [label, run] of FAILS) {
+  test(`F7 ${label} from the run shows the failure with the name and never throws out of the press`, async ($, on) => {
+    const { w, calls, ui } = await focusPane($, on, focusDoc(), run)
+    await ui.press({ key: 'ah-name-demo-architect' })
+    expect(calls.length).toBe(1)
+    expect(w.toasts).toEqual(['Could not focus demo-architect.'])
+    expect(w.toasts.join('')).not.toContain('secret')
+  })
+}
+
+const NO_BUTTON: [string, Record<string, unknown>, number][] = [
+  ['a gone member', { live: false }, 0],
+  ['a member row of this very session', { session_id: vectors.work.sessionId }, 0],
+  ['a member that is not focusable', { focusable: false }, 0],
+  ['a member of another session', { session_id: 'some-other-session' }, 1],
+]
+for (const [label, over, want] of NO_BUTTON) {
+  test(`F8 ${label}: ${want} Button`, async ($, on) => {
+    expect(await buttonCount((await focusPane($, on, focusDoc(over))).ui)).toBe(want)
+  })
+}
+
+test('F9 in a member session the Pane holds no Button anywhere', async ($, on) => {
+  const { ui, calls } = await focusPane($, on, focusDoc({}, fixtures['member-session']), () => OK, vectors['member-session'].sessionId)
+  expect(await buttonCount(ui)).toBe(0)
+  expect(calls).toEqual([])
+})
+
+test('a focusable member row draws its name as the Button and the rest as toned text; a name the width cut is not a Button', async ($, on) => {
+  const { ui } = await focusPane($, on, focusDoc())
+  const pane = await ui.drawn()
+  const row = pane.children[0].children[1]
+  expect(row.children.map((c: any) => c.type)).toEqual(['Text', 'Box', 'Text'])
+  expect(row.children[1].props.key).toBe('ah-focus-demo-architect')
+  expect(row.children[1].children[0]).toMatchObject({ type: 'Button', props: { plain: true, label: 'demo-architect' }, hover: { underline: true } })
+  expect(row.children[2].children).toEqual([' · claude · peer · working'])
+  await ui.unmount()
+  const narrow = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: { ...paneProps(), bodyColumns: 12 }, viewport: { columns: 12, rows: 40 } })
+  expect(await narrow.findAll({ type: 'Button' })).toHaveLength(0)
+})

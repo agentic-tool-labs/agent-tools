@@ -16,7 +16,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { hierarchyDir, isPaneMember, resolveConfig } from "./lib-config.mjs";
+import { hierarchyDir, isPaneMember, resolveConfig, validateHerdrName } from "./lib-config.mjs";
 import { decisionLogPath, decisionSummary, openRunAnchor, readDecisions } from "./lib-decisions.mjs";
 import { attributedRoster, CHECKIN_CADENCE, etaOf, listExchanges, attributedLiveness, readGates, readMsgFile, SELF_STATE, thresholdFor, TOOL_WRITE_INTERVAL_SEC } from "./lib-hier.mjs";
 import { dispatchOrigin } from "./lib-peer.mjs";
@@ -207,6 +207,8 @@ function describeMembers(dir, team, roster) {
       activity,
       activity_at: rec ? clean(rec.at) : null,
       blocked_by: activity === "blocked" ? clean(rec.blocked_by, NAME_CAP) : null,
+      focusable: m.transport === "herdr" && typeof m.transport_id === "string" && m.transport_id !== "" && validateHerdrName(m.name).ok,
+      stream: typeof m.stream === "string" ? clean(m.stream, NAME_CAP) || null : null,
       last_tool: clean(rec?.tool, NAME_CAP) || null,
       last_tool_at: rec && typeof rec.tool_at === "string" ? clean(rec.tool_at) : null,
       blocked_note: route === "pane" && activity === "blocked" ? clean(rec.note, NOTE_CAP) : null,

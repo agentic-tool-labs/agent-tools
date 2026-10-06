@@ -19,6 +19,8 @@
           "activity": "working",
           "activity_at": "2026-01-01T11:54:00.000Z",
           "blocked_by": null,
+          "focusable": false,
+          "stream": null,
           "last_tool": null,
           "last_tool_at": null,
           "blocked_note": null
@@ -34,6 +36,8 @@
           "activity": "working",
           "activity_at": "2026-01-01T11:50:00.000Z",
           "blocked_by": null,
+          "focusable": false,
+          "stream": null,
           "last_tool": null,
           "last_tool_at": null,
           "blocked_note": null

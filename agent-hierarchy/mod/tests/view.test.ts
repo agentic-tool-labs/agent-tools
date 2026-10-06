@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
-import { bandLine, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
+import { bandLine, BORDER_MIN, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
 const ms = (iso: string) => Date.parse(iso)
@@ -378,4 +378,160 @@ test('nullCause names why a document gives no view', async () => {
   expect(nullCause(parseDoc(docText({ enabled: 'no' }, { visible: false })), ms(T0), 'sess-orch')).toBe('not visible')
   // A member session sees no view, and the line it gets names no team data.
   expect(viewModel(parseDoc(docText({ member_sessions: ['sess-m'], teams: [team()] })), ms(T0), 'sess-m')).toBe(null)
+})
+
+// ---- the sectioned Pane
+const peer = (name: string, over: Record<string, unknown> = {}) => member({ name, label: name, kind: 'claude', route: 'peer', ...over })
+const secs = (teams: unknown[], columns = 120) => paneSections(viewOf(teams), columns)
+const titles = (teams: unknown[], columns = 120) => secs(teams, columns).map((x) => x.title)
+const line = (r: { icon: string | null; text: string; indent: number }) => `${' '.repeat(r.indent)}${r.icon === null ? '' : r.icon + ' '}${r.text}`
+const lineWidth = (r: { icon: string | null; text: string; indent: number }) => [...line(r)].length
+const streamTeam = (over: Record<string, unknown> = {}) => team({
+  members: [peer('lead'), peer('builder', { stream: 'api' }), peer('checker', { stream: 'api' }), peer('writer', { stream: 'docs', live: false })],
+  dispatches: [dispatch({ id: 'd1', slug: 'fix-auth', member: 'builder', to_name: 'builder', label: 'builder' }), dispatch({ id: 'd2', slug: 'free-task', member: 'lead', to_name: 'lead', label: 'lead' })],
+  ...over,
+})
+const PIPE = { anchor_id: 'a', started: T0, round_cap: 3, waiting_on_user: 0, items: [{ slug: 'ac', rounds: 2, open: true, to: 'reviewer' }] }
+
+test('G1 no streams: one TEAM section with every member, no STREAM', async () => {
+  const x = secs([team({ members: [peer('a'), peer('b')], dispatches: [] })])
+  expect(x.map((z) => z.section)).toEqual(['team'])
+  expect(x[0].rows.map((r) => r.text.split(' ')[0])).toEqual(['a', 'b'])
+})
+
+test('G2 streams by name after TEAM, G3 a dispatch to a streamed member sits in its stream after the members, indented 2', async () => {
+  const x = secs([team({
+    members: [peer('c'), peer('a', { stream: 'b' }), peer('b', { stream: 'a' })],
+    dispatches: [dispatch({ member: 'a', slug: 'to-a' })],
+  })])
+  expect(x.map((z) => z.title)).toEqual(['TEAM default', 'STREAM a', 'STREAM b'])
+  const b = x[2].rows
+  expect(b.map((r) => r.indent)).toEqual([0, 2])
+  expect(b[1].text.startsWith('to-a')).toBe(true)
+  expect(b[1].icon).toBe(STYLE.icon.dispatchWork.glyph)
+})
+
+test('G4 a dispatch to an unknown or an unstreamed member goes to DISPATCHES; G5 no leftovers, no DISPATCHES, and no empty section but TEAM', async () => {
+  const left = secs([team({ members: [peer('c'), peer('a', { stream: 'x' })], dispatches: [dispatch({ member: 'nobody', slug: 'one' }), dispatch({ id: 'd2', member: 'c', slug: 'two' })] })])
+  expect(left.map((z) => z.title)).toEqual(['TEAM default', 'STREAM x', 'DISPATCHES'])
+  expect(left[2].rows.map((r) => r.text.split(' ')[0]).sort()).toEqual(['one', 'two'])
+  const none = secs([team({ members: [peer('c'), peer('a', { stream: 'x' })], dispatches: [dispatch({ member: 'a' })] })])
+  expect(none.map((z) => z.section)).toEqual(['team', 'stream'])
+  for (const z of [...left, ...none]) expect(z.rows.length > 0 || z.section === 'team').toBe(true)
+})
+
+test('G8 every member streamed: a title-only TEAM box, then the STREAM boxes', async () => {
+  const x = secs([team({ members: [peer('a', { stream: 'x' }), peer('b', { stream: 'y' })], dispatches: [] })])
+  expect(x.map((z) => z.title)).toEqual(['TEAM default', 'STREAM x', 'STREAM y'])
+  expect(x[0].rows).toEqual([])
+  expect(x.slice(1).every((z) => z.rows.length === 1)).toBe(true)
+})
+
+test('G9 a pipeline draws a HIERARCHY box with a row; no pipeline, no box; a team with nothing draws nothing of its own', async () => {
+  const x = secs([team({ pipeline: { ...PIPE, waiting_on_user: 1 }, members: [peer('a')], dispatches: [] })])
+  expect(x[0].section).toBe('hierarchy')
+  expect(x[0].rows.map((r) => [r.icon, r.text])).toEqual([[null, 'round 2/3 · reviewer'], [null, '1 decision waiting for you']])
+  expect(secs([team({ pipeline: { ...PIPE, items: [] }, members: [peer('a')], dispatches: [] })])[0].rows.map((r) => r.text)).toEqual(['Pipeline idle.'])
+  expect(titles([team({ members: [peer('a')], dispatches: [] })])).toEqual(['TEAM default'])
+  expect(secs([team({ members: [], dispatches: [] })]).map((z) => z.section)).toEqual(['none'])
+})
+
+test('I5 each team colors its streams from its own index; G6 a stream that is not a non-empty string is no stream', async () => {
+  const x = secs([
+    team({ team: 'one', members: [peer('a', { stream: 'x' }), peer('b', { stream: 'y' })], dispatches: [] }),
+    team({ team: 'two', members: [peer('c', { stream: 'y' })], dispatches: [] }),
+  ])
+  expect(x.filter((z) => z.section === 'stream').map((z) => [z.title, z.color])).toEqual([['STREAM x', 'suggestion'], ['STREAM y', 'remember'], ['STREAM y', 'suggestion']])
+  const odd = secs([team({ members: [peer('a', { stream: 42 }), peer('b', { stream: '' }), peer('c', { stream: null }), peer('d', { stream: ['x'] })], dispatches: [] })])
+  expect(odd.map((z) => z.section)).toEqual(['team'])
+  expect(odd[0].rows.length).toBe(4)
+})
+
+test('I1 icons and icon colors come from the one table; the text tone is unchanged', async () => {
+  const members = [peer('w'), peer('i', { activity: 'idle' }), peer('b', { activity: 'blocked' }), peer('g', { live: false }), peer('u', { activity: 'thinking' })]
+  const x = secs([team({ members, dispatches: [] })])[0].rows
+  expect(x.map((r) => [r.icon, r.iconColor, r.tone])).toEqual([
+    ['●', 'success', 'work'], ['○', null, 'idle'], ['■', 'warning', 'warn'], ['×', null, 'idle'], ['?', null, 'idle'],
+  ])
+  const sent = (state: string, i: number, extra: Record<string, unknown> = {}) => dispatch({ id: `d${i}`, slug: `s${i}`, member: 'zz', states: [{ at: at(-60000), state, ...extra }] })
+  const ds = [sent('working', 0), sent('blocked', 1), sent('overdue', 2), sent('stalled', 3, { reason: 'no-report' }), sent('reported', 4)]
+  const d = secs([team({ members: [], dispatches: ds })])[0].rows
+  expect(d.map((r) => [r.text.split(' ')[0], r.icon, r.iconColor, r.tone]).sort()).toEqual([
+    ['s0', '↳', 'success', 'work'], ['s1', '↳', 'warning', 'warn'], ['s2', '▲', 'error', 'bad'], ['s3', '▲', 'error', 'bad'], ['s4', '↳', null, 'idle'],
+  ])
+})
+
+test('I2 every icon is one code point; I4 streams past the palette cycle with no undefined color; no box is a status color', async () => {
+  for (const { glyph } of Object.values(STYLE.icon)) expect([...glyph].length).toBe(1)
+  const x = secs([team({ members: ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => peer(n, { stream: n })), dispatches: [] })])
+  expect(x.filter((z) => z.section === 'stream').map((z) => z.color)).toEqual(['suggestion', 'remember', 'ide', 'planMode', 'suggestion', 'remember'])
+  const status = ['success', 'warning', 'error']
+  for (const z of secs([streamTeam({ pipeline: PIPE })])) expect(status.includes(z.color as string)).toBe(false)
+  for (const c of [...Object.values(STYLE.box), ...STYLE.streams]) expect(status.includes(c as string)).toBe(false)
+})
+
+test('D1 from 40 columns every section is bordered and every row fits the inner width; D3 40 is the boundary', async () => {
+  expect(BORDER_MIN).toBe(40)
+  for (const columns of [40, 41, 60, 120]) {
+    const x = secs([streamTeam({ pipeline: PIPE })], columns)
+    expect(x.every((z) => z.bordered)).toBe(true)
+    for (const z of x) {
+      expect([...z.title].length).toBeLessThanOrEqual(columns - 2)
+      for (const r of z.rows) expect(lineWidth(r)).toBeLessThanOrEqual(columns - 2)
+    }
+  }
+  expect(secs([streamTeam()], 39).some((z) => z.bordered)).toBe(false)
+})
+
+test('D2 below 40 columns: no borders, lines fit, the icon and indent stay, and the last-tool part is dropped', async () => {
+  const working = peer('builder', { stream: 'api', last_tool: 'Edit', last_tool_at: at(-12000), activity_at: at(-360000) })
+  const wide = secs([team({ members: [working], dispatches: [dispatch({ member: 'builder' })] })], 120)
+  expect(wide[1].rows[0].text).toContain(' · last Edit 12s')
+  for (const columns of [39, 30, 24, 10]) {
+    const x = secs([team({ members: [working, peer('lead')], dispatches: [dispatch({ member: 'builder', slug: 'fix-auth' })] })], columns)
+    expect(x.some((z) => z.bordered)).toBe(false)
+    const lines = x.flatMap((z) => z.rows)
+    for (const r of lines) expect(lineWidth(r)).toBeLessThanOrEqual(columns)
+    for (const z of x) expect([...z.title].length).toBeLessThanOrEqual(columns)
+    expect(lines.some((r) => r.text.includes(' · last'))).toBe(false)
+    expect(lines.every((r) => r.icon !== null)).toBe(true)
+    expect(lines.some((r) => r.indent === 2)).toBe(true)
+  }
+  const x = secs([team({ members: [working], dispatches: [dispatch({ member: 'builder', slug: 'fix-auth' })] })], 30)
+  expect(x[1].rows.map(line)).toEqual(['● builder working', '  ↳ fix-auth working'])
+})
+
+test('D4 no view, a malformed view, an empty pane and a view from before teams give one borderless section and never throw', async () => {
+  const views: any[] = [null, undefined, 3, 'x', {}, { pane: 'x' }, { pane: [], teams: [] }, { pane: [{ row: 'text', tone: 'idle', text: 'older view' }] }, { pane: [], teams: 'x' }, { teams: [{ name: 'x', members: 3 }], pane: [] }]
+  for (const view of views) {
+    const x = paneSections(view, 60)
+    expect(x.length).toBe(1)
+    expect(x[0].bordered).toBe(false)
+    expect(x[0].rows.length).toBeGreaterThan(0)
+  }
+  expect(paneSections({ pane: [{ row: 'text', tone: 'idle', text: 'older view' }] } as any, 60)[0].rows[0].text).toBe('older view')
+  expect(paneSections(null, 60, 'no file')[0].rows[0].text).toBe('No hierarchy status here (no file).')
+})
+
+test('D5 the 60-column sample', async () => {
+  const x = secs([streamTeam({ pipeline: PIPE })], 60)
+  expect(x.map((z) => [z.title, z.color, z.rows.map(line)])).toEqual([
+    ['HIERARCHY', 'claude', ['round 2/3 · reviewer']],
+    ['TEAM default', 'permission', ['● lead · claude · peer · working']],
+    ['STREAM api', 'suggestion', ['● builder · claude · peer · working', '● checker · claude · peer · working', '  ↳ fix-auth → builder | eta 5m | ██░░░░░░░░ 20% | 1:00 |…']],
+    ['STREAM docs', 'remember', ['× writer · claude · peer · gone']],
+    ['DISPATCHES', null, ['↳ free-ta… → lead | eta 5m | ██░░░░░░░░ 20% | 1:00 | work…']],
+  ])
+})
+
+test('a focusable member row splits into the name (the click target) and the rest; a cut name is no target; others carry no focus', async () => {
+  const mk = (over: Record<string, unknown>) => team({ members: [peer('builder', { focusable: true, ...over })], dispatches: [] })
+  const row = (columns: number, over: Record<string, unknown> = {}) => secs([mk(over)], columns)[0].rows[0]
+  expect([row(60).focus, row(60).text]).toEqual(['builder', ' · claude · peer · working'])
+  expect([row(30).focus, row(30).text]).toEqual(['builder', ' working'])
+  const long = 'a-very-long-member-name-here'
+  expect(secs([team({ members: [peer(long, { focusable: true })], dispatches: [] })], 20)[0].rows[0].focus).toBe(null)
+  for (const over of [{ focusable: false }, { focusable: 'true' }, { live: false }, { session_id: 'sess-orch' }]) expect(row(60, over).focus).toBe(null)
+  expect(row(60, { session_id: 'someone-else' }).focus).toBe('builder')
+  expect(secs([team({ members: [peer('builder')], dispatches: [] })])[0].rows[0].focus).toBe(null)
 })

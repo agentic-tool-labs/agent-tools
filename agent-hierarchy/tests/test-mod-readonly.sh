@@ -6,6 +6,10 @@
 # return answer a prompt, send a message or draw an input. `claude plugin validate` must report nothing
 # beyond the lists. Planted cases in a scratch copy show each forbidden form caught by the lexer alone,
 # and each allowed form passed.
+#
+# THE INVARIANT: the mod runs nothing without a user press. Exactly one process may run: the pinned focus helper
+# (HELPER below, matched whole in mod/register.tsx and the only place the word `process` may appear in mod/). A
+# second exec site, or any change to the pinned argv or init, needs a new security ruling, not a guard edit.
 # Usage: bash tests/test-mod-readonly.sh   (exits 0 iff all cases pass)
 
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,15 +36,41 @@ DRAWABLE="Box Text engine"
 BAND_DRAWABLE="Button"
 RETURN_KEYS="context exitCode press client raster deny"
 BANNED_TOKENS="globalThis eval Reflect Proxy arguments this"
+# Every literal name that can obtain or rebind a prototype (so the pinned pattern check cannot be voided). Matched as whole words on the
+# comment-blanked source with strings kept, so x['__proto__'] fails too; the computed-name ceiling (RegExp[a + b]) stays.
+PROTO_TOKENS="prototype __proto__ getPrototypeOf setPrototypeOf defineProperty defineProperties getOwnPropertyDescriptor getOwnPropertyDescriptors"
+# The one process the mod may run (spec: the focus helper). Held whole: any edit to the helper means editing this text, so
+# both always show in one diff. Matched once in mod/register.tsx on the comment-blanked source (strings kept), then cut out
+# by offset before the rest of the lexer reads the file; `process.run` is deliberately not in ALLOWED_CALLS.
+PINNED_NAME="focusMember"
+# What validate prints for the pinned helper once a hook calls it. Only the validate net accepts it, and only in exactly this form;
+# the lexer allows the exec by the pinned text alone (process.run is not in ALLOWED_CALLS).
+NET_EXTRA_CALL="process.run (via focusMember)"
+read -r -d '' HELPER <<'HELPER_END'
+export const focusMember = async ($: any, name: unknown): Promise<boolean> => {
+  if (typeof name !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
+    await $.ui.toast('Could not focus that member.')
+    return false
+  }
+  try {
+    const run = await $.process.run(['herdr', 'agent', 'focus', name], { timeoutMs: 5000 })
+    if (run.exitCode === 0) return true
+  } catch {
+  }
+  await $.ui.toast(`Could not focus ${name}.`)
+  return false
+}
+HELPER_END
 
 # <mod dir>: every lexer violation in the module source under it, as file:line: reason; empty when clean.
 violations() {
-  node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" "$BAND_DRAWABLE" <<'JS'
+  local out rc
+  out=$(node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" "$BAND_DRAWABLE" "$PINNED_NAME" "$HELPER" "$PROTO_TOKENS" 2>&1 <<'JS'
 const fs = require("fs"), path = require("path");
-const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg, bandDrawableArg] = process.argv.slice(2);
+const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg, bandDrawableArg, pinnedName, helperText, protoArg] = process.argv.slice(2);
 const set = (s) => new Set(s.split(" "));
 const CALLS = set(callsArg), EVENTS = set(eventsArg), TOKENS = set(tokensArg), DRAWABLE = set(drawableArg), BAND_DRAWABLE = set(bandDrawableArg);
-const BAND_MATCHER = "component=AbovePrompt";
+const BAND_MATCHER = "component=AbovePrompt", PANE_MATCHER = "component=Pane,requestId=ah-status";
 const BANNED = new Set([...set(keysArg), ...[...set(elementsArg)].filter((x) => !DRAWABLE.has(x))]);
 const MATCHERS = {};
 for (const m of matchersArg.split(" ")) { const [ev, canon] = m.split(/:(.*)/s); (MATCHERS[ev] = MATCHERS[ev] || []).push(canon); }
@@ -64,35 +94,36 @@ const files = [];
 function lex(src) {
   const sp = (s) => s.replace(/[^\n]/g, " ");
   const strings = new Map(), tpl = [], frames = [];
-  let out = "", i = 0, depth = 0, inTpl = false;
+  let out = "", kept = "", i = 0, depth = 0, inTpl = false;
   while (i < src.length) {
     const c = src[i], n = src[i + 1];
     if (inTpl) {
       const f = frames[frames.length - 1];
-      if (c === "\\") { f.text += src[i + 1] || ""; out += sp(src.slice(i, i + 2)); i += 2; }
-      else if (c === "`") { frames.pop(); if (!f.sub) strings.set(f.start, f.text); out += c; i++; inTpl = false; }
-      else if (c === "$" && n === "{") { f.sub = true; out += "  "; i += 2; tpl.push(depth); inTpl = false; }
-      else { f.text += c; out += sp(c); i++; }
+      if (c === "\\") { f.text += src[i + 1] || ""; out += sp(src.slice(i, i + 2)); kept += src.slice(i, i + 2); i += 2; }
+      else if (c === "`") { frames.pop(); if (!f.sub) strings.set(f.start, f.text); out += c; kept += c; i++; inTpl = false; }
+      else if (c === "$" && n === "{") { f.sub = true; out += "  "; kept += "${"; i += 2; tpl.push(depth); inTpl = false; }
+      else { f.text += c; out += sp(c); kept += c; i++; }
       continue;
     }
-    if (c === "/" && n === "/") { let e = src.indexOf("\n", i); if (e < 0) e = src.length; out += sp(src.slice(i, e)); i = e; continue; }
-    if (c === "/" && n === "*") { let e = src.indexOf("*/", i + 2); e = e < 0 ? src.length : e + 2; out += sp(src.slice(i, e)); i = e; continue; }
+    if (c === "/" && n === "/") { let e = src.indexOf("\n", i); if (e < 0) e = src.length; out += sp(src.slice(i, e)); kept += sp(src.slice(i, e)); i = e; continue; }
+    if (c === "/" && n === "*") { let e = src.indexOf("*/", i + 2); e = e < 0 ? src.length : e + 2; out += sp(src.slice(i, e)); kept += sp(src.slice(i, e)); i = e; continue; }
     if (c === "'" || c === '"') {
       let j = i + 1, val = "";
       while (j < src.length && src[j] !== c && src[j] !== "\n") { if (src[j] === "\\") { val += src[j + 1] || ""; j += 2; } else val += src[j++]; }
       const closed = src[j] === c;
       strings.set(i, val);
       out += c + sp(src.slice(i + 1, j)) + (closed ? c : "");
+      kept += src.slice(i, closed ? j + 1 : j);
       i = closed ? j + 1 : j;
       continue;
     }
-    if (c === "`") { frames.push({ start: i, text: "", sub: false }); out += c; i++; inTpl = true; continue; }
-    if (c === "}" && tpl.length && tpl[tpl.length - 1] === depth) { tpl.pop(); out += " "; i++; inTpl = true; continue; }
+    if (c === "`") { frames.push({ start: i, text: "", sub: false }); out += c; kept += c; i++; inTpl = true; continue; }
+    if (c === "}" && tpl.length && tpl[tpl.length - 1] === depth) { tpl.pop(); out += " "; kept += "}"; i++; inTpl = true; continue; }
     if (c === "{") depth++;
     else if (c === "}") depth--;
-    out += c; i++;
+    out += c; kept += c; i++;
   }
-  return { code: out, strings };
+  return { code: out, strings, kept };
 }
 
 // The top-level argument spans of the call whose "(" is at `open`, and the index of its ")"; null if unclosed.
@@ -138,8 +169,29 @@ function isParam(code, i, rest) {
 const found = [];
 for (const f of files) {
   const rel = path.relative(dir, f), src = fs.readFileSync(f, "utf8");
-  const { code, strings } = lex(src);
+  let { code, strings, kept } = lex(src);
   const at = (i, why) => found.push(`${rel}:${code.slice(0, i).split("\n").length}: ${why}`);
+  // The pinned focus helper: found whole in the comment-blanked source, counted only where it is live code (not inside a
+  // string), then cut out by offset so nothing else in this file is read as part of it. A copy elsewhere than register.tsx,
+  // or a count other than one there, is a violation.
+  let pinnedLive = false;
+  const legitRefs = new Set();
+  {
+    const pinned = new RegExp(helperText.split("\n").map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[ \\t]*\\r?\\n"), "g");
+    const hits = [...kept.matchAll(pinned)].filter((h) => code.slice(h.index, h.index + 24) === kept.slice(h.index, h.index + 24));
+    if (rel === "register.tsx") {
+      if (hits.length !== 1) at(0, hits.length ? "the pinned focus helper appears more than once" : "the pinned focus helper text is missing or altered");
+    } else if (hits.length) at(hits[0].index, "the pinned focus helper outside register.tsx");
+    if (rel === "register.tsx" && hits.length === 1) {
+      const s0 = hits[0].index, e0 = s0 + hits[0][0].length, blank = (t) => t.replace(/[^\n]/g, " ");
+      code = code.slice(0, s0) + blank(code.slice(s0, e0)) + code.slice(e0);
+      kept = kept.slice(0, s0) + blank(kept.slice(s0, e0)) + kept.slice(e0);
+      for (const k of [...strings.keys()]) if (k >= s0 && k < e0) strings.delete(k);
+      pinnedLive = true;
+    }
+    for (const m of kept.matchAll(/(?<![\w$])process(?![\w$])/g)) at(m.index, "the word process outside the pinned focus helper");
+    for (const tok of protoArg.split(" ")) for (const m of kept.matchAll(new RegExp(`(?<![\\w$])${tok}(?![\\w$])`, "g"))) at(m.index, `banned token ${tok}`);
+  }
   // The value of the string literal that is the whole argument span, else null.
   const literalAt = ([s, e]) => { const k = s + /^\s*/.exec(code.slice(s))[0].length; return strings.has(k) && /^(['"])\s*\1$/.test(code.slice(k, e).trim()) ? strings.get(k) : null; };
 
@@ -150,15 +202,17 @@ for (const f of files) {
     return pairs.every(Boolean) ? pairs.map((p) => `${p[2] || p[3]}=${p[5]}`).sort().join(",") : null;
   };
   // The hook spans of the on('ui.render', { component: 'AbovePrompt' }, hook) registrations: the only place BAND_DRAWABLE may be drawn.
-  const bandSpans = [];
+  const bandSpans = [], paneSpans = [];
   for (const m of code.matchAll(/(?<![\w$.])on\s*\(/g)) {
     const a = callArgs(code, m.index + m[0].length - 1);
     if (a && a.list.length === 3 && literalAt(a.list[0]) === "ui.render" && canonOf(a.list[1]) === BAND_MATCHER) bandSpans.push(a.list[2]);
+    if (a && a.list.length === 3 && literalAt(a.list[0]) === "ui.render" && canonOf(a.list[1]) === PANE_MATCHER) paneSpans.push(a.list[2]);
   }
   // Every on(...) call's span, so a registration nested inside the band hook does not inherit its exemption.
   const onSpans = [];
   for (const m of code.matchAll(/(?<![\w$.])on\s*\(/g)) { const a = callArgs(code, m.index + m[0].length - 1); if (a) onSpans.push([m.index, a.close]); }
-  const inBand = (i) => bandSpans.some(([s, e]) => i >= s && i < e && !onSpans.some(([os, oe]) => os >= s && os < e && i >= os && i <= oe));
+  const inSpans = (spans, i) => spans.some(([s, e]) => i >= s && i < e && !onSpans.some(([os, oe]) => os >= s && os < e && i >= os && i <= oe));
+  const inBand = (i) => inSpans(bandSpans, i) || inSpans(paneSpans, i);
 
   for (const m of src.matchAll(/\\u/g)) at(m.index, "a \\u escape");
   for (const m of code.matchAll(/(?<![\w$.])[A-Za-z_$][\w$]*/g)) if (TOKENS.has(m[0])) at(m.index, `banned token ${m[0]}`);
@@ -234,7 +288,7 @@ for (const f of files) {
     }
     return false;
   };
-  for (const [hs, he] of bandSpans) {
+  for (const [hs, he, isPane] of [...bandSpans.map((x) => [...x, false]), ...paneSpans.map((x) => [...x, true])]) {
     const { bs, block } = hookBody(hs);
     const fnRegions = [];
     for (let k = bs + (block ? 1 : 0); k < he; k++) if (code[k] === "{" && isFnBlock(k)) { const a = callArgs(code, k); if (a) fnRegions.push([k, a.close]); }
@@ -249,7 +303,7 @@ for (const f of files) {
     };
     for (const m of code.slice(hs, he).matchAll(/(?<![\w$.])Button(?![\w$])/g)) {
       const i = hs + m.index;
-      if (!inBand(i)) continue;
+      if (!(isPane ? inSpans(paneSpans, i) : inSpans(bandSpans, i))) continue;
       const before = code.slice(0, i), rest = code.slice(i + 6), tag = /<(\/?)\s*$/.exec(before);
       if (!tag) {
         const pat = /\bconst\s*\{[^{}]*$/.exec(before), end = rest.indexOf("}");
@@ -259,19 +313,71 @@ for (const f of files) {
         continue;
       }
       const tpos = i - tag[0].length, r = returns.filter((x) => x < tpos).pop();
-      let why = null;
+      let why = null, innermost = null;
       if (r === undefined || tpos >= argEnd(r)) why = "tag is not inside the band hook's own return";
       else {
         const seg = code.slice(argStart(r), tpos), open = [];
         for (let k = 0; k < seg.length; k++) { if (seg[k] === "(") open.push(k); else if (seg[k] === ")") open.pop(); }
-        if (tag[1] !== "/" && /=>|\bfunction\b/.test(seg)) why = "tag sits inside a function literal";
-        else if (open.some((k) => { const pre = seg.slice(0, k).replace(/\s+$/, ""), w = /([\w$]+)$/.exec(pre); return w ? !GROUP.has(w[1]) : /[)\]]$/.test(pre) || /\?\.$/.test(pre) || /[\w$>]>$/.test(pre); })) why = "tag sits inside a call's arguments";
+        // The Pane hook alone: function literals before the tag may be at most two expression-bodied arrow callbacks, each the sole
+        // argument of a literal `.map(` call, with no `$` in its parameters. mapParens holds the "(" of each such call.
+        const mapParens = new Set();
+        let fnWhy = null;
+        if (tag[1] !== "/" && isPane) {
+          const base = argStart(r);
+          if (/\bfunction\b/.test(seg)) fnWhy = "tag sits behind a function keyword callback";
+          const arrows = [...seg.matchAll(/=>/g)];
+          if (!fnWhy && arrows.length > 2) fnWhy = "more than two callbacks before the tag";
+          for (const ar of arrows) {
+            if (fnWhy) break;
+            const before = seg.slice(0, ar.index).replace(/\s+$/, "");
+            const ps = before.endsWith(")") ? matchOpen(base + before.length - 1) - base : (() => { const w = /([\w$]+)$/.exec(before); return w ? before.length - w[1].length : -1; })();
+            const paramsText = before.endsWith(")") ? before.slice(ps) : before.slice(ps);
+            const head = seg.slice(0, ps).replace(/\s+$/, "");
+            if (ps < 0 || !head.endsWith(".map(") || seg.slice(0, ps).length !== head.length) fnWhy = "a callback before the tag is not the first thing in a literal .map( call";
+            else if (/\$/.test(paramsText)) fnWhy = "a map callback's parameters contain $";
+            else if (/^\s*\{/.test(seg.slice(ar.index + 2))) fnWhy = "a map callback has a block body";
+            else {
+              const open = base + head.length - 1, call = callArgs(code, open);
+              if (!call || call.list.length !== 1) fnWhy = "a map callback is not the sole argument of its .map( call";
+              else { mapParens.add(head.length - 1); innermost = paramsText; }
+            }
+          }
+        }
+        if (tag[1] !== "/" && !isPane && /=>|\bfunction\b/.test(seg)) why = "tag sits inside a function literal";
+        else if (fnWhy) why = fnWhy;
+        else if (open.some((k) => { if (mapParens.has(k)) return false; const pre = seg.slice(0, k).replace(/\s+$/, ""), w = /([\w$]+)$/.exec(pre); return w ? !GROUP.has(w[1]) : /[)\]]$/.test(pre) || /\?\.$/.test(pre) || /[\w$>]>$/.test(pre); })) why = "tag sits inside a call's arguments";
         else if ((seg.match(/`/g) || []).length % 2) why = "tag sits inside a template literal";
         else if (hasAssign(code.slice(argStart(r), argEnd(r)))) why = "the return holds an assignment";
       }
       if (why) at(i, `Button ${why}`);
+      else if (isPane && tag[1] !== "/") {
+        // W3: the Pane Button is plain, labels with a bare identifier the innermost map callback destructures, and its onPress is
+        // exactly one call of the focus helper with that same identifier.
+        let end = -1, d = 0;
+        for (let k = i + 6; k < code.length; k++) { const ch = code[k]; if (ch === "{") d++; else if (ch === "}") d--; else if (d === 0 && ch === ">" && code[k - 1] !== "=") { end = k; break; } }
+        const attrs = end < 0 ? "" : code.slice(i + 6, end).replace(/\/\s*$/, "");
+        let flat = attrs; for (let g = 0; g < 8; g++) flat = flat.replace(/\{[^{}]*\}/g, "{}");
+        const labels = [...attrs.matchAll(/(?:^|\s)label\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}/g)], labelCount = (flat.match(/(?:^|\s)label\s*=/g) || []).length;
+        const press = /(?:^|\s)onPress\s*=\s*\{/.exec(attrs);
+        let pressText = null;
+        if (press) { let dd = 0; for (let k = press.index + press[0].length - 1; k < attrs.length; k++) { if (attrs[k] === "{") dd++; else if (attrs[k] === "}" && --dd === 0) { pressText = attrs.slice(press.index + press[0].length, k); break; } } }
+        const id = labels.length === 1 && labelCount === 1 ? labels[0][1] : null, esc = (x) => x.replace(/\$/g, "\\$");
+        const call = id === null ? null : new RegExp(`^\\s*(?:async\\s*)?\\(\\s*\\)\\s*=>\\s*(?:\\{\\s*(?:try\\s*\\{\\s*)?(?:await\\s+)?${pinnedName}\\(\\s*\\$\\s*,\\s*${esc(id)}\\s*\\)\\s*;?\\s*(?:\\}\\s*catch\\s*(?:\\(\\s*[\\w$]*\\s*\\))?\\s*\\{\\s*\\}\\s*)?\\}|(?:await\\s+)?${pinnedName}\\(\\s*\\$\\s*,\\s*${esc(id)}\\s*\\))\\s*$`);
+        if (call !== null && pressText !== null && call.test(pressText)) legitRefs.add(i + 6 + press.index + press[0].length + pressText.search(new RegExp(`(?<![\\w$])${pinnedName}(?![\\w$])`)));
+        if (!/(?:^|\s)plain(?=\s|=|$)/.test(flat)) at(i, "a Pane Button without plain");
+        else if (id === null) at(i, "a Pane Button whose label is not a bare identifier");
+        else if (pressText === null || !call.test(pressText)) at(i, `a Pane Button onPress that is not exactly one ${pinnedName}($, <label>) call`);
+        else if (!(innermost !== null && new RegExp(`^\\(\\s*\\{[^}]*(?<![\\w$])${esc(id)}(?![\\w$])[^}]*\\}\\s*\\)$`).test(innermost.replace(/\s+/g, " ")))) at(i, "a Pane Button label the innermost map callback does not destructure");
+      }
     }
   }
+
+  // The focus helper is referenced exactly once outside its pinned text: as the callee of the Pane Button's onPress. Counted on code with
+  // comments and strings blanked, so a mention there is no reference; a call from another hook, an alias, a value pass, an export or a second
+  // call site all fail, and so does a pinned helper that nothing calls.
+  for (const h of code.matchAll(new RegExp(`(?<![\\w$])${pinnedName}(?![\\w$])`, "g"))) if (!legitRefs.has(h.index)) at(h.index, "the focus helper is referenced outside the one Pane onPress call");
+  if (rel === "register.tsx" && pinnedLive && legitRefs.size === 0) at(0, "the pinned focus helper is never called by the Pane (an unused exec site)");
+  if (legitRefs.size > 1) at([...legitRefs][1], "the focus helper is called from more than one Pane onPress");
 
   // A Button's onPress is an inline arrow whose parameter, if any, is not named $; its body is lexed like any other code.
   for (const m of code.matchAll(/(?<![\w$.])onPress\s*(?:=\s*\{|:)\s*/g)) {
@@ -298,8 +404,19 @@ for (const f of files) {
         if (!a || /^\s*(?::[^;{}=]*)?\{/.test(code.slice(a.close + 1)) || /\bfunction\s*\*?\s*$/.test(before)) other++;
       } else other++;
     }
+    if (name === pinnedName) return pinnedLive && decls === 0 && other === 0;
     return decls === 1 && other === 0;
   };
+  // The pinned helper's name is bound once, inside the cut-out text: any other binding of it is a violation, call or no call.
+  if (pinnedLive) {
+    const pn = pinnedName.replace(/\$/g, "\\$");
+    for (const h of code.matchAll(new RegExp(`(?<![\\w$])${pn}(?![\\w$])`, "g"))) {
+      const before = code.slice(0, h.index), after = code.slice(h.index + pinnedName.length);
+      if (isMember(before)) continue;
+      const binds = /(?<![\w$.])(?:const|let|var|function\*?|class)\s+$/.test(before) || /^\s*(?::[^=;]+)?=(?!=)/.test(after) || /^\s*\(/.test(after) && (() => { const a = callArgs(code, h.index + pinnedName.length + /^\s*/.exec(after)[0].length); return !a || /^\s*(?::[^;{}=]*)?\{/.test(code.slice(a.close + 1)); })();
+      if (binds) at(h.index, "the pinned focus helper's name is bound again");
+    }
+  }
 
   for (const m of code.matchAll(/(?<![\w$])\$(?![\w$])/g)) {
     const i = m.index, rest = code.slice(i + 1);
@@ -361,6 +478,8 @@ for (const f of files) {
 }
 process.stdout.write(found.join("\n"));
 JS
+  ); rc=$?
+  if [ "$rc" != 0 ]; then echo "the lexer crashed (exit $rc): ${out:0:300}"; else printf '%s' "$out"; fi
 }
 
 # <plugin dir>: the validate net's verdict on it: each printed registration or call outside the lists,
@@ -371,7 +490,8 @@ valnet() {
   out=$(cd "$SANDBOX" && HOME="$SANDBOX/home" CLAUDE_CONFIG_DIR="$SANDBOX/home/.claude" perl -e 'alarm shift; exec @ARGV' 120 claude plugin validate "$1" 2>&1); rc=$?
   if [ "$rc" != 0 ]; then echo "validate failed (exit $rc): ${out:0:300}"; return; fi
   printf '%s\n' "$out" | node -e '
-    const [calls, events, matchers] = process.argv.slice(1).map((s) => s.split(" "));
+    const [calls, events, matchers] = process.argv.slice(1, 4).map((s) => s.split(" "));
+    const net = [process.argv[4]];
     const M = {};
     for (const m of matchers) { const [ev, canon] = m.split(/:(.*)/s); (M[ev] = M[ev] || []).push(canon); }
     const lines = require("fs").readFileSync(0, "utf8").split("\n");
@@ -392,11 +512,11 @@ valnet() {
           if (!(M[ev] || []).includes(canon)) bad.push(`hook ${item}: matcher is not one of ${(M[ev] || ["(none)"]).join(" | ")}`);
         }
       }
-      if (c && c[1].trim() !== "nothing on $") for (const x of c[1].split(",").map((s) => s.trim().replace(/^\$\./, "")).filter(Boolean)) if (!calls.includes(x)) bad.push(`call ${x}: not an allowed call`);
+      if (c && c[1].trim() !== "nothing on $") for (const x of c[1].split(",").map((s) => s.trim().replace(/^\$\./, "")).filter(Boolean)) if (!calls.includes(x.replace(/ \(via [\w$]+\)$/, "")) && !net.includes(x)) bad.push(`call ${x}: not an allowed call`);
     }
     if (!hooks) bad.push("validate printed no hooks");
     process.stdout.write(bad.join("\n"));
-  ' "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS"
+  ' "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$NET_EXTRA_CALL"
 }
 
 check "the mod's hooks module exists, so the guard has source to read" '[ -f "$PLUGIN/mod/register.tsx" ]'
@@ -405,6 +525,14 @@ check "the module source passes the lexer" '[ -z "$OUT" ]'
 OUT=$(valnet "$PLUGIN")
 check "validate passes, and every hook and call it reports is on the lists, matchers included" '[ -z "$OUT" ]'
 
+# The one Pane Button call the real register.tsx makes, as a scratch hook.
+PANE_OK="on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember(\$, name)} /></Box>)}</Box>) })"
+# <line>...: the lexer's verdict on a scratch module holding only those lines (in register) and the pinned helper.
+paneonly() {
+  copy_mod
+  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@"; echo "}"; printf '%s\n' "$HELPER"; } > "$SANDBOX/mod/register.tsx"
+  violations "$SANDBOX/mod"
+}
 # <line>...: the lexer's verdict on a scratch copy of mod/ with those lines appended to register.tsx.
 copy_mod() { rm -rf "${SANDBOX:?}/mod"; cp -R "$PLUGIN/mod" "$SANDBOX/mod"; }
 planted() { copy_mod; printf '%s\n' "$@" >> "$SANDBOX/mod/register.tsx"; violations "$SANDBOX/mod"; }
@@ -497,6 +625,152 @@ let s; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { B
 let s; const keep = (q, x) => { s = x; return x }; on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => { const { Button } = $.ui.resolve(e); return keep`${<Button />}` }); on('ui.render', { component: 'Pane', requestId: 'ah-status' }, ($, e, next) => s)
 EOF
 
+# The pinned focus helper (W4): the one process, matched whole. Each planted form must fail the lexer on its own.
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches: $line  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
+done <<'EOF'
+$.process.spawn(['herdr'])
+await $.process.run(['herdr', 'agent', 'focus', 'x'])
+const openPane2 = async ($) => { await $.process.run(['herdr']) }
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { await $.process.run(['herdr', 'agent', 'focus', 'x']); return next(e) })
+const p = $.process
+const { run } = $.process
+$['process']
+const q = "process"
+RegExp.prototype.test = () => true
+const focusMember = ($) => 0
+function focusMember(x) { return x }
+let focusMember = 1
+focusMember = null
+EOF
+# <from> <to> [line...]: the lexer's verdict on a scratch copy whose pinned helper has <from> replaced by <to>, with the lines appended.
+altered() {
+  copy_mod
+  node -e 'const fs = require("fs"), p = process.argv[1], [from, to] = [process.argv[2], process.argv[3]]; const t = fs.readFileSync(p, "utf8"); const i = t.indexOf("export const focusMember"); if (i < 0 || !t.slice(i).includes(from)) { console.error("no such text in the helper"); process.exit(2); } fs.writeFileSync(p, t.slice(0, i) + t.slice(i).replace(from, () => to));' "$SANDBOX/mod/register.tsx" "$1" "$2" || { echo "scratch edit failed"; return; }
+  shift 2; [ $# -gt 0 ] && printf '%s\n' "$@" >> "$SANDBOX/mod/register.tsx"
+  violations "$SANDBOX/mod"
+}
+altcase() { # <label> <from> <to> [line...]
+  local label=$1; shift
+  OUT=$(altered "$@")
+  check "lexer alone catches a changed helper: $label  [${OUT%%$'\n'*}]" '[ -n "$OUT" ] && [ "$OUT" != "scratch edit failed" ]'
+}
+altcase "3a argv element changed" "'focus'" "'get'"
+altcase "3b a fifth argv element" "'focus', name]" "'focus', name, 'x']"
+altcase "3c a spread" "['herdr', 'agent', 'focus', name]" "[...['herdr', 'agent', 'focus'], name]"
+altcase "3d a template string" "'focus'" '`focus`'
+altcase "3e sh -c" "['herdr', 'agent', 'focus', name]" "['sh', '-c', name]"
+altcase "3f a second init key" "{ timeoutMs: 5000 }" "{ timeoutMs: 5000, cwd: '/' }"
+altcase "3g the pattern check removed" "typeof name !== 'string' || !/^[a-z][a-z0-9_-]{0,31}\$/.test(name)" "typeof name !== 'string'"
+altcase "3h success on any exit" "run.exitCode === 0" "run.exitCode >= 0"
+altcase "3i the timeout changed" "5000" "600000"
+altcase "8 the pattern as a constant outside the pinned text" "/^[a-z][a-z0-9_-]{0,31}\$/.test(name)" "NAME_RE.test(name)" "const NAME_RE = /.*/"
+OUT=$(planted "$HELPER")
+check "lexer alone catches: the helper text present twice  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "more than once"'
+OUT=$(altered "'focus'" "'get'" "/* $HELPER */")
+check "lexer alone catches: an altered live helper with the pinned text in a comment  [${OUT%%$'\n'*}]" '[ -n "$OUT" ] && printf "%s" "$OUT" | grep -q "altered"'
+copy_mod; sed -i.bak "s#^export const focusMember#const focusMember#" "$SANDBOX/mod/register.tsx"; rm -f "$SANDBOX/mod/register.tsx.bak"
+OUT=$(violations "$SANDBOX/mod")
+check "lexer alone catches: the helper without its export (a changed text)  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
+copy_mod; printf '%s\n' "$HELPER" > "$SANDBOX/mod/other.ts"
+OUT=$(violations "$SANDBOX/mod")
+check "lexer alone catches: the pinned text in a file other than register.tsx  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "outside register.tsx"'
+OUT=$(violations "$PLUGIN/mod")
+check "the repo's own register.tsx holds the helper exactly once and the word process nowhere else" '[ -z "$OUT" ] && [ "$(grep -c "export const focusMember" "$PLUGIN/mod/register.tsx")" = 1 ]'
+
+# The Pane hook may draw a Button per row (W3): plain, labelled by a bare identifier the innermost .map callback destructures, and
+# an onPress that is exactly one focus-helper call with that identifier. Each other form must fail the lexer on its own.
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(paneonly "$line")
+  check "lexer alone catches: $line  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
+done <<'EOF'
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ a, b }) => <Button plain label={a} onPress={() => focusMember($, b)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={String(name)} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={`x`} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label="x" onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={name} onPress={() => { focusMember($, name); other() }} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={name} onPress={() => focusMember($, name, $)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={name} onPress={() => x.focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={name} onPress={() => $.ui.toast(name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map((r) => <Button plain label={r} onPress={() => focusMember($, r)} />)}</Box> })
+on('session.start', async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); const draw = ({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />; return <Box>{e.props.rows.map(draw)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.a.map((s) => e.props.b.map((t) => e.props.c.map(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)))}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.filter(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.flatMap(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.forEach(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); const name = 'x'; return <Box>{(() => <Button plain label={name} onPress={() => focusMember($, name)} />)()}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(function ({ name }) { return <Button plain label={name} onPress={() => focusMember($, name)} /> })}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => { return <Button plain label={name} onPress={() => focusMember($, name)} /> })}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows['map'](({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(($) => <Button plain label={$} onPress={() => focusMember($, $)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ $x, name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => drawRow(Button, name))}</Box> })
+let B; on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); B = Button; return <Box /> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); const B = Button; return <Box>{e.props.rows.map(({ name }) => <B plain label={name} onPress={() => focusMember($, name)} />)}</Box> })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return <Box>{e.props.rows.map(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />).concat(e.props.more.map(({ name }) => <Button plain label={name} onPress={() => focusMember($, name)} />))}</Box> })
+EOF
+
+# The same hook, in the allowed form, passes: nested maps (sections, then rows), a keyed Box around the Button, plain, a bare label identifier destructured by the
+# innermost callback, and an onPress that is one helper call, awaited or wrapped in a try with an empty catch.
+OUT=$(paneonly "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button, Text } = \$.ui.resolve(e); return (<Box>{e.props.sections.map((s) => <Box key={s.key}>{s.rows.map(({ name, text }) => <Box key={name}><Button plain label={name} hover={{ underline: true }} onPress={() => focusMember(\$, name)} /><Text>{text}</Text></Box>)}</Box>)}</Box>) })")
+check "lexer passes the Pane Button form: nested .map callbacks, a keyed Box, plain, a destructured label, one focus call" '[ -z "$OUT" ]'
+OUT=$(paneonly "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={async () => { try { await focusMember(\$, name) } catch {} }} /></Box>)}</Box>) })")
+check "lexer passes a Pane Button whose onPress awaits the focus call inside a try with an empty catch" '[ -z "$OUT" ]'
+OUT=$(paneonly "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember(\$, name)} /></Box>)}</Box>) })")
+check "lexer passes a one-level .map Pane Button" '[ -z "$OUT" ]'
+
+# The focus helper is referenced exactly once outside its pinned text, as the Pane onPress callee: a process cannot run without a press (r8).
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches a second reference to the focus helper: $line  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "referenced outside the one Pane onPress call\|more than one Pane"'
+done <<'EOF'
+on('session.start', async ($, e, next) => { await focusMember($, 'x'); return next(e) })
+on('session.start', async ($, e, next) => { $.clock.every(1000, () => focusMember($, 'x')); return next(e) })
+const openPane2 = async ($, member) => { await focusMember($, 'x') }
+export const wrapper = ($, n) => focusMember($, n)
+const f = focusMember
+const g = { run: focusMember }
+export { focusMember as run }
+const callIt = (fn) => fn; callIt(focusMember)
+await focusMember($, 'x')
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { await focusMember($, 'x'); return next(e) })
+on('command.run', { command: 'hierarchy-pane' }, async ($, e, next) => { await focusMember($, 'x'); return ({ text: 'ok' }) })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember($, name)} /></Box>)}</Box>) })
+const k = [focusMember]
+const m = focusMember.bind(null, $)
+EOF
+OUT=$(paneonly "on('session.start', (\$, e, next) => next(e))")
+check "lexer alone catches: a pinned helper that the Pane never calls  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "never called"'
+OUT=$(paneonly "$PANE_OK" "// focusMember is the only helper; see focusMember above" "/* focusMember( */" "const note = 'focusMember'")
+check "lexer passes the one Pane call plus a comment and a string that name the helper" '[ -z "$OUT" ]'
+OUT=$(paneonly "$PANE_OK")
+check "lexer passes the one Pane call alone" '[ -z "$OUT" ]'
+
+# The prototype-reaching names (r8): each fails whole-word on the comment-blanked source, strings kept.
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches: $line  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "banned token"'
+done <<'EOF'
+RegExp.prototype.test = () => true
+/a/.__proto__.test = () => true
+const x = {}; x['__proto__']
+Object.getPrototypeOf(/a/).test = () => true
+Object['getPrototypeOf'](x)
+Object.setPrototypeOf(x, null)
+Object.defineProperty(RegExp, 'a', {})
+Object.defineProperties(x, {})
+Object.getOwnPropertyDescriptor(x, 'a')
+Object.getOwnPropertyDescriptors(x)
+EOF
+
 # The band hook may draw a Button with an inline arrow onPress; a $-first helper declared once may be called with $ from two hooks.
 OUT=$(planted "const help = async (\$, x) => { await \$.state.set(x, 1) }" \
   "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button, Text } = \$.ui.resolve(e); return <Box><Text>x</Text><Button key=\"k\" label=\"L\" onPress={async () => { await help(\$, 1); await \$.ui.toast('x') }} /></Box> })" \
@@ -531,13 +805,14 @@ check "lexer passes the allowed forms: \$.fs.read(p), \$.ui.status(t), (\$, e, n
 # A module with every P3 matcher passes the lexer and the validate net; one without its matcher fails the net.
 p3() {
   rm -rf "${SANDBOX:?}/p3"; mkdir -p "$SANDBOX/p3"; cp -R "$PLUGIN/.claude-plugin" "$SANDBOX/p3/"; copy_mod; cp -R "$SANDBOX/mod" "$SANDBOX/p3/mod"
-  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@"; echo "}"; } > "$SANDBOX/p3/mod/register.tsx"
+  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@"; echo "}"; printf '%s\n' "$HELPER"; } > "$SANDBOX/p3/mod/register.tsx"
 }
 p3 "on('session.start', (\$, e, next) => next(e))" \
    "on('command.run', { command: 'hierarchy-pane' }, (\$, e, next) => ({ text: 'ok' }))" \
    "on('ui.render', { component: 'Pane', requestId: 'ah-status' }, (\$, e, next) => next(e))" \
    "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))" \
-   "on('ui.close', { id: 'ah-status' }, (\$, e, next) => next(e))"
+   "on('ui.close', { id: 'ah-status' }, (\$, e, next) => next(e))" \
+   "$PANE_OK"
 OUT="$(violations "$SANDBOX/p3/mod")$(valnet "$SANDBOX/p3")"
 check "a register with the ui.close matcher, both ui.render matchers and the command.run matcher passes the lexer and the validate net" '[ -z "$OUT" ]'
 p3 "on('session.start', (\$, e, next) => next(e))" "on('ui.render', (\$, e, next) => next(e))"
