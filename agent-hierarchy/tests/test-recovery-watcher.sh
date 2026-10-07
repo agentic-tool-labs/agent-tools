@@ -54,6 +54,7 @@ watch 6
 check "own session, overloaded, 40 s after the failure: a RESUME wake (exit 3) with the resume paragraph" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "this session.s last turn ended on an API error (overloaded)" && echo "$OUT" | grep -q "automatic resume 1/3" && echo "$OUT" | grep -q "$RESUME_LINE"'
 check "the paragraph tells it to re-check side effects before repeating them" 'echo "$OUT" | grep -q "confirm whether it already happened before doing it again"'
 check "the wake is recorded as a typed watch-event row" '[ "$(rows RESUME)" -ge 1 ]'
+check "the own-session wake carries the watcher restart line" 'echo "$OUT" | grep -q "^Restart the watcher if anything is still open: Bash with run_in_background: true"'
 watch 3
 check "a restarted watcher does not resume the same failure twice" 'quiet'
 
@@ -95,10 +96,11 @@ reset; team "$$"; failed sess-m overloaded 1 40
 watch 6
 check "member, overloaded, 40 s: a RESUME wake telling the Orchestrator to SendMessage it" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "architect \"demo-arch\" ended a turn on an API error (overloaded)" && echo "$OUT" | grep -q "SendMessage demo-arch" && echo "$OUT" | grep -q "automatic resume 1/3" && echo "$OUT" | grep -q "$RESUME_LINE"'
 check "the wake says: no re-brief, no ETA reset" 'echo "$OUT" | grep -q "no re-brief, no ETA reset"'
+check "the member wake carries the restart line, outside the text to forward" 'echo "$OUT" | grep -q "^Restart the watcher if anything is still open: Bash with run_in_background: true" && [ "$(echo "$OUT" | grep -n "^---$" | tail -1 | cut -d: -f1)" -lt "$(echo "$OUT" | grep -n "^Restart the watcher" | cut -d: -f1)" ]'
 check "a resume counts as hearing from the member (the check-in clock restarts)" 'grep -rh "\"type\":\"heard\"" "$HOME/.claude" | grep -q "\"from\":\"demo-arch\""'
 reset; team "$$"; failed sess-m overloaded 4 600
 watch 6
-check "member, 4th failure: an API-FAILED wake, no resume, tell the user" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "stopped on an API error (overloaded" && echo "$OUT" | grep -q "after 3 automatic resumes. Not resuming. Tell the user in one line" && ! echo "$OUT" | grep -q "SendMessage demo-arch"'
+check "member, 4th failure: an API-FAILED wake, no resume, tell the user" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "stopped on an API error (overloaded" && echo "$OUT" | grep -q "after 3 automatic resumes. Not resuming. Tell the user in one line" && ! echo "$OUT" | grep -q "SendMessage demo-arch" && echo "$OUT" | grep -q "^.*Restart the watcher if anything is still open"'
 reset; team "$$"; failed sess-m billing_error 1 10
 watch 6
 check "member, billing_error: escalated at once, even 10 s after" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "Not resuming"'

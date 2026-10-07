@@ -229,6 +229,8 @@ function recoveryEvents(now) {
   const dir = hierarchyDir(cwd);
   const gates = readGates(dir);
   const done = (type, subject, failedAt) => gates.some((g) => g.type === type && g.session_id === sessionId && g.subject === subject && g.failed_at === failedAt);
+  // A wake ends the watcher, so each wake tells the Orchestrator to start it again.
+  const restart = `Restart the watcher if anything is still open: ${watcherCall(sessionId, cwd)}.`;
   const subjects = [{ id: sessionId, own: true }];
   const pid = Number(process.env.CLAUDE_PID);
   const roster = readRoster(dir);
@@ -260,7 +262,7 @@ function recoveryEvents(now) {
       const who = sub.own ? "this session" : `${sub.role} "${sub.name}"`;
       const text = sub.own
         ? `ah watcher: this session stopped on an API error (${error}${detail ? `: ${detail}` : ""})${streak > MAX_RESUMES ? `, after ${MAX_RESUMES} automatic resumes` : ""}. Not resuming.`
-        : `ah watcher: ${who} stopped on an API error (${error}${detail ? `: ${detail}` : ""})${streak > MAX_RESUMES ? `, after ${MAX_RESUMES} automatic resumes` : ""}. Not resuming. Tell the user in one line; resume it only when the user says so.`;
+        : `ah watcher: ${who} stopped on an API error (${error}${detail ? `: ${detail}` : ""})${streak > MAX_RESUMES ? `, after ${MAX_RESUMES} automatic resumes` : ""}. Not resuming. Tell the user in one line; resume it only when the user says so. ${restart}`;
       // Waking a session whose API is failing only fails again: its own failure is a row, not a wake.
       events.push({ request_id: null, kind: "API-FAILED", text, quiet: sub.own, extra: { subject: sub.id, error, streak } });
       continue;
@@ -272,13 +274,13 @@ function recoveryEvents(now) {
     appendGate(dir, { type: "resume", session_id: sessionId, subject: sub.id, failed_at: failedAt, n: streak });
     const head = `${sub.own ? "this session's" : "Your"} last turn ended on an API error (${error}) at ${clock(failedAt)}; automatic resume ${streak}/${MAX_RESUMES}.`;
     if (sub.own) {
-      events.push({ request_id: null, kind: "RESUME", text: `ah watcher: ${head}\n${RESUME_PARAGRAPH}`, extra: { subject: sub.id, error, streak } });
+      events.push({ request_id: null, kind: "RESUME", text: `ah watcher: ${head}\n${RESUME_PARAGRAPH}\n${restart}`, extra: { subject: sub.id, error, streak } });
     } else {
       appendPeerRecord({ type: "heard", session_id: sessionId, from: sub.name, ts: new Date().toISOString() });
       events.push({
         request_id: null,
         kind: "RESUME",
-        text: `ah watcher: ${sub.role} "${sub.name}" ended a turn on an API error (${error}) at ${clock(failedAt)}; automatic resume ${streak}/${MAX_RESUMES}. SendMessage ${sub.name} exactly the text between the lines below, and nothing else: no re-brief, no ETA reset.\n---\n${head}\n${RESUME_PARAGRAPH}\n---`,
+        text: `ah watcher: ${sub.role} "${sub.name}" ended a turn on an API error (${error}) at ${clock(failedAt)}; automatic resume ${streak}/${MAX_RESUMES}. SendMessage ${sub.name} exactly the text between the lines below, and nothing else: no re-brief, no ETA reset.\n---\n${head}\n${RESUME_PARAGRAPH}\n---\n${restart}`,
         extra: { subject: sub.id, member: sub.name, role: sub.role, error, streak },
       });
     }
