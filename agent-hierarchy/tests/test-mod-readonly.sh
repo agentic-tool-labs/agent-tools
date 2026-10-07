@@ -125,6 +125,10 @@ export const dismissTeam = async ($: any): Promise<void> => {
       await $.ui.toast(`Could not dismiss ${label}: ${read.reason}`)
       return
     }
+    if (!/^[0-9a-f]{16}$/.test(read.plan.token)) {
+      await $.ui.toast(`Could not dismiss ${label}: plan failed`)
+      return
+    }
     const yes = `Dismiss ${label}`
     const answer = await $.ui.ask(dismissQuestion(label, team.summary, read.plan), { header: 'Dismiss', options: ['Cancel', yes] })
     if (answer !== yes) return
@@ -1068,6 +1072,7 @@ altcase2 "second dialog answer loosened" "if (sure !== 'Dismiss anyway') return"
 altcase2 "Cancel not first" "options: ['Cancel', yes]" "options: [yes, 'Cancel']"
 altcase2 "picker accepts Cancel" "if (chosen === 'Cancel' || !labels.includes(chosen)) return" "if (!labels.includes(chosen)) return"
 altcase2 "re-entrancy flag dropped" "if ((await \$.state.get(flag)).value === true) return" ""
+altcase2 "token shape re-check dropped" "if (!/^[0-9a-f]{16}\$/.test(read.plan.token)) {" "if (false) {"
 altcase2 "stale view" "ownedTeams((await \$.state.get({ plugin: 'ah', key: 'view' })).value)" "[]"
 altcase2 "a third process" "await \$.ui.toast(closeToast(label, run.exitCode, run.stdout, run.stderr))" "await \$.process.run(['rm', '-rf', cwd])"
 altcase2 "a shell string" "['node', root + '/hooks/roster.mjs', 'disband']" "['sh', '-c', root]"

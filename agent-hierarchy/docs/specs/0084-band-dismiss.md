@@ -136,7 +136,7 @@ When nobody is busy and nothing is open, there is one modal only.
 | Exit 2 with a stale-token message | `<team> changed since the check; press Dismiss again.` |
 | Any other non-zero exit, reject, timeout, or unparseable output | `Could not dismiss <team>: <reason>` (as §3.3) |
 
-Toasts use the configured duration (`toastFor`). When `toastFor` is 0, outcome toasts **still show**, at the default 4000 ms. They are the only report of a destructive action, so turning off ah status toasts must not hide them. `focusMember`'s failure toast already ignores `toastFor`.
+Outcome toasts use the engine's default duration, whatever `toast_seconds` says: the pinned helper passes no duration. When `toast_seconds` is 0 they **still show**. They are the only report of a destructive action, so turning off ah status toasts must not hide them. `focusMember`'s failure toast already ignores `toastFor`.
 
 After success, nothing else is done: `disband` refreshes status.json, and the next 2 s tick drops the band.
 
@@ -150,7 +150,7 @@ status.json is pool-wide and writable by any session, so every value that reache
 
 - **Team name:** the same name rule `roster.mjs` uses for team names (`validateTeamAlias`, `roster.mjs:1427`; Implementor: reuse that rule's pattern verbatim; cite where it lives in the guard comment). Anything else → toast `Could not dismiss that team.`, with no exec.
   - **r2:** the literal `@default` is allowed only when it was produced from a null team key (§3.2).
-- **Plan token:** must match the shape `closeToken` produces (Implementor: read `closeToken` in `hooks/roster.mjs` and pin that shape). Otherwise treat it as a failed plan.
+- **Plan token:** must match the shape `closeToken` produces (16 lowercase hex characters). It is checked twice: in `readPlan` (`view.ts`), and again inside the pinned helper just before the dialogs, so the pinned text alone guarantees what follows `--plan-token`. Otherwise treat it as a failed plan.
 - **cwd:** `$.session.cwd()`. It must be absolute; otherwise there is no exec.
 - **r2 — The roster script path:** `$.plugin.root` + `/hooks/roster.mjs`. `plugin.root` is the plugin's absolute directory, the one holding `.claude-plugin/` (types `claude-code.d.ts:2236-2245`).
   - It is never taken from status.json or any pool file.
@@ -212,7 +212,7 @@ The rule "show Dismiss when the viewer owns a live team" is also met by, or near
 | Close exit 0 but `closed:false` / `still_live` | Toast naming what's left; never "Dismissed" |
 | Second press while the first is in flight | Ignored |
 | ≥4 owned teams | Toast pointing to the skill; no exec |
-| `toast_seconds: 0` | Outcome toasts still show (4000 ms); status toasts still off |
+| `toast_seconds: 0` | Outcome toasts still show (engine default duration); status toasts still off |
 
 ## 5. Tests
 
@@ -242,7 +242,7 @@ The rule "show Dismiss when the viewer owns a live team" is also met by, or near
 - **Legacy doc:** `[ Pane ]` present, Dismiss absent.
 - **Process failure → toast:** a table over the plan and the close, covering exit 2 with stderr, a reject, a timeout reject, non-JSON stdout, and `closed:false`. Each produces its §3.3/§3.5 toast. Mirror the `FAILS` table at :914-919.
 - **Re-entrancy:** a second press while the `ask` promise is pending → no second `ask`.
-- **Validation:** a team named with shell metacharacters or a capital letter in a crafted doc → no exec, and the validation toast.
+- **Validation:** a team named with shell metacharacters, an underscore, a dot, a leading dash, or more than 32 characters in a crafted doc → no exec, and the validation toast. (Capital letters are valid: `isTeamAliasShape` allows them.)
 
 `tests/test-mod-readonly.sh`:
 

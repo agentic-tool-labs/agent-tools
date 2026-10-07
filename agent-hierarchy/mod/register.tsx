@@ -86,6 +86,10 @@ export const dismissTeam = async ($: any): Promise<void> => {
       await $.ui.toast(`Could not dismiss ${label}: ${read.reason}`)
       return
     }
+    if (!/^[0-9a-f]{16}$/.test(read.plan.token)) {
+      await $.ui.toast(`Could not dismiss ${label}: plan failed`)
+      return
+    }
     const yes = `Dismiss ${label}`
     const answer = await $.ui.ask(dismissQuestion(label, team.summary, read.plan), { header: 'Dismiss', options: ['Cancel', yes] })
     if (answer !== yes) return
