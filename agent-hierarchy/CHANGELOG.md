@@ -5,6 +5,13 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.119.1]
+
+### Fixed
+
+- A session-end from a process other than the registered one no longer marks a
+  live member gone. The `down` record also carries the ending process's own pid.
+
 ## [0.119.0]
 
 ### Added

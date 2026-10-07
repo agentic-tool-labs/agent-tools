@@ -107,7 +107,9 @@ check "5c: dismiss-by-name is not ambiguous" '[ "$RC" -eq 0 ] && ! has "ambiguou
 
 # ---- 6: pane-attributed down row + fresh briefed row -> not live; SessionEnd writes pane_id
 fresh
-seed "{\"status\":\"up\",\"role\":\"architect\",\"pid\":$LIVE_PID,\"pane_id\":\"PANE1\",\"session_id\":\"$SID\",\"cwd\":\"$PROJ\",\"ts\":\"2026-09-01T00:00:00.000Z\"}"
+# the registered pid is dead, so a SessionEnd from any process may mark the member down
+sleep 0 & DEAD_PID=$!; wait "$DEAD_PID"
+seed "{\"status\":\"up\",\"role\":\"architect\",\"pid\":$DEAD_PID,\"pane_id\":\"PANE1\",\"session_id\":\"$SID\",\"cwd\":\"$PROJ\",\"ts\":\"2026-09-01T00:00:00.000Z\"}"
 echo "{\"session_id\":\"$SID\",\"cwd\":\"$PROJ\",\"hook_event_name\":\"SessionEnd\"}" | env -u HERDR_PANE_ID HOME="$FAKEHOME" node "$H/sessionend-roster.mjs"
 check "6: SessionEnd's down row carries the up row's pane_id" \
   'tail -1 "$PEERS_FILE" | grep -q "\"status\":\"down\"" && tail -1 "$PEERS_FILE" | grep -q "\"pane_id\":\"PANE1\""'
