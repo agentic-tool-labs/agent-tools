@@ -1,6 +1,6 @@
 // The status document read the way every consumer reads it (docs/status-file.md, "Reading it"), and what
 // the band, the Pane and the toasts show from it. No engine calls, so the mod's tests drive it directly.
-import type { PaneRow, TeamModel, Tone, View } from './types/index.d.ts'
+import type { PaneRow, TeamModel, TeamSummary, Tone, View } from './types/index.d.ts'
 
 /** The largest status.json read: a bigger file counts as no document. */
 export const SIZE_CAP = 262144
@@ -163,11 +163,12 @@ type Member = {
   activity: string; activityMs: number; activityAt: string; blockedBy: string; note: string
   lastTool: string; lastToolMs: number; stream: string; sessionId: string; focusable: boolean
 }
-type Team = { name: string; pipeline: Record<string, unknown> | null; members: Member[]; dispatches: Dispatch[] }
+type Team = { name: string; isDefault: boolean; pipeline: Record<string, unknown> | null; members: Member[]; dispatches: Dispatch[] }
 
 function readTeams(doc: Doc, nowMs: number): Team[] {
   return records(doc.teams).map((t) => ({
     name: str(t.team) || 'default',
+    isDefault: t.team === null,
     pipeline: record(t.pipeline),
     members: records(t.members).map((m) => ({
       name: str(m.name), label: str(m.label), kind: str(m.kind), route: str(m.route), live: m.live,
@@ -237,6 +238,20 @@ export const STYLE = {
 } as const
 type IconKey = keyof typeof STYLE.icon
 const iconOf = (key: IconKey) => ({ icon: STYLE.icon[key].glyph as string, iconColor: STYLE.icon[key].color as string | null })
+
+/** A dispatch counts as open while it is working, overdue, stalled or blocked; reported and expired ones are closed. */
+const OPEN_STATES = ['working', 'overdue', 'stalled', 'blocked']
+
+/** What dismissing a team would interrupt, from the same parsed activity and dispatch states the Pane rows draw. */
+function summaryOf(t: Team): TeamSummary {
+  const live = t.members.filter((m) => m.live !== false)
+  return {
+    members: t.members.length,
+    busy: live.filter((m) => m.activity === 'working').map((m) => m.name),
+    blocked: live.filter((m) => m.activity === 'blocked').map((m) => m.name),
+    open: t.dispatches.filter((d) => OPEN_STATES.includes(d.state)).map((d) => ({ member: goneName(d), state: d.state })),
+  }
+}
 
 const memberIconKey = (m: Member): IconKey => (m.live === false ? 'gone' : m.activity === 'working' ? 'working' : m.activity === 'blocked' ? 'blocked' : m.activity === 'idle' ? 'idle' : 'unknown')
 const DISPATCH_ICON: Record<Tone, IconKey> = { work: 'dispatchWork', idle: 'dispatchIdle', warn: 'dispatchWarn', bad: 'dispatchBad' }
@@ -321,6 +336,8 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
   }
   const teamModels: TeamModel[] = teams.map((t) => ({
     name: t.name,
+    isDefault: t.isDefault,
+    summary: summaryOf(t),
     pipeline: t.pipeline === null ? null : pipelineRows(t, 'Pipeline idle.'),
     members: t.members.map((m) => ({ stream: m.stream, row: memberRow(m) })),
     dispatches: shownOf(t).map((d) => ({ member: d.member, row: dispatchRow(d) })),
@@ -340,7 +357,7 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
   for (const d of dispatches) {
     if (d.state === 'stalled') toasts.push({ key: `stalled:${d.id}`, text: `${d.label} stalled · ${d.slug} · ${stalledWhy(d, nowMs)}` })
   }
-  return { band, pane, teams: teamModels, toasts }
+  return { band, pane, teams: teamModels, toasts, owned: mine.owners !== null }
 }
 
 /**
@@ -365,6 +382,38 @@ export function cut(s: string, n: number): string {
 
 /** The band's Pane button: its label, its drawn width (`[ Pane ]`), the gap before it, and the narrowest band that draws it. */
 export const PANE_BUTTON = { label: 'Pane', width: 8, gap: 1, minColumns: 40 }
+
+/** The band's Dismiss button, drawn right of Pane: its label, its drawn width (`[ Dismiss ]`), the gap before it, and the narrowest band that draws both buttons. */
+export const DISMISS_BUTTON = { label: 'Dismiss', width: 11, gap: 1, minColumns: PANE_BUTTON.minColumns + 12 }
+
+/**
+ * The teams of a held view that the viewer owns, each with the fields the Dismiss dialogs read: none unless the view is marked
+ * `owned`. A value held in state can come from another version of this module, so every field is checked, not assumed.
+ */
+export function ownedTeams(view: unknown): TeamModel[] {
+  const v = record(view)
+  if (v === null || v.owned !== true || !Array.isArray(v.teams)) return []
+  const list = (x: unknown): string[] => (Array.isArray(x) && x.every((n) => typeof n === 'string') ? (x as string[]) : [])
+  const out: TeamModel[] = []
+  for (const t of v.teams) {
+    const r = record(t), sm = r === null ? null : record(r.summary)
+    if (r === null || sm === null || typeof r.name !== 'string' || typeof r.isDefault !== 'boolean' || typeof sm.members !== 'number') continue
+    const open = (Array.isArray(sm.open) ? sm.open : []).map(record).filter((d): d is Record<string, unknown> => d !== null && typeof d.member === 'string' && typeof d.state === 'string')
+    out.push({ ...(r as unknown as TeamModel), summary: { members: sm.members, busy: list(sm.busy), blocked: list(sm.blocked), open: open.map((d) => ({ member: d.member as string, state: d.state as string })) } })
+  }
+  return out
+}
+
+/**
+ * Which buttons the band draws at `columns` and how wide its text may be. Pane shows from PANE_BUTTON.minColumns; Dismiss
+ * also needs DISMISS_BUTTON.minColumns and a view that lists at least one team the session owns (an `owners` document).
+ */
+export function bandButtons(view: View | null, columns: number): { pane: boolean; dismiss: boolean; textColumns: number } {
+  const pane = columns >= PANE_BUTTON.minColumns
+  const dismiss = pane && columns >= DISMISS_BUTTON.minColumns && ownedTeams(view).length > 0
+  const taken = (pane ? PANE_BUTTON.width + PANE_BUTTON.gap : 0) + (dismiss ? DISMISS_BUTTON.width + DISMISS_BUTTON.gap : 0)
+  return { pane, dismiss, textColumns: columns - taken }
+}
 
 /** The band's one line at `columns` and its tone, or null when there is no band. */
 export function bandLine(view: View | null, columns: number): { text: string; tone: Tone } | null {
@@ -513,4 +562,82 @@ export function toastMs(raw: unknown): number {
   if (!Number.isFinite(n) || n < 0) return TOAST_DEFAULT_MS
   if (n === 0) return 0
   return Math.min(TOAST_MAX_S, Math.max(2, Math.round(n))) * 1000
+}
+
+/** The labels the Dismiss dialogs use for `teams`: the shown name, except that the default team is `@default` when another team shows the same name. */
+export function teamLabels(teams: readonly { name: string; isDefault: boolean }[]): string[] {
+  return teams.map((t) => (t.isDefault && teams.some((o) => o !== t && o.name === t.name) ? '@default' : t.name))
+}
+
+/** A disband plan as the Dismiss dialog reads it. */
+export type Plan = { token: string; close: string[]; warnings: string[]; strays: string[]; notClosable: string[] }
+export type PlanReading = { kind: 'plan'; plan: Plan } | { kind: 'nothing'; reason: string } | { kind: 'failed'; reason: string }
+
+const words = (v: unknown): string[] => (Array.isArray(v) ? v.map(str).filter((x) => x !== '') : [])
+const nameOf = (v: unknown): string => {
+  const r = record(v)
+  return r === null ? str(v) : str(r.name) || str(r.role)
+}
+
+/** The first line of `stderr` without roster's own prefix, cut to 120 cells; `fallback` when there is none. */
+export function failReason(stderr: unknown, fallback: string): string {
+  const line = (typeof stderr === 'string' ? stderr : '').split('\n').map((l) => str(l.replace(/^roster\.mjs: /, '')).trim()).find((l) => l !== '')
+  return line === undefined ? fallback : cut(line, 120)
+}
+
+/**
+ * The output of `disband` (plan). A plan counts only when it came from a team file: a plan over the pool's live
+ * peers (the team file is gone) carries a `source` key and no `team_files`, and is an error here, never something to close.
+ */
+export function readPlan(stdout: unknown): PlanReading {
+  let o: unknown
+  try { o = JSON.parse(typeof stdout === 'string' ? stdout : '') } catch { return { kind: 'failed', reason: 'plan failed' } }
+  const d = record(o)
+  if (d === null) return { kind: 'failed', reason: 'plan failed' }
+  if (d.disbanded === false) return { kind: 'nothing', reason: cut(str(d.reason) || 'nothing to close', 120) }
+  if ('source' in d || !Array.isArray(d.team_files) || d.team_files.length === 0) return { kind: 'failed', reason: 'no team file' }
+  const token = d.close_token
+  if (typeof token !== 'string' || token.length !== 16 || /[^0-9a-f]/.test(token) || !Array.isArray(d.close)) return { kind: 'failed', reason: 'plan failed' }
+  return { kind: 'plan', plan: { token, close: d.close.map(nameOf), warnings: words(d.warnings), strays: words(d.strays), notClosable: words((Array.isArray(d.not_closable) ? d.not_closable : []).map(nameOf)) } }
+}
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+const names = (xs: readonly string[]): string => xs.join(', ')
+
+/** The confirm dialog's question for `label`, from the team's summary and the plan. */
+export function dismissQuestion(label: string, s: TeamSummary, plan: Plan): string {
+  const open = s.open.length
+  const lines = [`Dismiss team ${label}? This closes ${plural(plan.close.length, 'member session', 'member sessions')}${plan.close.length ? `: ${names(plan.close)}` : ''}.`]
+  lines.push(s.busy.length ? `BUSY now: ${names(s.busy)}.` : 'No member is busy.')
+  if (s.blocked.length) lines.push(`Blocked: ${names(s.blocked)}.`)
+  lines.push(open ? `Open dispatches: ${open} (${s.open.map((d) => `${d.member} ${d.state}`).join(', ')}).` : 'No open dispatches.')
+  if (s.busy.length || open) lines.push('Their in-flight work will be lost.')
+  lines.push(...plan.warnings)
+  if (plan.strays.length) lines.push(`Strays: ${names(plan.strays)}.`)
+  if (plan.notClosable.length) lines.push(`Not closed (no pane): ${names(plan.notClosable)}.`)
+  lines.push('Worktrees, branches and messages are left as they are.')
+  return lines.join(' ')
+}
+
+/** Whether closing the team would lose work in flight: a live member is working, or a dispatch is open. */
+export const inFlight = (s: TeamSummary): boolean => s.busy.length > 0 || s.open.length > 0
+
+/** The second dialog's question, asked when `inFlight`. */
+export function anywayQuestion(label: string, s: TeamSummary): string {
+  const parts = []
+  if (s.busy.length) parts.push(`${names(s.busy)} busy`)
+  if (s.open.length) parts.push(plural(s.open.length, 'open dispatch', 'open dispatches'))
+  return `${label} has work in flight: ${parts.join('; ')}. Close it anyway and lose that work?`
+}
+
+/** The toast for the outcome of `disband --close`. */
+export function closeToast(label: string, status: unknown, stdout: unknown, stderr: unknown): string {
+  if (status === 2 && /does not match the current close plan/.test(typeof stderr === 'string' ? stderr : '')) return `${label} changed since the check; press Dismiss again.`
+  let d: Record<string, unknown> | null = null
+  if (status === 0) try { d = record(JSON.parse(typeof stdout === 'string' ? stdout : '')) } catch { d = null }
+  if (d === null) return `Could not dismiss ${label}: ${failReason(stderr, 'close failed')}`
+  const still = words(d.still_live)
+  if (d.closed === true && still.length === 0) return `Dismissed ${label}.`
+  const left = still.length ? still : words((Array.isArray(d.kept) ? d.kept : []).map(nameOf))
+  return `${label}: not all sessions closed${left.length ? ` (${names(left)})` : ''}.`
 }

@@ -729,6 +729,10 @@ cover several ("disband the teams"). Each disband keeps its own confirmation.
 user has seen exactly what would be. To drop the record and leave the sessions
 running, that is `untrack --all` (§ untrack), never `disband`.
 
+The band's `[ Dismiss ]` button is a user-driven path to the same plan and close,
+with its own confirm dialog (and a second one when work is in flight). It does not
+change this contract for the Orchestrator.
+
 **No `team.json`?** (spec 0040) Plan and `--close` do not no-op: they operate on
 the live peer records in `peers.jsonl` instead — the peers `add`/`spawn-one`
 brought up, or a Team whose `team.json` was lost. The same plan → `close_token`

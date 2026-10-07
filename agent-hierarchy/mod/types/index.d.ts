@@ -10,10 +10,16 @@ export type PaneRow =
 /** One team as data, for the sectioned Pane: its pipeline rows (null when it has no pipeline), its members with their stream ('' for none), and its dispatches with the member each went to. */
 export type TeamModel = {
   name: string
+  /** True for the team kept in the pool's default team file (its key is null); a team named `default` is false. */
+  isDefault: boolean
+  summary: TeamSummary
   pipeline: PaneRow[] | null
   members: { stream: string; row: PaneRow }[]
   dispatches: { member: string; row: PaneRow }[]
 }
+
+/** What closing a team would interrupt: its member count, the live members working or blocked, and its open dispatches with the member each went to. */
+export type TeamSummary = { members: number; busy: string[]; blocked: string[]; open: { member: string; state: string }[] }
 
 /**
  * What the band, the Pane and the toasts show at one instant, with nothing that depends on width. The band's
@@ -24,6 +30,8 @@ export type View = {
   pane: PaneRow[]
   teams: TeamModel[]
   toasts: { key: string; text: string }[]
+  /** True when `teams` are the viewer's own, proven by the document's `owners`; false for a pool-wide (older) document. */
+  owned: boolean
 }
 
 declare module 'claude-code' {
@@ -39,6 +47,8 @@ declare module 'claude-code' {
       opened: boolean
       /** The person closed the Pane this session; /hierarchy-pane clears it. */
       closed: boolean
+      /** A dismiss is in progress (a dialog is open or a command is running); further presses do nothing. */
+      dismissing: boolean
     }
   }
 }

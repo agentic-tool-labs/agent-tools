@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
-import { bandLine, BORDER_MIN, scope, toastMs, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
+import { anywayQuestion, bandButtons, bandLine, BORDER_MIN, closeToast, DISMISS_BUTTON, dismissQuestion, failReason, inFlight, ownedTeams, readPlan, teamLabels, scope, toastMs, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
 const ms = (iso: string) => Date.parse(iso)
@@ -671,4 +671,128 @@ test('keepSeen on a scoped document drops the keys of another orchestrator\'s te
   const doc = parseDoc(ownedDoc(OWNERS))
   const seen = ['stalled:dx', `blocked:their-a:${at(-1000)}`, `blocked:mine-a:${at(-1000)}`]
   expect(keepSeen(seen, scope(doc, 'sess-orch')!, ms(T0))).toEqual([`blocked:mine-a:${at(-1000)}`])
+})
+
+// ---- Dismiss: the owned mark, the per-team summary, the button layout and the dialogs' text.
+const wdoc = (edit: (d: any) => void = () => {}) => { const d = JSON.parse(fixtures.work); edit(d); return JSON.stringify(d) }
+const DNOWMS = ms(vectors.work.now)
+const dview = (text: string, id = 'sess-orch') => viewModel(parseDoc(text), DNOWMS, id)
+
+test('the view is marked owned for a document with owners that lists the viewer, and not for a legacy document', async () => {
+  expect(dview(wdoc())!.owned).toBe(true)
+  expect(dview(wdoc((d) => { delete d.owners }))!.owned).toBe(false)
+  expect(dview(wdoc(), 'someone-else')).toBe(null)
+  expect(dview(wdoc((d) => { d.member_sessions = ['sess-orch'] }))).toBe(null)
+})
+
+test('a team carries whether it is the default team, from its key and not its shown name', async () => {
+  const named = dview(wdoc((d) => { d.teams[0].team = 'default'; d.owners[0].teams = ['default'] }))!.teams[0]
+  const dflt = dview(wdoc())!.teams[0]
+  expect([dflt.name, dflt.isDefault, named.name, named.isDefault]).toEqual(['default', true, 'default', false])
+})
+
+test('the summary: busy is a live working member, blocked a live blocked one, a gone member neither', async () => {
+  const sum = (activity: string, live: unknown = true) => dview(wdoc((d) => { d.teams[0].members[0].activity = activity; d.teams[0].members[0].live = live }))!.teams[0].summary
+  expect(sum('working')).toMatchObject({ members: 1, busy: ['demo-architect'], blocked: [] })
+  expect(sum('blocked')).toMatchObject({ busy: [], blocked: ['demo-architect'] })
+  expect(sum('idle')).toMatchObject({ busy: [], blocked: [] })
+  expect(sum('working', false)).toMatchObject({ busy: [], blocked: [] })
+})
+
+test('the summary: working, overdue, stalled and blocked dispatches are open; reported and expired are not', async () => {
+  const open = (state: string) => dview(wdoc((d) => { d.teams[0].dispatches[0].states = [{ at: '2026-01-01T11:59:00.000Z', state }] }))!.teams[0].summary.open
+  for (const state of ['working', 'overdue', 'stalled', 'blocked']) expect(open(state)).toEqual([{ member: 'demo-architect', state }])
+  for (const state of ['reported', 'expired']) expect(open(state)).toEqual([])
+})
+
+test('the summary reads only the viewer\'s own teams: a foreign team\'s members never appear', async () => {
+  const text = wdoc((d) => {
+    const other = JSON.parse(JSON.stringify(d.teams[0]))
+    other.team = 'theirs'
+    other.members[0].name = 'their-member'
+    d.teams.push(other)
+    d.owners.push({ sessions: ['someone-else'], teams: ['theirs'], timeline: d.owners[0].timeline })
+  })
+  const view = dview(text)!
+  expect(view.teams.map((t) => t.name)).toEqual(['default'])
+  expect(JSON.stringify(view)).not.toContain('their-member')
+})
+
+test('ownedTeams is empty unless the view is marked owned, and drops a team whose fields are of the wrong type', async () => {
+  const view: any = dview(wdoc())
+  expect(ownedTeams(view).map((t) => t.name)).toEqual(['default'])
+  for (const v of [null, undefined, {}, 'x', { ...view, owned: false }, { ...view, owned: 'true' }, { ...view, teams: 'x' }]) expect(ownedTeams(v)).toEqual([])
+  expect(ownedTeams({ owned: true, teams: [{ name: 3, isDefault: true, summary: view.teams[0].summary }, { name: 'a', isDefault: 'no', summary: view.teams[0].summary }, { name: 'a', isDefault: true }, null] })).toEqual([])
+  expect(ownedTeams({ owned: true, teams: [{ name: 'a', isDefault: false, summary: { members: 2, busy: [1], blocked: 'x', open: [{ member: 'm' }, { member: 'm', state: 's' }] } }] })[0].summary).toEqual({ members: 2, busy: [], blocked: [], open: [{ member: 'm', state: 's' }] })
+})
+
+test('the Dismiss button needs 52 columns, an owned view and a team; the band text gives up room for each button', async () => {
+  const view = dview(wdoc())!
+  expect(DISMISS_BUTTON.minColumns).toBe(PANE_BUTTON.minColumns + 12)
+  expect(bandButtons(view, 39)).toEqual({ pane: false, dismiss: false, textColumns: 39 })
+  expect(bandButtons(view, 40)).toEqual({ pane: true, dismiss: false, textColumns: 40 - PANE_BUTTON.width - PANE_BUTTON.gap })
+  expect(bandButtons(view, 51).dismiss).toBe(false)
+  expect(bandButtons(view, 52)).toEqual({ pane: true, dismiss: true, textColumns: 52 - PANE_BUTTON.width - PANE_BUTTON.gap - DISMISS_BUTTON.width - DISMISS_BUTTON.gap })
+  expect(bandButtons(dview(wdoc((d) => { delete d.owners }))!, 120).dismiss).toBe(false)
+  expect(bandButtons({ ...view, teams: [] }, 120).dismiss).toBe(false)
+  expect(bandButtons(null, 120)).toEqual({ pane: true, dismiss: false, textColumns: 120 - PANE_BUTTON.width - PANE_BUTTON.gap })
+})
+
+test('team labels: the default team is @default only when another team shows the same name', async () => {
+  expect(teamLabels([{ name: 'default', isDefault: true }])).toEqual(['default'])
+  expect(teamLabels([{ name: 'default', isDefault: true }, { name: 'beta', isDefault: false }])).toEqual(['default', 'beta'])
+  expect(teamLabels([{ name: 'default', isDefault: true }, { name: 'default', isDefault: false }])).toEqual(['@default', 'default'])
+})
+
+const SUM = { members: 2, busy: [] as string[], blocked: [] as string[], open: [] as { member: string; state: string }[] }
+const PLAN = { token: '0123456789abcdef', close: ['a', 'b'], warnings: [] as string[], strays: [] as string[], notClosable: [] as string[] }
+
+test('the confirm question: the idle wording, the in-flight wording, and the extra lines only when present', async () => {
+  expect(dismissQuestion('alpha', SUM, PLAN)).toBe('Dismiss team alpha? This closes 2 member sessions: a, b. No member is busy. No open dispatches. Worktrees, branches and messages are left as they are.')
+  const busy = { ...SUM, busy: ['a'], blocked: ['b'], open: [{ member: 'a', state: 'overdue' }, { member: 'b', state: 'stalled' }] }
+  const q = dismissQuestion('alpha', busy, { ...PLAN, close: ['a'], warnings: ['w1.'], strays: ['s1'], notClosable: ['p1'] })
+  expect(q).toBe('Dismiss team alpha? This closes 1 member session: a. BUSY now: a. Blocked: b. Open dispatches: 2 (a overdue, b stalled). Their in-flight work will be lost. w1. Strays: s1. Not closed (no pane): p1. Worktrees, branches and messages are left as they are.')
+  expect(dismissQuestion('alpha', { ...SUM, open: [{ member: 'a', state: 'working' }] }, PLAN)).toContain('Their in-flight work will be lost.')
+  expect(dismissQuestion('alpha', SUM, PLAN)).not.toContain('in-flight')
+})
+
+test('the second question names busy members and the dispatch count, leaving out a clause that is empty', async () => {
+  expect(anywayQuestion('alpha', { ...SUM, busy: ['a', 'b'], open: [{ member: 'a', state: 'working' }, { member: 'b', state: 'blocked' }] })).toBe('alpha has work in flight: a, b busy; 2 open dispatches. Close it anyway and lose that work?')
+  expect(anywayQuestion('alpha', { ...SUM, busy: ['a'] })).toBe('alpha has work in flight: a busy. Close it anyway and lose that work?')
+  expect(anywayQuestion('alpha', { ...SUM, open: [{ member: 'a', state: 'working' }] })).toBe('alpha has work in flight: 1 open dispatch. Close it anyway and lose that work?')
+})
+
+test('in flight means a busy member or an open dispatch, and blocked alone is not', async () => {
+  expect([inFlight(SUM), inFlight({ ...SUM, blocked: ['a'] }), inFlight({ ...SUM, busy: ['a'] }), inFlight({ ...SUM, open: [{ member: 'a', state: 'working' }] })]).toEqual([false, false, true, true])
+})
+
+test('readPlan: a plan from a team file reads; every other output is an error or nothing to do', async () => {
+  const ok = { close: [{ role: 'architect', name: 'n1' }, { role: 'reviewer', name: null }], close_token: '0123456789abcdef', team_files: ['/t'], warnings: ['w'], strays: ['s'], not_closable: [{ name: 'p' }] }
+  expect(readPlan(JSON.stringify(ok))).toEqual({ kind: 'plan', plan: { token: '0123456789abcdef', close: ['n1', 'reviewer'], warnings: ['w'], strays: ['s'], notClosable: ['p'] } })
+  expect(readPlan(JSON.stringify({ disbanded: false, reason: 'gone' }))).toEqual({ kind: 'nothing', reason: 'gone' })
+  for (const bad of [{ ...ok, source: 'peers' }, { ...ok, team_files: [] }, { ...ok, team_files: 'x' }, { ...ok, team_files: undefined }]) expect(readPlan(JSON.stringify(bad))).toEqual({ kind: 'failed', reason: 'no team file' })
+  for (const bad of ['', 'nope', '[]', '"x"', JSON.stringify({ ...ok, close_token: 'ABCDEF0123456789' }), JSON.stringify({ ...ok, close_token: '0123456789abcde' }), JSON.stringify({ ...ok, close_token: '0123456789abcdef0' }), JSON.stringify({ ...ok, close: 'x' }), JSON.stringify({ ...ok, close_token: undefined }), undefined, 5]) expect(readPlan(bad)).toEqual({ kind: 'failed', reason: 'plan failed' })
+})
+
+test('failReason: the first non-empty line without the roster prefix, control characters stripped, cut to 120', async () => {
+  expect(failReason('roster.mjs: bad thing\nsecond', 'x')).toBe('bad thing')
+  expect(failReason('\n\n  spaced  \n', 'x')).toBe('spaced')
+  expect(failReason('a\x1b[31mb\x07c', 'x')).toBe('a[31mbc')
+  expect(failReason('y'.repeat(300), 'x').length).toBe(120)
+  for (const none of ['', '  \n', undefined, null, 3]) expect(failReason(none, 'fallback')).toBe('fallback')
+})
+
+test('closeToast: dismissed only for exit 0 with closed true and nothing still live', async () => {
+  const j = (o: unknown) => JSON.stringify(o)
+  expect(closeToast('t', 0, j({ closed: true, still_live: [] }), '')).toBe('Dismissed t.')
+  expect(closeToast('t', 0, j({ closed: true }), '')).toBe('Dismissed t.')
+  expect(closeToast('t', 0, j({ closed: false, still_live: ['a', 'b'] }), '')).toBe('t: not all sessions closed (a, b).')
+  expect(closeToast('t', 0, j({ closed: false, kept: [{ name: 'k' }] }), '')).toBe('t: not all sessions closed (k).')
+  expect(closeToast('t', 0, j({ closed: false }), '')).toBe('t: not all sessions closed.')
+  expect(closeToast('t', 0, j({ closed: true, still_live: ['z'] }), '')).toBe('t: not all sessions closed (z).')
+  expect(closeToast('t', 2, '', 'roster.mjs: disband --close: --plan-token does not match the current close plan (x)')).toBe('t changed since the check; press Dismiss again.')
+  expect(closeToast('t', 2, '', 'roster.mjs: other')).toBe('Could not dismiss t: other')
+  expect(closeToast('t', 1, j({ closed: true }), '')).toBe('Could not dismiss t: close failed')
+  expect(closeToast('t', 0, 'not json', '')).toBe('Could not dismiss t: close failed')
+  expect(closeToast('t', 0, '[]', '')).toBe('Could not dismiss t: close failed')
 })

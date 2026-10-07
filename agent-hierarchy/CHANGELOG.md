@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.122.0]
+
+### Added
+
+- The band gets a `[ Dismiss ]` button right of `[ Pane ]`, shown when it lists a team the session's orchestrator owns and the terminal is at least 52 columns wide. It opens a confirm dialog naming the team, the member sessions that will close, the busy members and the open dispatches; when work is in flight a second `Dismiss anyway` dialog follows. On confirmation it runs the same `disband` plan and close the `agent-team` skill documents, and reports the outcome as a toast. A plan that came from live peers rather than a team file is refused. The mod's guard now pins a second exec site, the dismiss helper, whole.
+
 ## [0.121.0]
 
 ### Changed
