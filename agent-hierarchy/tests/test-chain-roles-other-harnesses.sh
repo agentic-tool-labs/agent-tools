@@ -914,6 +914,8 @@ rm -f "$HIER/activity/pane-myrepo-architect.json"
 r "" answer myrepo-architect --prompt approval --choice approve --screen-hash "$AH"
 check "AC9: answer records the member working" '[ "$(activity_of myrepo-architect a.activity)" = working ]'
 check "K15: a matching prompt and hash: exactly the row's keys, once — approve sends 1" '[ "$RC" -eq 0 ] && [ "$(jo o.status)" = answered ] && [ "$(keys_sent)" = "[\"1\"]" ] && [ "$(jo o.prompt_after)" = null ] && [ "$(jo o.live)" = true ]'
+check "K15: an answer that leaves the member unblocked ends its blocked episode (a clear row by answer)" 'grep -q "\"type\":\"blocked-clear\"" "$HIER/gates.jsonl" && grep -q "\"member\":\"myrepo-architect\"" "$HIER/gates.jsonl" && grep -q "\"by\":\"answer\"" "$HIER/gates.jsonl"'
+rm -f "$HIER/gates.jsonl"
 k15 approval
 r "" answer myrepo-architect --prompt approval --choice deny --screen-hash "$AH"
 check "K15: deny sends esc; the prompt still shown after is answered, reported, keys sent once" '[ "$(keys_sent)" = "[\"esc\"]" ] && [ "$(jo o.status)" = answered ] && [ "$(jo o.prompt_after)" = approval ]'

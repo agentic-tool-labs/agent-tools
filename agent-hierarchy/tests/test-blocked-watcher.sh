@@ -168,6 +168,19 @@ ans demo-arch --cancel --screen-hash "$(hash_of)"
 watch 3
 check "a cancel that left the dialog up (still blocked) writes no clear: the same episode does not wake again" '[ "$RC" -eq 143 ] && [ -z "$OUT" ]'
 
+# a watcher already running when the prompt is answered or cancelled still ends the episode when the clear lands
+reset; team "$$" claude herdr
+watch 8
+AH_WATCH_POLL_MS=150 HOME="$FAKEHOME" node "$H/dispatch-watcher.mjs" --session sess-w --cwd "$PROJ" > "$SB/run.out" 2>&1 &
+RUNNING=$!
+sleep 1.2
+check "a restarted watcher that finds the member still blocked holds the old episode: no wake yet" 'kill -0 "$RUNNING" 2>/dev/null && [ ! -s "$SB/run.out" ]'
+node --input-type=module -e "import { appendGate } from '$H/lib-hier.mjs'; appendGate(process.argv[1], { type: 'blocked-clear', team: null, member: 'demo-arch', by: 'answer' });" "$HD"
+for i in $(seq 1 60); do kill -0 "$RUNNING" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$RUNNING" 2>/dev/null; then kill "$RUNNING" 2>/dev/null; wait "$RUNNING" 2>/dev/null; RC=143; else wait "$RUNNING" 2>/dev/null; RC=$?; fi
+OUT=$(cat "$SB/run.out")
+check "...and an answer-written clear newer than the wake ends it while that watcher runs: a new wake" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "is BLOCKED at a prompt"'
+
 echo "---"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

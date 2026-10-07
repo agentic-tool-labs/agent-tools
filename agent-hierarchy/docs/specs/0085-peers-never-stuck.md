@@ -93,7 +93,7 @@ Then today's word rule (runtime word, `roster.mjs` within two non-dash words, a 
 
 **Fail safe:** when the scanner cannot classify the text, it treats the text as a match, as today. That covers an unterminated quote, an unterminated heredoc, or nesting deeper than 3 levels of `-c`/`eval`/`$( )`.
 
-**Known false negatives, accepted:** `xargs`, `env -S`, functions defined earlier in the same command, `$VAR` expansion. This gate is a confirmation step, not the security boundary. `disband --close` still requires a valid plan token, and in members the parsed path denies.
+**Known false negatives, accepted:** `xargs`, `env -S`, functions defined earlier in the same command, `$VAR` expansion, and the shell-starting forms `sudo -s` / `sudo -i` / `su -c` whose program arrives on standard input (documented, not scanned). This gate is a confirmation step, not the security boundary. `disband --close` still requires a valid plan token, and in members the parsed path denies.
 
 This scanner lives in the disband gate, or in `hooks/lib-ah-cli.mjs` next to `parseAhCommand` if the Implementor finds a second caller. There is no second caller today, so do not build a general shell parser.
 

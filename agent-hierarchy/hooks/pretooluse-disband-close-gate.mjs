@@ -93,6 +93,10 @@ function commandsOf(text, depth) {
   const pending = [];
   const hereStrings = [];
   let group = 0;
+  // Commands found inside a nested span ($( ), a backtick, -c, eval, a heredoc body) get ids of their own, so a
+  // pipeline's group id never moves on account of them.
+  let nested = 0;
+  const nestedId = () => --nested;
   let cur = { words: [], group };
   let buf = "";
   let raws = [];
@@ -141,13 +145,13 @@ function commandsOf(text, depth) {
           raw += /[\\"$`]/.test(src[k]) ? src[k] : "\\" + src[k];
         } else if (src[k] === "$" && src[k + 1] === "(") {
           const e = closeParen(k + 2);
-          for (const inner of commandsOf(src.slice(k + 2, e), depth + 1)) cmds.push({ words: inner.words, group: ++group });
+          for (const inner of commandsOf(src.slice(k + 2, e), depth + 1)) cmds.push({ words: inner.words, group: nestedId() });
           raw += src.slice(k, e + 1);
           k = e;
         } else if (src[k] === "`") {
           const e = src.indexOf("`", k + 1);
           if (e < 0) throw new Unclassified("unterminated backtick");
-          for (const inner of commandsOf(src.slice(k + 1, e), depth + 1)) cmds.push({ words: inner.words, group: ++group });
+          for (const inner of commandsOf(src.slice(k + 1, e), depth + 1)) cmds.push({ words: inner.words, group: nestedId() });
           raw += src.slice(k, e + 1);
           k = e;
         } else raw += src[k];
@@ -176,7 +180,7 @@ function commandsOf(text, depth) {
         if (!closed) throw new Unclassified("unterminated heredoc");
         i = at - 1;
         const reads = readsStdinAsCode(cmds.filter((x) => x.group === h.group));
-        if (reads) for (const inner of commandsOf(lines.join("\n"), depth)) cmds.push({ words: inner.words, group: ++group });
+        if (reads) for (const inner of commandsOf(lines.join("\n"), depth)) cmds.push({ words: inner.words, group: nestedId() });
       }
     } else if (c === "<" || c === ">") {
       if (c === "<" && src[i + 1] === "<" && src[i + 2] === "<") {
@@ -197,7 +201,7 @@ function commandsOf(text, depth) {
           while (i < src.length && !/[\s;&|()<>]/.test(src[i])) raw += src[i++];
           i--;
         }
-        hereStrings.push({ raw, group });
+        hereStrings.push({ raw, group: cur.group });
       } else if (c === "<" && src[i + 1] === "<") {
         endWord();
         i += 2;
@@ -215,7 +219,7 @@ function commandsOf(text, depth) {
           i--;
         }
         if (!delim) throw new Unclassified("heredoc without a word");
-        pending.push({ delim, strip, group });
+        pending.push({ delim, strip, group: cur.group });
       } else endWord();
     } else if (c === ";" || c === "(" || c === ")" || c === "`") {
       endCmd(true);
@@ -223,8 +227,8 @@ function commandsOf(text, depth) {
       // A brace group's `{` and `}` stand alone; inside a word (`${VAR}`, `a{b,c}`) they are part of it.
       endCmd(true);
     } else if (c === "&") {
-      // `2>&1`, `>&2` and `&>` are redirections, not the end of a command.
-      if (src[i - 1] === ">" || src[i - 1] === "<" || src[i + 1] === ">") continue;
+      // `2>&1`, `>&2` and `&>` are redirections and `|&` is a pipe, not the end of a command.
+      if (src[i - 1] === ">" || src[i - 1] === "<" || src[i - 1] === "|" || src[i + 1] === ">") continue;
       if (src[i + 1] === "&") i++;
       endCmd(true);
     } else if (c === "|") {
@@ -237,7 +241,7 @@ function commandsOf(text, depth) {
   endCmd(true);
   if (pending.length) throw new Unclassified("heredoc without a body");
   for (const hs of hereStrings) {
-    if (readsStdinAsCode(cmds.filter((x) => x.group === hs.group))) for (const inner of commandsOf(hs.raw, depth + 1)) cmds.push({ words: inner.words, group: ++group });
+    if (readsStdinAsCode(cmds.filter((x) => x.group === hs.group))) for (const inner of commandsOf(hs.raw, depth + 1)) cmds.push({ words: inner.words, group: nestedId() });
   }
   // The argument of `sh -c` and the arguments of `eval` are code, so their quoted text is scanned.
   for (const cmd of [...cmds]) {
@@ -249,7 +253,7 @@ function commandsOf(text, depth) {
     if (SHELL_WORDS.has(head)) {
       for (let k = at + 1; k + 1 < w.length; k++) if (/^-[A-Za-z]*c[A-Za-z]*$/.test(w[k].text)) code.push(...w[k + 1].raws);
     } else if (head === "eval") for (const word of w.slice(at + 1)) code.push(...word.raws);
-    for (const raw of code) for (const inner of commandsOf(raw, depth + 1)) cmds.push({ words: inner.words, group: ++group });
+    for (const raw of code) for (const inner of commandsOf(raw, depth + 1)) cmds.push({ words: inner.words, group: nestedId() });
   }
   return cmds;
 }

@@ -177,6 +177,10 @@ matches "FOO=1 nohup sh <<EOF${NL}$CLOSE${NL}EOF" "assignments and nohup before 
 matches "cat <<EOF 2>&1 | bash${NL}$CLOSE${NL}EOF" "a heredoc piped through 2>&1 into bash"
 matches "bash <<< \"$CLOSE\"" "a here-string into bash"
 matches "timeout 5 node $ROSTER disband --close 2>&1 | tee /tmp/x" "a close with a redirection and a pipe after it"
+matches "ROOT=\"\$(pwd)\" bash <<EOF${NL}$CLOSE${NL}EOF" "an assignment with a command substitution before a shell reading a heredoc"
+matches "timeout \"\$(echo 30)\" bash <<EOF${NL}$CLOSE${NL}EOF" "a wrapper with a command substitution before a shell reading a heredoc"
+matches "timeout \"\$(echo 30)\" bash <<< \"$CLOSE\"" "a wrapper with a command substitution before a shell reading a here-string"
+matches "cat <<EOF |& bash${NL}$CLOSE${NL}EOF" "a heredoc piped with |& into bash"
 silent "cat <<< \"$CLOSE\"" "a here-string into cat"
 silent "{ echo \"$CLOSE\"; } > /tmp/x" "a brace group that only echoes the close"
 

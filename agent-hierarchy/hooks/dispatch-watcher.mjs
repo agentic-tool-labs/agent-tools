@@ -164,6 +164,13 @@ function blockedEvents(now) {
         st.since = null;
         continue;
       }
+      // A watcher that was already running when the Orchestrator answered or cancelled the prompt still holds the old
+      // episode: the clear that command wrote, newer than the wake, ends it.
+      if (st.woke && !wokeBefore(gates, teamName, m.name)) {
+        st.woke = false;
+        st.polls = 0;
+        st.since = null;
+      }
       st.polls++;
       st.since = st.since ?? (Date.parse(m.activity_at) || now);
       if (st.polls < 2 || st.woke) continue;

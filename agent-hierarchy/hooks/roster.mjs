@@ -7005,6 +7005,8 @@ try {
       // is gone (distrust quits Codex) is reported not live.
       recordActivity(dir, `pane-${member.name}`, { activity: "working" });
       const after = herdrAgentState(member.name);
+      // An answered prompt ends the member's blocked episode, as a cancel does: its next block is a new one.
+      if (after.agent_status !== "blocked") appendGate(dir, { type: "blocked-clear", team: teamFile, member: member.name, by: "answer" });
       const read = readPrompt(member, after.agent_status);
       out({ status: "answered", ...base, agent_status: after.agent_status, live: after.indeterminate ? null : after.live, prompt_after: read.recognized, screen: read.screen });
       break;
