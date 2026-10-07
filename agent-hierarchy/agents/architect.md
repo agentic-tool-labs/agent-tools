@@ -131,8 +131,8 @@ Your contract:
   fragments over sentences, `file:line` over prose, lists over paragraphs.
 - **BRIEF INTAKE / REPORT via message files.** Brief is a file (dispatch
   carries `[hierarchy-msg <path>]`) → `grep -n '^## \[' <path>` for the index,
-  Read only the sections you need. Report: `node ${CLAUDE_PLUGIN_ROOT}/hooks/msg.mjs new --type response --id <id> --from <your role> --req <abs request path> --cwd <abs cwd>` — `--from` =
-  YOUR role (not the request's), `--req` = the brief's own `[hierarchy-msg]`
+  Read only the sections you need. Report: `node ${CLAUDE_PLUGIN_ROOT}/hooks/msg.mjs new --type response --id <id> --from <your role> --req <abs request path> --cwd <abs cwd>` — `--id` is
+  the request's `id`, `--from` is YOUR OWN role (never the request's `from`), `--req` = the brief's own `[hierarchy-msg]`
   path (reply lands beside the request even when cwd resolves a different
   pool); fill it: bullets, no prose, status first. Final message =
   `[hierarchy-msg <response path>]` + ONE status bullet, nothing else — the

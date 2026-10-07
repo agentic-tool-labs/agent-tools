@@ -176,7 +176,7 @@ done
 GEN=$(node --input-type=module -e "import { responseCommand } from '$PLUGIN/hooks/lib-config.mjs'; process.stdout.write(responseCommand({ id: 'x', role: 'architect', req: process.argv[1] }))" "$MSGS/x--request.md")
 ARCH "$GEN"; check "R4: the renderer's output for a real role and request is allowed by the gate" 'silent'
 for A in architect implementor reviewer task-runner ultra-advisor; do
-  check "R5: agents/$A.md: response line has --from <your role> and --req, and does not take from from the frontmatter" 'L=$(grep "new --type response" "$PLUGIN/agents/$A.md"); case "$L" in *"--from <your role>"*"--req"*) true;; *) false;; esac; ! tr "\n" " " < "$PLUGIN/agents/$A.md" | grep -q "from the request frontmatter"'
+  check "R5: agents/$A.md: response line has --from <your role> and --req, and does not take from from the frontmatter" 'L=$(grep "new --type response" "$PLUGIN/agents/$A.md"); case "$L" in *"--from <your role>"*"--req"*) true;; *) false;; esac; tr "\n" " " < "$PLUGIN/agents/$A.md" | tr -s " " | grep -q "\`--id\` is the request.s \`id\`" && ! tr "\n" " " < "$PLUGIN/agents/$A.md" | grep -q "from the request frontmatter"'
 done
 
 echo "passed=$PASS failed=$FAIL"; [ "$FAIL" = 0 ]

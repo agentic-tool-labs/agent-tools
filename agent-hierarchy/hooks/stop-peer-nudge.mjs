@@ -115,10 +115,10 @@ try {
   const sessionId = typeof input.session_id === "string" ? input.session_id : "";
   if (!sessionId) allow();
 
-  const role = resolveHierarchyRole(input).role;
   const owed = pendingFor(sessionId);
   if (owed.length === 0) allow();
   if (hasInflightSubagent(sessionId)) allow();
+  const role = resolveHierarchyRole(input).role;
 
   const marker = latestTurnMarker(sessionId);
   const armed = !!marker && marker.status === "armed";
