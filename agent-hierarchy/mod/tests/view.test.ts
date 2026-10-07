@@ -147,8 +147,33 @@ test('band, working: out count, m:ss of T, oldest first, further items only whil
   expect(band(two, { out: 2 }, T0, 20)).toEqual({ text: '2 out · architect 1…', tone: 'work' })
 })
 
-test('band: none while the entry has nothing out and nothing blocked', async () => {
-  expect(band([team()], { out: 0, blocked: 0 })).toBe(null)
+const idleEntry = { out: 0, blocked: 0, text: '1 live · 0 out', tone: 'idle' }
+test('band, idle: with nothing out and nothing blocked the band is the entry text in its tone', async () => {
+  expect(band([team()], idleEntry)).toEqual({ text: '1 live · 0 out', tone: 'idle' })
+  expect(band([team()], { ...idleEntry, text: '2 live · 0 out' })).toEqual({ text: '2 live · 0 out', tone: 'idle' })
+  expect(band([team()], { ...idleEntry, text: '0 live · 0 out' })).toEqual({ text: '0 live · 0 out', tone: 'idle' })
+  expect(band([team()], { ...idleEntry, text: '1 live\x1b · 0 out' })).toEqual({ text: '1 live · 0 out', tone: 'idle' })
+  expect(band([team()], idleEntry, T0, 8)).toEqual({ text: '1 live …', tone: 'idle' })
+})
+
+test('band, idle: no band for an empty entry text, and an unknown tone reads idle', async () => {
+  expect(band([team()], { ...idleEntry, text: '' })).toBe(null)
+  expect(band([team()], { ...idleEntry, text: '\x1b' })).toBe(null)
+  expect(band([team()], { ...idleEntry, tone: 'purple' })?.tone).toBe('idle')
+  expect(band([team()], { ...idleEntry, tone: 'warn' })?.tone).toBe('warn')
+})
+
+test('band, idle: counts out but nothing to name, the entry text and tone verbatim', async () => {
+  const reported = team({ dispatches: [dispatch({ states: [{ at: at(-60000), state: 'reported' }] })] })
+  expect(band([reported], { out: 1 })).toEqual({ text: '1 live · 1 out', tone: 'work' })
+})
+
+test('band: a member session, an invisible entry and an expired document draw none', async () => {
+  const doc = (over: Record<string, unknown>, entry: Record<string, unknown> = {}) => parseDoc(docText(over, { out: 0, ...entry }))
+  expect(bandLine(viewModel(doc({ member_sessions: ['sess-orch'] }), ms(T0), 'sess-orch'), 120)).toBe(null)
+  expect(bandLine(viewModel(doc({}, { visible: false }), ms(T0), 'sess-orch'), 120)).toBe(null)
+  expect(bandLine(viewModel(doc({}), ms('2026-01-02T12:00:00.000Z'), 'sess-orch'), 120)).toBe(null)
+  expect(bandLine(viewModel(doc({}), ms(T0), 'sess-orch'), 120)).not.toBe(null)
 })
 
 test('band, stalled: the check-in phrase, and who is gone', async () => {
@@ -340,13 +365,13 @@ test('keepSeen: keys whose dispatch or member is still in the doc stay, everythi
   expect(keepSeen(seen, doc!, ms(T0))).toEqual(['reported:d1', 'stalled:d1', `blocked:demo-architect:${at(-1000)}`])
 })
 
-test('a visible entry that lists no team draws one dim line saying so, and no band', async () => {
+test('a visible entry that lists no team draws one dim line saying so, and the band shows the entry text', async () => {
   const noTeamKey = JSON.stringify({ ...JSON.parse(docText()), teams: undefined })
   for (const text of [docText(), docText({ teams: [1, 'x'] }), noTeamKey]) {
     const view = viewModel(parseDoc(text), ms(T0), 'sess-orch')
     expect(view).not.toBe(null)
     expect(paneRows(view, 80)).toEqual([{ text: 'No live team in the status file.', tone: 'idle' }])
-    expect(bandLine(view, 80)).toBe(null)
+    expect(bandLine(view, 80)).toEqual({ text: '1 live · 1 out', tone: 'work' })
   }
 })
 

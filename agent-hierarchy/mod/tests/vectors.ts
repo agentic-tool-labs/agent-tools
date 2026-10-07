@@ -36,7 +36,7 @@ export const vectors: Readonly<Record<string, Vector>> = {
   hidden: { now: '2026-01-01T12:05:00.000Z', sessionId: 'sess-orch', columns: 120, statusText: undefined, ...NO_VIEW },
   idle: {
     now: '2026-01-01T12:00:00.000Z', sessionId: 'sess-orch', columns: 120, statusText: '2 live · 0 out',
-    band: null,
+    band: { text: '2 live · 0 out', tone: 'idle' },
     pane: [
       { text: 'Hierarchy', tone: 'idle' },
       { text: 'No pipeline run.', tone: 'idle' },

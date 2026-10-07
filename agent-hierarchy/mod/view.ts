@@ -231,6 +231,12 @@ export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): Vi
     else if (working.length) band = { tone: 'work', head: `${count(entry.out)} out · ${working[0]}`, tail: working.slice(1) }
   }
 
+  if (band === null) {
+    const head = str(entry.text)
+    const tone = (['bad', 'warn', 'work', 'idle'] as const).find((t) => t === entry.tone) ?? 'idle'
+    if (head !== '') band = { tone, head, tail: [] }
+  }
+
   const multi = teams.length > 1
   const heading = (name: string, t: Team): PaneRow => ({ row: 'text', tone: 'idle', text: multi ? `${name} ${t.name}` : name })
   const pipelineRows = (t: Team, none = 'No pipeline run.'): PaneRow[] => {

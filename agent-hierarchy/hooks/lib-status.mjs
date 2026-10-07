@@ -207,7 +207,7 @@ function describeMembers(dir, team, roster) {
       activity,
       activity_at: rec ? clean(rec.at) : null,
       blocked_by: activity === "blocked" ? clean(rec.blocked_by, NAME_CAP) : null,
-      focusable: m.transport === "herdr" && typeof m.transport_id === "string" && m.transport_id !== "" && validateHerdrName(m.name).ok,
+      focusable: (m.transport ?? team.transport) === "herdr" && typeof m.transport_id === "string" && m.transport_id !== "" && validateHerdrName(m.name).ok,
       stream: typeof m.stream === "string" ? clean(m.stream, NAME_CAP) || null : null,
       last_tool: clean(rec?.tool, NAME_CAP) || null,
       last_tool_at: rec && typeof rec.tool_at === "string" ? clean(rec.tool_at) : null,
