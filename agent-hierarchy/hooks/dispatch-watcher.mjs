@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 import { hierarchyDir, logHookError, resolveKind, ROSTER_CLI } from "./lib-config.mjs";
 import { appendGate, listExchanges, readGates, readMsgFile, readRoster, responseLanded } from "./lib-hier.mjs";
 import { excerptOf, herdrAgentList, promptNoteLine, readPromptCore } from "./lib-blocked.mjs";
-import { delaySec, MAX_RESUMES, oneLine, RESUME_PARAGRAPH, RETRYABLE, SAME_FAILURE_MS, STREAK_WINDOW_MS, transcriptFailure } from "./lib-recovery.mjs";
+import { delaySec, MAX_RESUMES, oneLine, RESUME_PARAGRAPH, RETRYABLE, streakFor, transcriptFailure } from "./lib-recovery.mjs";
 import { ownedTeams, readTeam } from "./lib-roster.mjs";
 import { describeMembers, readActivityRecord, recordActivity } from "./lib-status.mjs";
 import {
@@ -212,13 +212,6 @@ const transcriptSeen = new Map();
 const clock = (iso) => new Date(iso).toTimeString().slice(0, 8);
 const QUIET_FOR_MS = 45000;
 
-/** The streak a failure detected now starts or continues, by the same rule the StopFailure hook applies. */
-function nextStreak(rec, nowMs) {
-  if (rec && rec.activity === "failed" && nowMs - Date.parse(rec.failed_at) < STREAK_WINDOW_MS) return (Number.isInteger(rec.streak) && rec.streak > 0 ? rec.streak : 1) + 1;
-  if (rec && rec.activity === "working" && Number.isInteger(rec.streak) && rec.streak > 0) return rec.streak + 1;
-  return 1;
-}
-
 /**
  * The RESUME and API-FAILED events due now. The subjects are this session and every live Claude member
  * of a team it owns. A session the StopFailure hook missed is found here from its transcript: its
@@ -228,6 +221,7 @@ function recoveryEvents(now) {
   const events = [];
   const dir = hierarchyDir(cwd);
   const gates = readGates(dir);
+  const peerRows = readPeerRecords();
   const done = (type, subject, failedAt) => gates.some((g) => g.type === type && g.session_id === sessionId && g.subject === subject && g.failed_at === failedAt);
   // A wake ends the watcher, so each wake tells the Orchestrator to start it again.
   const restart = `Restart the watcher if anything is still open: ${watcherCall(sessionId, cwd)}.`;
@@ -247,14 +241,15 @@ function recoveryEvents(now) {
     if (rec && (rec.activity === "working" || rec.activity === "idle") && typeof rec.transcript_path === "string" && now - Date.parse(rec.at) >= QUIET_FOR_MS) {
       const found = transcriptFailure(rec.transcript_path, transcriptSeen);
       if (found) {
-        recordActivity(dir, sub.id, { activity: "failed", extra: { error: found.error, error_details: null, error_code: null, source: "transcript", failed_at: found.failed_at, streak: nextStreak(rec, now) } });
+        recordActivity(dir, sub.id, { activity: "failed", extra: { error: found.error, error_details: null, error_code: null, source: "transcript", failed_at: found.failed_at, streak: streakFor(peerRows, sub.id, Date.parse(found.failed_at)) } });
         rec = readActivityRecord(dir, sub.id);
       }
     }
     if (!rec || rec.activity !== "failed" || typeof rec.failed_at !== "string" || !Number.isFinite(Date.parse(rec.failed_at))) continue;
     const failedAt = rec.failed_at;
     const error = typeof rec.error === "string" && rec.error ? rec.error : "unknown";
-    const streak = Number.isInteger(rec.streak) && rec.streak > 0 ? rec.streak : 1;
+    // The cap and the delay use the count of resumes already emitted, whatever the record says.
+    const streak = streakFor(peerRows, sub.id, Date.parse(failedAt));
     const detail = oneLine(rec.error_details, 300);
     if (!RETRYABLE.has(error) || streak > MAX_RESUMES) {
       if (done("api-failed", sub.id, failedAt)) continue;
@@ -274,14 +269,14 @@ function recoveryEvents(now) {
     appendGate(dir, { type: "resume", session_id: sessionId, subject: sub.id, failed_at: failedAt, n: streak });
     const head = `${sub.own ? "this session's" : "Your"} last turn ended on an API error (${error}) at ${clock(failedAt)}; automatic resume ${streak}/${MAX_RESUMES}.`;
     if (sub.own) {
-      events.push({ request_id: null, kind: "RESUME", text: `ah watcher: ${head}\n${RESUME_PARAGRAPH}\n${restart}`, extra: { subject: sub.id, error, streak } });
+      events.push({ request_id: null, kind: "RESUME", text: `ah watcher: ${head}\n${RESUME_PARAGRAPH}\n${restart}`, extra: { subject: sub.id, error, streak, failed_at: failedAt } });
     } else {
       appendPeerRecord({ type: "heard", session_id: sessionId, from: sub.name, ts: new Date().toISOString() });
       events.push({
         request_id: null,
         kind: "RESUME",
         text: `ah watcher: ${sub.role} "${sub.name}" ended a turn on an API error (${error}) at ${clock(failedAt)}; automatic resume ${streak}/${MAX_RESUMES}. SendMessage ${sub.name} exactly the text between the lines below, and nothing else: no re-brief, no ETA reset.\n---\n${head}\n${RESUME_PARAGRAPH}\n---\n${restart}`,
-        extra: { subject: sub.id, member: sub.name, role: sub.role, error, streak },
+        extra: { subject: sub.id, member: sub.name, role: sub.role, error, streak, failed_at: failedAt },
       });
     }
   }

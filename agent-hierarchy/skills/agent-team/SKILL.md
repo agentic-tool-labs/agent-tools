@@ -1118,6 +1118,14 @@ default, and writes only the team file.
 Report the `name` it printed (renamed or not) back to the user in one line — they did not choose it,
 and they need it for a later `dismiss`.
 
+## Watcher wakes
+
+The dispatch watcher wakes the Orchestrator by exiting; each wake ends with the call to start it again. Besides a landed report, a check-in due and a peer gone silent, it reports:
+
+- **BLOCKED**: a member sits at a prompt nobody watches. Run the cancel command it gives (`roster.mjs answer <name> --cancel --screen-hash <h>`), tell the user in one line, and never answer Yes or any granting option for a member on your own.
+- **RESUME**: a session's last turn ended on an API error and the backoff has passed. For a member, `SendMessage` it the text given, verbatim, and nothing else: no re-brief, no ETA reset. For your own session, follow the text.
+- **API-FAILED**: a member's turn ended on an API error that will not clear (authentication, billing, an invalid request) or the retries are spent. Tell the user in one line and do not resume it; resume it only when the user says so. Your own session's failure raises a desktop notification instead of a wake.
+
 ## When a role can't take the work
 
 A chain role never runs as a subagent: the route gate denies it. When a role's

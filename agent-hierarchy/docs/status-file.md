@@ -128,8 +128,9 @@ liveness check-ins use.
 - **`activity`:** from the member's record in `<hier>/activity/`. It is `unknown` when there is no
   record. `failed` means its last turn ended on an API error: the record then also holds `error` (the kind the
   harness named, or `unknown`), `error_details` (one line, at most 300 characters), `failed_at`, `source`
-  (`stopfailure`, or `transcript` when the dispatch watcher found it from the transcript) and `streak` (the
-  consecutive failures, cleared by a normal end of turn). `failed` is not shown as `blocked`; a reader that
+  (`stopfailure`, or `transcript` when the dispatch watcher found it from the transcript) and `streak` (one plus
+  the automatic resumes already sent to that session in the previous 45 minutes; a normal end of turn clears the
+  displayed value, not the count behind the next failure's streak). `failed` is not shown as `blocked`; a reader that
   does not know it sees an unfamiliar activity. A member with `live: false` is shown as gone.
 - **`last_tool`:** written by the member's PostToolUse hook, at most every 15 s while its activity is unchanged. It is the last
   *finished* tool that won a write, so it can lag by up to 15 s plus one tool, and a long-running tool leaves the previous one

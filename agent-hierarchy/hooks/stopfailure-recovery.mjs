@@ -16,8 +16,8 @@
 import { basename } from "node:path";
 
 import { hierarchyDir, isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
-import { watcherAlive } from "./lib-peer.mjs";
-import { errorKind, MAX_RESUMES, oneLine, RETRYABLE, SAME_FAILURE_MS, STREAK_WINDOW_MS, transcriptPathOk } from "./lib-recovery.mjs";
+import { readPeerRecords, watcherAlive } from "./lib-peer.mjs";
+import { errorKind, MAX_RESUMES, oneLine, RETRYABLE, SAME_FAILURE_MS, streakFor, transcriptPathOk } from "./lib-recovery.mjs";
 import { ownedTeams } from "./lib-roster.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 import { readActivityRecord, recordActivity } from "./lib-status.mjs";
@@ -36,15 +36,12 @@ try {
     const current = readActivityRecord(dir, sessionId);
     const failedMs = current && current.activity === "failed" ? Date.parse(current.failed_at) : NaN;
     let failedAt = new Date(nowMs).toISOString();
-    let streak = 1;
+    // The streak is the resumes already emitted for this session, not a counter an end of turn could reset.
+    let streak = streakFor(readPeerRecords(), sessionId, nowMs);
     if (current && current.activity === "failed" && current.source === "transcript" && Math.abs(nowMs - failedMs) <= SAME_FAILURE_MS) {
       // The transcript detector saw this same end first: one failure, seen twice.
-      streak = Number.isInteger(current.streak) && current.streak > 0 ? current.streak : 1;
+      streak = Number.isInteger(current.streak) && current.streak > 0 ? current.streak : streak;
       failedAt = current.failed_at;
-    } else if (current && current.activity === "failed" && nowMs - failedMs < STREAK_WINDOW_MS) {
-      streak = (Number.isInteger(current.streak) && current.streak > 0 ? current.streak : 1) + 1;
-    } else if (current && current.activity === "working" && Number.isInteger(current.streak) && current.streak > 0) {
-      streak = current.streak + 1;
     }
     const transcript = transcriptPathOk(input.transcript_path);
     recordActivity(dir, sessionId, {

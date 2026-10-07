@@ -57,22 +57,32 @@ check "the docs spelling error_type / error_message is recorded like error / err
 reset; sf s5 '"error":"overloaded","error_details":"line one\nline two \u001b[31mred\u001b[0m '"$(printf 'x%.0s' $(seq 1 400))"'"'
 check "error_details is one line, escape sequences stripped, capped at 300" '[ "$(rec s5 error_details | wc -c | tr -d " ")" -le 300 ] && ! rec s5 error_details | grep -q "$(printf "\033")" && rec s5 error_details | grep -q "line one line two red"'
 
-# ---- the streak
-reset; sf s6 '"error":"overloaded"'; sf s6 '"error":"server_error"'
-check "a second consecutive failure is streak 2" '[ "$(rec s6 streak)" = 2 ]'
-sf s6 '"error":"server_error"'; sf s6 '"error":"server_error"'
-check "the fourth consecutive failure is streak 4" '[ "$(rec s6 streak)" = 4 ]'
+# ---- the streak: one plus the resumes already emitted for the session in the 45 minutes before the failure
+PEERS="$HOME/.claude/agent-hierarchy.peer-pending.jsonl"
+# resumes <session> <count> <minutes ago the first was emitted>: RESUME watch-event rows, as the watcher writes them
+resumes() { node -e 'const [file, sid, n, ago] = process.argv.slice(1); const fs = require("fs"); const rows = []; for (let i = 0; i < Number(n); i++) { const t = new Date(Date.now() - (Number(ago) - i) * 60000).toISOString(); rows.push(JSON.stringify({ type: "watch-event", session_id: "w", request_id: null, kind: "RESUME", subject: sid, failed_at: t, ts: t })); } fs.mkdirSync(require("path").dirname(file), { recursive: true }); fs.appendFileSync(file, rows.join("\n") + "\n")' "$PEERS" "$1" "$2" "$3"; }
+preset() { rm -f "$PEERS"; reset; }
+preset; sf s6 '"error":"overloaded"'
+check "no resume emitted yet: streak 1" '[ "$(rec s6 streak)" = 1 ]'
+preset; resumes s6 1 10; sf s6 '"error":"server_error"'
+check "one resume emitted in the last 45 minutes: streak 2" '[ "$(rec s6 streak)" = 2 ]'
+preset; resumes s6 3 20; sf s6 '"error":"server_error"'
+check "three resumes: the fourth failure is streak 4" '[ "$(rec s6 streak)" = 4 ]'
+preset; resumes other 3 20; sf s6 '"error":"server_error"'
+check "another session's resumes do not count" '[ "$(rec s6 streak)" = 1 ]'
+preset; resumes s6 3 70; sf s6 '"error":"server_error"'
+check "failure outside the 45-minute window of the resumes (they are 68-70 minutes old): streak 1" '[ "$(rec s6 streak)" = 1 ]'
+preset; resumes s6 1 10; tail -1 "$PEERS" >> "$PEERS"; sf s6 '"error":"server_error"'
+check "two rows for the same (session, failed_at) count once" '[ "$(rec s6 streak)" = 2 ]'
 
-reset; sf s7 '"error":"overloaded"'
+preset; resumes s7 1 10; sf s7 '"error":"overloaded"'
 setrec s7 working
-check "a resume turn (working) carries the streak" '[ "$(rec s7 activity)" = working ] && [ "$(rec s7 streak)" = 1 ]'
-sf s7 '"error":"server_error"'
-check "a resume that fails again counts as attempt 2" '[ "$(rec s7 streak)" = 2 ]'
+check "a resume turn (working) carries the displayed streak" '[ "$(rec s7 activity)" = working ] && [ "$(rec s7 streak)" = 2 ]'
 setrec s7 working
 setrec s7 idle "" reset
-check "a normal end (Stop) clears the streak" '[ "$(rec s7 activity)" = idle ] && [ "$(rec s7 streak)" = "(absent)" ]'
+check "a normal end (Stop) clears the displayed streak" '[ "$(rec s7 activity)" = idle ] && [ "$(rec s7 streak)" = "(absent)" ]'
 sf s7 '"error":"overloaded"'
-check "the next failure after a normal end starts at 1" '[ "$(rec s7 streak)" = 1 ]'
+check "...but the next failure still counts the resumes already emitted: streak 2" '[ "$(rec s7 streak)" = 2 ]'
 
 # a role session's own hooks: Stop clears, UserPromptSubmit and PostToolUse carry, the transcript path is kept
 reset
@@ -96,16 +106,38 @@ setrec s9 failed "{\"error\":\"unknown\",\"source\":\"transcript\",\"failed_at\"
 sf s9 '"error":"server_error"'
 check "a StopFailure within 10 s of a transcript-detected failure: same failure, streak kept" '[ "$(rec s9 streak)" = 2 ] && [ "$(rec s9 failed_at)" = "$TS_AT" ]'
 check "...with the error and source updated" '[ "$(rec s9 error)" = server_error ] && [ "$(rec s9 source)" = stopfailure ]'
-reset
+preset
 OLD_AT=$(node -e 'process.stdout.write(new Date(Date.now() - 20000).toISOString())')
 setrec s9 failed "{\"error\":\"unknown\",\"source\":\"transcript\",\"failed_at\":\"$OLD_AT\",\"streak\":2}"
+resumes s9 2 10
 sf s9 '"error":"server_error"'
-check "20 s later it is a new failure: streak 3" '[ "$(rec s9 streak)" = 3 ]'
-reset
+check "20 s later it is a new failure: its streak is one plus the resumes emitted (3)" '[ "$(rec s9 streak)" = 3 ]'
+preset
 STALE_AT=$(node -e 'process.stdout.write(new Date(Date.now() - 3600000).toISOString())')
 setrec s9 failed "{\"error\":\"overloaded\",\"source\":\"stopfailure\",\"failed_at\":\"$STALE_AT\",\"streak\":3}"
 sf s9 '"error":"overloaded"'
-check "a failure an hour after the last one starts a new streak" '[ "$(rec s9 streak)" = 1 ]'
+check "a failure an hour after the last one, with no resumes in the window, starts a new streak" '[ "$(rec s9 streak)" = 1 ]'
+
+# ---- a plain session (no persisted role) is followed once it has a record (r3 B1)
+preset
+sf s10 '"error":"overloaded"'
+act UserPromptSubmit s10
+check "role-less StopFailure, then UserPromptSubmit: the record is working again" '[ "$(rec s10 activity)" = working ]'
+act Stop s10
+check "role-less Stop after a failure: idle, the displayed streak cleared" '[ "$(rec s10 activity)" = idle ] && [ "$(rec s10 streak)" = "(absent)" ]'
+preset
+act UserPromptSubmit s11
+act Stop s11
+act PostToolUse s11 '"tool_name":"Read"'
+check "a role-less session with no activity record stays unrecorded" '[ "$(rec s11 activity)" = "(none)" ]'
+preset
+sf s12 '"error":"overloaded"'
+printf '{}\n' > "$HOME/.claude/projects/p/s12.jsonl"
+act UserPromptSubmit s12 "\"transcript_path\":\"$HOME/.claude/projects/p/s12.jsonl\""
+check "role-less: the transcript path is kept from the prompt event" '[ "$(rec s12 transcript_path)" = "$HOME/.claude/projects/p/s12.jsonl" ]'
+sf subx '"error":"overloaded"'
+OUT=$(printf '{"hook_event_name":"UserPromptSubmit","session_id":"subx","agent_id":"a1","agent_type":"x","cwd":"%s"}' "$PROJ" | node "$H/activity.mjs" 2>&1)
+check "a subagent's event does not move its parent's failed record" '[ "$(rec subx activity)" = failed ]'
 
 # ---- not recorded
 reset
@@ -128,9 +160,9 @@ check "the notification text is ASCII, at most 120 characters, with no semicolon
 reset; own "$$"; watcher so1 "$OTHER"
 sf so1 '"error":"overloaded"'
 check "an Orchestrator's retryable first failure with a watcher alive: no output" '[ -z "$OUT" ]'
-reset; own "$$"; watcher so1 "$OTHER"
-sf so1 '"error":"overloaded"'; sf so1 '"error":"overloaded"'; sf so1 '"error":"overloaded"'; sf so1 '"error":"overloaded"'
-check "the fourth failure: a notification saying it stopped after 3 retries" 'printf "%s" "$OUT" | grep -q "after 3 retries"'
+reset; own "$$"; watcher so1 "$OTHER"; resumes so1 3 20
+sf so1 '"error":"overloaded"'
+check "the fourth failure (three resumes already emitted): a notification saying it stopped after 3 retries" 'printf "%s" "$OUT" | grep -q "after 3 retries"'
 reset; own "$$"
 sf so2 '"error":"overloaded"'
 check "an Orchestrator with no watcher alive: a notification on the first failure" 'printf "%s" "$OUT" | grep -q "terminalSequence"'

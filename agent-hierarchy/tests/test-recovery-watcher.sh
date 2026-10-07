@@ -29,7 +29,11 @@ ago() { node -e 'process.stdout.write(new Date(Date.now() - Number(process.argv[
 # put <session> <activity> <seconds ago the state began> [extra json]: an activity record with a chosen time
 put() { node -e 'const [dir, sid, activity, ago, extra] = process.argv.slice(1); const at = new Date(Date.now() - Number(ago) * 1000).toISOString(); require("fs").writeFileSync(require("path").join(dir, "activity", sid + ".json"), JSON.stringify({ activity, at, blocked_by: null, note: null, tool: null, tool_at: null, ...(extra ? JSON.parse(extra) : {}) }) + "\n")' "$HD" "$1" "$2" "$3" "${4:-}"; }
 # failed <session> <error> <streak> <seconds since the failure> [source]
-failed() { put "$1" failed "$4" "{\"error\":\"$2\",\"error_details\":\"details\",\"source\":\"${5:-stopfailure}\",\"failed_at\":\"$(ago "$4")\",\"streak\":$3}"; }
+PEERS="$HOME/.claude/agent-hierarchy.peer-pending.jsonl"
+# earlier <session> <count> <seconds before now the failure happened>: <count> RESUME rows emitted before that failure (5+ minutes earlier each)
+earlier() { node -e 'const [file, sid, n, ago, base] = process.argv.slice(1); const fs = require("fs"); const rows = []; for (let i = 0; i < Number(n); i++) { const t = new Date(Date.now() - Number(ago) * 1000 - (Number(base || 5) + i) * 60000).toISOString(); rows.push(JSON.stringify({ type: "watch-event", session_id: "old", request_id: null, kind: "RESUME", subject: sid, failed_at: t, ts: t })); } if (rows.length) { fs.mkdirSync(require("path").dirname(file), { recursive: true }); fs.appendFileSync(file, rows.join("\n") + "\n"); }' "$PEERS" "$1" "$2" "$3" "${4:-5}"; }
+# the streak is one plus the RESUMEs already emitted, so <streak> is made of <streak - 1> earlier rows; the record carries it for display
+failed() { put "$1" failed "$4" "{\"error\":\"$2\",\"error_details\":\"details\",\"source\":\"${5:-stopfailure}\",\"failed_at\":\"$(ago "$4")\",\"streak\":$3}"; earlier "$1" $(($3 - 1)) "$4"; }
 rec() { node -e 'const f = require("path").join(process.argv[1], "activity", process.argv[2] + ".json"); let r = null; try { r = JSON.parse(require("fs").readFileSync(f, "utf8")); } catch {} const v = r === null ? "(none)" : (r[process.argv[3]] === undefined ? "(absent)" : r[process.argv[3]]); process.stdout.write(String(v))' "$HD" "$1" "$2"; }
 reset() { rm -f "$HD/activity"/*.json "$HD/gates.jsonl" "$HD/team.json" "$HD/peers.jsonl" "$PR"/*.jsonl; rm -rf "$HOME/.claude/hierarchy"; mkdir -p "$HOME/.claude/hierarchy"; find "$HOME/.claude" -maxdepth 1 -type f -delete; }
 rows() { grep -rh "\"kind\":\"$1\"" "$HOME/.claude" 2>/dev/null | wc -l | tr -d ' '; }
@@ -176,6 +180,40 @@ reset
 put sess-w working 100 '{"transcript_path":"projects/relative.jsonl"}'
 watch 2
 check "a relative transcript path: skipped" 'quiet'
+
+# ---- r3: a plain session is followed, and the cap holds when Stop (not StopFailure) ends each failed turn
+reset; failed sess-w overloaded 1 40
+printf '{"hook_event_name":"UserPromptSubmit","session_id":"sess-w","cwd":"%s"}' "$PROJ" | node "$H/activity.mjs" >/dev/null 2>&1
+watch 3
+check "role-less: a prompt typed after the failure moves the record to working, and no RESUME follows" '[ "$(rec sess-w activity)" = working ] && quiet'
+
+entry_side() { printf '%s\n' '{"type":"assistant","isSidechain":true,"uuid":"sc1","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"side chain work"}]},"sessionId":"sess-w"}'; }
+reset; { entry_ok; entry_err 40; entry_sys; entry_side; } > "$T"
+put sess-w working 100 "{\"transcript_path\":\"$T\"}"
+watch 6
+check "system and side-chain rows after the error entry are skipped: the failure is detected" '[ "$RC" -eq 3 ] && [ "$(rec sess-w source)" = transcript ]'
+
+shift_resumes() { node -e 'const fs = require("fs"); const f = process.argv[1]; const out = fs.readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => { const r = JSON.parse(l); if (r.kind === "RESUME") { r.ts = new Date(Date.parse(r.ts) - 600000).toISOString(); if (r.failed_at) r.failed_at = new Date(Date.parse(r.failed_at) - 600000).toISOString(); } return JSON.stringify(r); }); fs.writeFileSync(f, out.join("\n") + "\n")' "$PEERS"; }
+reset
+STAMPS=""
+for n in 1 2 3; do
+  case $n in 1) AGE=40;; 2) AGE=130;; 3) AGE=490;; esac
+  { entry_ok; entry_err "$AGE"; entry_sys; } > "$T"
+  put sess-w idle 600 "{\"transcript_path\":\"$T\"}"
+  watch 6
+  check "Stop-ended turn, API-error entry, failure $n: RESUME $n/3" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "automatic resume $n/3"'
+  shift_resumes
+done
+{ entry_ok; entry_err 40; entry_sys; } > "$T"
+put sess-w idle 600 "{\"transcript_path\":\"$T\"}"
+watch 4
+check "the fourth failure: no RESUME and no wake for the own session" 'quiet'
+check "...exactly three RESUMEs were emitted in all, and the fourth failure is an API-FAILED row" '[ "$(rows RESUME)" -eq 3 ] && [ "$(rows API-FAILED)" -ge 1 ]'
+
+reset; failed sess-w overloaded 1 40
+earlier sess-w 3 40 50
+watch 6
+check "resumes older than the 45-minute window do not count: a failure with three of them behind it is streak 1" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "automatic resume 1/3"'
 
 # unchanged transcripts are not read again
 reset; { entry_ok; entry_err 40; entry_sys; } > "$T"

@@ -27,8 +27,27 @@ export const delaySec = (error, streak) => {
 
 /** Two failures this close are one failure seen twice: by the hook and by the transcript. */
 export const SAME_FAILURE_MS = 10000;
-/** A `failed` record older than this does not start the next streak: nothing typed since may have cleared it. */
-export const STREAK_WINDOW_MS = 30 * 60 * 1000;
+/**
+ * A failure's streak counts the RESUMEs emitted for the same session in this long before it: longer than the longest
+ * full backoff (rate_limit: 2 + 8 + 20 minutes) plus the turns between. A session that recovers and fails again inside
+ * the window starts at a higher streak, with a longer delay and fewer retries.
+ */
+export const STREAK_WINDOW_MS = 45 * 60 * 1000;
+
+/**
+ * The streak of a failure of `subject` at `failedAtMs`: 1 plus the distinct RESUME emissions for it in the window
+ * before. Counted from the watcher's `watch-event` rows, so no end-of-turn hook can reset it.
+ */
+export function streakFor(rows, subject, failedAtMs) {
+  const seen = new Set();
+  for (const r of rows) {
+    if (!r || r.type !== "watch-event" || r.kind !== "RESUME" || r.subject !== subject) continue;
+    const at = Date.parse(r.ts);
+    if (!Number.isFinite(at) || at >= failedAtMs || at < failedAtMs - STREAK_WINDOW_MS) continue;
+    seen.add(typeof r.failed_at === "string" ? r.failed_at : r.ts);
+  }
+  return 1 + seen.size;
+}
 
 export const RESUME_PARAGRAPH =
   "Continue the interrupted task. First re-check state: re-read any file you were changing, and for anything with side effects (push, merge, send, close, delete) confirm whether it already happened before doing it again. If you were mid-report, finish and send the report.";
