@@ -30,14 +30,16 @@ import {
   readHookInput,
   resolveConfig,
   resolveHierarchyRole,
+  responseCommand,
   ROSTER_CLI,
   SELF_CARE_BUILTIN_ROLES,
+  SELF_CARE_TOKEN_RE,
   SHELL_SELF_CARE,
 } from "./lib-config.mjs";
 import { readRoster } from "./lib-hier.mjs";
 import { teamHomeDir } from "./lib-roster.mjs";
 
-const TOKEN_RE = /^[A-Za-z0-9._/:@+,-]+$/;
+const TOKEN_RE = SELF_CARE_TOKEN_RE;
 const MAX_COMMAND = 1024;
 
 /** verb → allowed flags, per CLI. */
@@ -65,11 +67,11 @@ function deny(reason) {
   process.exit(0);
 }
 
-function denyReason(extra) {
+function denyReason(extra, role) {
   return (
     `ah: your role has a shell for self-care only, so this command did not run${extra ? ` (${extra})` : ""}. Allowed: ` +
     `\`node ${ROSTER_CLI} checkin|whoami|status [--cwd <cwd>]\`, ` +
-    `\`node ${MSG_CLI} new --type response --id <id> --req <your request path> [--cwd <cwd>]\`, ` +
+    `\`${responseCommand({ role })} [--cwd <cwd>]\`, ` +
     `\`node ${MSG_CLI} list|index|downstream|roster [--cwd <cwd>]\`; ` +
     "one plain command, no quotes, pipes or `=`, and every flag followed by its value. Anything else: delegate or report it."
   );
@@ -158,9 +160,9 @@ if (!role) process.exit(0);
 
 try {
   const why = refusal(input, role);
-  if (why !== null) deny(denyReason(why));
+  if (why !== null) deny(denyReason(why, role));
 } catch (err) {
   logHookError("pretooluse-self-care-gate.mjs", err);
-  deny(denyReason("internal error"));
+  deny(denyReason("internal error", role));
 }
 process.exit(0);

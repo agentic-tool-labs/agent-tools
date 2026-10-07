@@ -5,6 +5,22 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.119.2]
+
+### Fixed
+
+- A shell-less role can now answer its brief by copying the response command it is told to use: the
+  gate's refusal text, the hook hints, the peer prompt and the agent files all show one form,
+  `msg.mjs new --type response --id <id> --from <your role> --req <request path>`, with the CLI path
+  unquoted.
+- `whoami`'s last observed brief is no longer replaced by subagent, seen, surfaced or other
+  bookkeeping rows; only real briefs count.
+
+### Added
+
+- `checkin` prints the `pid` it registered, and `whoami` prints `registered_pid`: the pid on this
+  session's latest registered row, or null.
+
 ## [0.119.1]
 
 ### Fixed

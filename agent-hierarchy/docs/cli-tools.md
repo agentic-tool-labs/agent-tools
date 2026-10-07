@@ -116,6 +116,7 @@ read the fresh root line, or resolve it with the recipe above.
 | verb | command |
 |---|---|
 | new message file | `node <R>/hooks/msg.mjs new --to <role> --from <role> --slug <s> [--to-name <n>] [--from-name <n>] [--parent <id>] [--reason context\|second-opinion\|parallel] [--eta small\|medium\|large] [--type request\|response] [--id <id>] [--team <t>] [--req <abs request path>]` |
+| answer a brief (response file) | `node <R>/hooks/msg.mjs new --type response --id <id> --from <your role> --req <abs request path> --cwd <abs cwd>` — `--from` is your own role, not the request's `from`; `--to` is derived from the request |
 | list exchanges | `node <R>/hooks/msg.mjs list [--open\|--closed\|--all] [--to <role>] [--team <t>] [--plain]` |
 | downstream dispatches | `node <R>/hooks/msg.mjs downstream [--root-name <n>]` |
 | index one message file | `node <R>/hooks/msg.mjs index <abs path>` |

@@ -121,7 +121,7 @@ seed_qualifying "s5"
 hook "s5" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
 check "5: architect, pending msg record, report-sized, no token -> deny" 'denied'
 check "R3: inline-reply deny is quiet" 'quiet_deny "$AH_R3_CALM" "must reply with a response FILE"'
-check "5: deny reason carries --id and --to" "echo \"\$OUT\" | grep -q -- \"--id $ARCH_ID --to orchestrator\""
+check "5: deny reason carries --id and --from" "echo \"\$OUT\" | grep -q -- \"--id $ARCH_ID --from\""
 
 hook "s5" "architect" "ct-orchestrator" "$REPORT_NOTOKEN retry"
 check "6: second attempt -> allow" 'allowed'

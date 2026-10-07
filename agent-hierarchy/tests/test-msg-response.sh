@@ -85,7 +85,7 @@ nudge a1 ah:implementor "Done, I changed three files." "$T1"
 check "no pointer -> block" 'blocked'
 check "N2: the block has no systemMessage" 'no_system_message'
 check "block reason: names msg.mjs new --type response --id <id>" 'echo "$OUT" | grep -q "msg.mjs.* new --type response --id $ID"'
-check "block reason: says --to orchestrator --from implementor" 'echo "$OUT" | grep -q -- "--to orchestrator --from implementor"'
+check "block reason: says --from implementor and carries no --to" 'echo "$OUT" | grep -q -- "--from implementor --req"'
 check "block reason: return exactly [hierarchy-msg <response path>] + status" 'echo "$OUT" | grep -q "\[hierarchy-msg <response path>\]"'
 check "nudge recorded in gates.jsonl" 'grep -q "\"type\":\"nudge\".*\"agent_id\":\"a1\"" "$HD/gates.jsonl"'
 nudge a1 ah:implementor "Done, I changed three files." "$T1"

@@ -47,6 +47,19 @@ export const MSG_CLI = join(dirname(fileURLToPath(import.meta.url)), "msg.mjs");
 /** Absolute path to the roster CLI, same resolution as GATE_CLI/MSG_CLI. */
 export const ROSTER_CLI = join(dirname(fileURLToPath(import.meta.url)), "roster.mjs");
 
+/** The characters a self-care Bash command may use in any one token; the self-care gate refuses anything else. */
+export const SELF_CARE_TOKEN_RE = /^[A-Za-z0-9._/:@+,-]+$/;
+
+/**
+ * The one command line a role runs to write its response file. `--from` is the role's own name (the
+ * self-care gate checks it); `--to` is left out because msg.mjs derives it from the request. MSG_CLI is
+ * unquoted when it fits the self-care token class, double-quoted otherwise.
+ */
+export function responseCommand({ id = "<id>", role = "<your role>", req = "<your request path>", cwd = "" } = {}) {
+  const cli = SELF_CARE_TOKEN_RE.test(MSG_CLI) ? MSG_CLI : `"${MSG_CLI}"`;
+  return `node ${cli} new --type response --id ${id} --from ${role} --req ${req}${cwd ? ` --cwd ${cwd}` : ""}`;
+}
+
 let lastHookInput = null;
 
 /** Where hook failures are recorded. Global, not per-repo: resolving a repo can itself be what threw. */
@@ -3086,7 +3099,7 @@ export function buildRoleSessionNotice(role, agentType, resolved = null) {
     "The agent-hierarchy Orchestrator protocol does NOT apply to you: do not decompose-and-dispatch, and do not treat yourself as the top of the chain.",
     governs,
     "If a message tasks you as a peer (it opens with `[hierarchy-peer-brief reply-to=...]`), the work is not finished until you have sent your report back via SendMessage to that reply-to address — completing the task and going idle without replying strands the session that tasked you.",
-    `You are a peer ${label}. Briefs arrive as [hierarchy-msg <path>]; read via grep '^## \\[' then Read; reply with a response file (node "${MSG_CLI}" new --type response --id <id> --req <that request path>) and [hierarchy-msg <path>] first line.`,
+    `You are a peer ${label}. Briefs arrive as [hierarchy-msg <path>]; read via grep '^## \\[' then Read; reply with a response file (${responseCommand({ role, req: "<that request path>" })}) and [hierarchy-msg <path>] first line.`,
     "Notes: send the briefing Orchestrator `note <request id>: <one line>` (the id from the brief's frontmatter, no message token or path) only for news needing no answer, then keep working: a surprise that changes the plan or scope, or, for an `eta: large` brief, once at about the midpoint (done, left). Blocked or a decision needed is a report (BLOCKED or NEEDS-DECISION), never a note then wait. A note is not the report; otherwise send nothing until the report.",
     "The request's frontmatter `team_file` is your Team's file by absolute path — trust it over anything derived from your cwd; `team_guide` beside it says how to use it.",
     "Role sessions do not dispatch ah roles (Ultra-Advisor, Architect, Reviewer, Implementor): route any such need back to your Orchestrator in your report as NEEDS-<ROLE> (e.g. NEEDS-IMPLEMENTOR), or NEEDS-EVIDENCE for a run or a measurement; legwork (`task-gopher:*`, `ah:task-runner`) is allowed.",
