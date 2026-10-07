@@ -7,7 +7,7 @@ Status: r1 · Target: ah **0.121.0** (minor: visible behaviour change, plus an a
 
 ## 1. Goal
 
-When several orchestrators share one hierarchy pool (for example, two worktrees of one repo that fall back to the main checkout's pool), each orchestrator's mod shows **only the teams its own Claude process owns**. That covers:
+When several orchestrators share one hierarchy pool (for example, orchestrators whose team commands all write into the main checkout's pool), each orchestrator's mod shows **only the teams its own Claude process owns**. That covers:
 
 - the Pane (sections, rows and clickable member names);
 - the AbovePrompt band and its counts;
@@ -82,7 +82,7 @@ There is no new `$` call. Old readers keep working because the existing top-leve
 **One implementation**
 
 - Exactly one append-row function. Both writers call it, and both use the existing locked or atomic append helper the other `.jsonl` files use.
-- Prune `session-pids.jsonl` by the existing `sweep` / `SWEEP_DAYS` machinery in lib-hier.mjs, the same way the other append-only pool logs are pruned. Do not add a new pruning mechanism.
+- `session-pids.jsonl` is not pruned. No pool log is pruned today; pruning is deferred to a later log-pruning change.
 
 **Refresh**
 
