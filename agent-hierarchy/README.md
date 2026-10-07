@@ -251,8 +251,9 @@ the status entry. A member session sees none of them (more on that
 
 ### The band
 
-Whenever the hierarchy status entry is visible for this session (a team is live,
-work is out, or a pipeline runs), one line sits just above the prompt and names
+Whenever the hierarchy has something to show for this session (a team is live,
+work is out, or a pipeline runs), whether or not the `status_entry` option shows it
+in the status bar, one line sits just above the prompt and names
 the thing most worth your attention. It ends with a `[ Pane ]`
 button: click it, or press ctrl+x then tab and Enter, to open the hierarchy Pane,
 the same as `/hierarchy-pane`. The button is only there while the band is, and

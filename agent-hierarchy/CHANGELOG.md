@@ -11,6 +11,10 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
 
 - The band above the prompt, and its `[ Pane ]` button, now show whenever a team is live (or work is out, or a pipeline runs), not only while a dispatch is out or a member is blocked; when nothing is working, stalled, overdue or blocked it shows the live/out counts (`1 live · 0 out`).
 
+### Fixed
+
+- Member names in the Pane can be clicked to focus their pane: a member with no transport of its own now takes the team's.
+
 ## [0.119.2]
 
 ### Fixed

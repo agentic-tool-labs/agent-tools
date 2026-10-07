@@ -65,6 +65,22 @@ for n in demo-tmux demo-term demo-noid demo-emptyid Demo-Upper "$LONG33" demo-no
   check "F11: $n is not focusable" '[ "$(foc "$n")" = false ]'
 done
 
+# F11: the transport a real team file records is the team's, not each member's
+teamT() { # <team transport JSON, or "" for none> <members JSON>
+  node -e 'const [p, t, members, pid] = process.argv.slice(1); const o = { team_id: "t-demo", created: new Date().toISOString(), orchestrator: { session_id: null, pid: Number(pid) }, members: JSON.parse(members) }; if (t) o.transport = JSON.parse(t); require("fs").writeFileSync(p, JSON.stringify(o) + "\n")' "$HD/team.json" "$1" "$2" "$$"
+  (cd "$SANDBOX" && HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$H/roster.mjs" status --cwd "$PROJ" >/dev/null 2>&1)
+}
+MIDS="$(mem demo-a ',"transport_id":"w1:p1"'),$(mem demo-b ',"transport":"tmux","transport_id":"%3"')"
+teamT '"herdr"' "[$MIDS]"
+check "F11: a member with no transport of its own takes the team's herdr and is focusable" '[ "$(foc demo-a)" = true ]'
+check "F11: a member's own transport wins over the team's" '[ "$(foc demo-b)" = false ]'
+teamT '"tmux"' "[$MIDS]"
+check "F11: a team transport that is not herdr leaves a member with none unfocusable" '[ "$(foc demo-a)" = false ]'
+teamT '"terminal"' "[$(mem demo-a ',"transport_id":"w1:p1"'),$(mem demo-c ',"transport":"herdr","transport_id":"w1:p2"')]"
+check "F11: a member's own herdr is focusable under a non-herdr team" '[ "$(foc demo-c)" = true ] && [ "$(foc demo-a)" = false ]'
+teamT '' "[$(mem demo-a ',"transport_id":"w1:p1"')]"
+check "F11: no transport on the team or the member is unfocusable" '[ "$(foc demo-a)" = false ]'
+
 echo "----"
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
