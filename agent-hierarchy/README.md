@@ -251,8 +251,9 @@ the status entry. A member session sees none of them (more on that
 
 ### The band
 
-While a dispatch is out or a member is blocked, one line sits just above the
-prompt and names the thing most worth your attention. It ends with a `[ Pane ]`
+Whenever the hierarchy status entry is visible for this session (a team is live,
+work is out, or a pipeline runs), one line sits just above the prompt and names
+the thing most worth your attention. It ends with a `[ Pane ]`
 button: click it, or press ctrl+x then tab and Enter, to open the hierarchy Pane,
 the same as `/hierarchy-pane`. The button is only there while the band is, and
 not on a very narrow terminal.
@@ -271,6 +272,7 @@ remain, it ends with `· +2 more` (for example).
 | overdue | `architect is 1m 0s past its 5m eta`, plus `· check-in 1 sent` once one has gone out |
 | blocked | `… · answer it through the Orchestrator` for a pane-driven member; `… · answer it in its pane` for a Claude member |
 | working | `2 out · architect 2:30 of 10m · reviewer 0:45 of 5m`, adding each further dispatch while it fits |
+| idle (nothing working, stalled, overdue or blocked) | `1 live · 0 out`, the status entry's own text, in its tone |
 
 Stalled and overdue lines draw in the warning colour and bold, blocked in the
 warning colour, and work in the default colour. The words carry the severity

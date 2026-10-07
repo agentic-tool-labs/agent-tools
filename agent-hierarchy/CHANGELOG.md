@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.120.0]
+
+### Changed
+
+- The band above the prompt, and its `[ Pane ]` button, now show whenever a team is live (or work is out, or a pipeline runs), not only while a dispatch is out or a member is blocked; when nothing is working, stalled, overdue or blocked it shows the live/out counts (`1 live · 0 out`).
+
 ## [0.119.2]
 
 ### Fixed

@@ -283,8 +283,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(texts(narrow)[0].text).toBe('1 out · architect 1:00 of 5m')
   })
 
-  test(`${surface}: the band draws no button when there is no band`, async ($, on) => {
-    const w = world({ files: { [FILE]: { text: fixtures.idle, mtimeMs: 1 } } })
+  const hiddenCases = [
+    ['an invisible entry', 'sess-orch', (d: any) => { d.timeline[0].visible = false }],
+    ['a member session', 'sess-member', (d: any) => { d.member_sessions = [...d.member_sessions, 'sess-member'] }],
+  ] as const
+  for (const [label, id, edit] of hiddenCases) test(`${surface}: the band draws no button when there is no band (${label})`, async ($, on) => {
+    const doc = JSON.parse(fixtures.idle)
+    edit(doc)
+    const w = world({ id, files: { [FILE]: { text: JSON.stringify(doc), mtimeMs: 1 } } })
     stage(on, w)
     beneath(on)
     mock.clock(on, { now: NOW })
@@ -297,7 +303,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     timeline: [{ at: '2026-01-01T12:00:00.000Z', live: 3, blocked: 0, out: 0, overdue: 0, stalled: 0, text: '3 live · 0 out', short: '3/0', tone: 'idle', visible: true }],
   })
   for (const [label, teams] of [['teams: []', []], ['teams holding only non-records', [1, 'x']]] as const) {
-    test(`${surface}: a visible doc with ${label} draws one dim line saying so, and no band`, async ($, on) => {
+    test(`${surface}: a visible doc with ${label} draws one dim line saying so, and the band shows the entry text`, async ($, on) => {
       const w = world({ files: { [FILE]: { text: E_DOC(teams), mtimeMs: 1 } } })
       stage(on, w)
       beneath(on)
@@ -306,7 +312,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const pane = await (await $.ui.mount({ plugin: 'ah', surface, component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })).drawn()
       expect(texts(pane)).toEqual([{ text: 'No live team in the status file.', props: TONE.idle }])
       const band = await (await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })).drawn()
-      expect(texts(band)).toEqual([CORE_LINE])
+      expect(texts(band)).toEqual([{ text: '3 live · 0 out', props: TONE.idle }, CORE_LINE])
     })
   }
 

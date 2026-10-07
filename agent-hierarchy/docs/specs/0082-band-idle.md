@@ -79,6 +79,7 @@ The fallback rule ("when no band was chosen, use the entry text") is also satisf
 - `vectors.ts`: every vector whose `viewModel` is non-null and whose expected `band` is `null` now expects the idle form for that fixture's entry at its `columns`. Update those values; list in the report which vector names changed and why. A vector whose expected `band` changes for any other reason is a defect — stop and report.
 - Prove the new idle test can fail: it must fail against base `view.ts` (state that it did in the report).
 - Run the mod test suite and `tests/test-mod-readonly.sh`; both green.
+- **r3 (build): `mod/tests/register.test.ts` updates.** (a) "the band draws no button when there is no band" now pins no-band/no-button with an invisible-entry document and a member-session document (both surfaces); the idle band with its button stays covered by the vector loop. (b) The two "a visible doc with … draws one dim line saying so" tests expect `[{ text: '3 live · 0 out', tone idle }, CORE_LINE]` in place of `[CORE_LINE]`, retitled to say the band shows the entry text (both surfaces).
 
 ## 6. Version and docs
 
