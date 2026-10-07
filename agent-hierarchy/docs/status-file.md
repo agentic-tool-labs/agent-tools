@@ -55,10 +55,17 @@ Every reader follows the same four steps.
      fields.
 2. Take the `timeline` entry current at `now`: the last entry with `at ≤ now`, or the first entry
    when `now` is earlier than all of them.
-3. Show nothing if that entry has `visible: false`, or if the viewing session's id is in
-   `member_sessions`. A reader that shows a visible document which lists no team says so in a line of its own
+3. Show nothing if the viewing session's id is in `member_sessions`. Otherwise, when the
+   document has `owners`, take the first usable `owners` entry whose `sessions` lists the viewing
+   session's id and show only that entry: read its `timeline` instead of the top-level one, and
+   only the `teams[]` objects whose `team` its `teams` names. Show nothing when no entry lists the
+   session (this is a display filter, not access control: the file stays readable by every
+   session). An entry is usable when `sessions` is an array of strings, `teams` an array of
+   strings or `null`, and `timeline` passes step 1's check; skip the others. An `owners` that is
+   not an array counts as an array with no usable entry. A document without `owners` was written
+   by an older release: show the pool-wide view. Then show nothing if the entry has `visible: false`. A reader that shows a visible document which lists no team says so in a line of its own
    rather than drawing nothing, and a reader that has nothing to show may say why (no file, unreadable, expired,
-   the hierarchy off, not visible, a member session). Member sessions see nothing; every other session in the checkout sees the
+   the hierarchy off, not visible, a member session, no team owned by this session). Member sessions see nothing; every other session in the checkout sees the
    view: the Orchestrator's, plain sessions, and `--agent` sessions on no team. The document does
    not name an Orchestrator, and `member_sessions` is the only signal, so a reader adds no rule of
    its own (hiding on the session's agent name, say, would also hide an Orchestrator launched with
@@ -93,7 +100,11 @@ which today's readers treat as absent.
 | `teams[].dispatches[]` | `id`, `slug`, `to`, `to_name`, `member`, `label`, `eta`, `eta_ms`, `created`, `sent_at`, `checkins`, `reported_at`, `states[]` |
 | `teams[].dispatches_truncated` | how many dispatches were left off the list (it holds at most 50) |
 | `teams[].pipeline` | `null`, or `{anchor_id, started, round_cap, waiting_on_user, items[]}`; an item is `{slug, rounds, open, to}` |
-| `timeline[]` | `{at, visible, tone, live, out, blocked, overdue, stalled, text, short}`, sorted by `at`; the first `at` is `written_at` |
+| `timeline[]` | `{at, visible, tone, live, out, blocked, overdue, stalled, text, short}`, sorted by `at`; the first `at` is `written_at`. Pool-wide: it counts every live team |
+| `owners[]` | one entry per orchestrator process that owns at least one live team in the pool. Every `teams[]` object is in exactly one entry. The top-level keys are unchanged and stay pool-wide |
+| `owners[].sessions` | the session ids recorded for the owning process (`session-pids.jsonl`, written at every session start and by a team-writing command run from that process), plus the `orchestrator.session_id` of each of its team files when set; each id once, newest first, at most 32; `[]` when none is known, and then no session sees those teams |
+| `owners[].teams` | the `team` value of each of its `teams[]` objects (`null` for the default team) |
+| `owners[].timeline` | the same shape as `timeline[]`, counting only its own teams |
 
 Every string read from a file is cleaned before it is written. Escape sequences and C0/C1 control
 characters are removed. Names and labels are cut at 64 characters, slugs at 32 and notes at 80,
@@ -199,7 +210,7 @@ prints a document with `teams: []`, writes nothing and exits 0.
 
 ## Fixtures
 
-`tests/fixtures/status/` holds seven status documents. They are the shared test data for every
+`tests/fixtures/status/` holds eight status documents. They are the shared test data for every
 reader. Each reader keeps its own expected outputs next to its own tests.
 
 | Case | What it shows |
@@ -211,6 +222,9 @@ reader. Each reader keeps its own expected outputs next to its own tests.
 | `hidden` | the `work` pool with the hierarchy disabled; every entry `visible: false` |
 | `pipeline` | a named team with an open run: one item over two rounds, and a parked decision |
 | `member-session` | a live Claude member, so `member_sessions` is not empty; its reader must show nothing |
+| `foreign` | the `work` pool, owned by a process that no recorded session belongs to; the viewing session owns nothing, so its reader must show nothing |
+
+Every case but `foreign` lists the viewing session `sess-orch` as the owner of its teams.
 
 Each case is exactly what `roster.mjs status --now 2026-01-01T12:00:00.000Z` prints for a pool that
 `tests/test-status-fixtures.sh` stages. That test regenerates every case and fails unless each

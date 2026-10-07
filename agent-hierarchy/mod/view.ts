@@ -10,9 +10,13 @@ export type Doc = {
   enabled: boolean | null
   expiresMs: number
   memberSessions: readonly string[]
-  timeline: readonly { atMs: number; entry: Record<string, unknown> }[]
+  timeline: Timeline
   teams: readonly unknown[]
+  /** One entry per orchestrator process that owns teams in the pool; null when the document has no `owners` (written by an older producer). */
+  owners: readonly Owner[] | null
 }
+type Timeline = readonly { atMs: number; entry: Record<string, unknown> }[]
+type Owner = { sessions: readonly string[]; teams: readonly (string | null)[]; timeline: Timeline }
 
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})/
 const CONTROL = /[\x00-\x1f\x7f-\x9f]/g
@@ -53,7 +57,27 @@ export function parseDoc(text: string | null | undefined): Doc | null {
   if (!Number.isFinite(expiresMs)) return null
   const members = d.member_sessions
   if (!Array.isArray(members) || !members.every((s) => typeof s === 'string')) return null
-  const tl = d.timeline
+  const timeline = parseTimeline(d.timeline)
+  if (timeline === null) return null
+  let owners: Owner[] | null = null
+  if ('owners' in d) {
+    owners = []
+    if (Array.isArray(d.owners)) {
+      for (const o of d.owners) {
+        if (typeof o !== 'object' || o === null || Array.isArray(o)) continue
+        const { sessions, teams, timeline: tl } = o as Record<string, unknown>
+        const own = parseTimeline(tl)
+        if (!Array.isArray(sessions) || !sessions.every((x) => typeof x === 'string')) continue
+        if (!Array.isArray(teams) || !teams.every((x) => x === null || typeof x === 'string') || own === null) continue
+        owners.push({ sessions, teams, timeline: own })
+      }
+    }
+  }
+  return { enabled: typeof d.enabled === 'boolean' ? d.enabled : null, expiresMs, memberSessions: members as string[], timeline, teams: Array.isArray(d.teams) ? d.teams : [], owners }
+}
+
+/** A timeline array checked the way every timeline is: non-empty, every entry an object with an `at` instant. Null when it fails. */
+function parseTimeline(tl: unknown): Timeline | null {
   if (!Array.isArray(tl) || tl.length === 0) return null
   const timeline = []
   for (const entry of tl) {
@@ -62,7 +86,19 @@ export function parseDoc(text: string | null | undefined): Doc | null {
     if (!Number.isFinite(atMs)) return null
     timeline.push({ atMs, entry: entry as Record<string, unknown> })
   }
-  return { enabled: typeof d.enabled === 'boolean' ? d.enabled : null, expiresMs, memberSessions: members as string[], timeline, teams: Array.isArray(d.teams) ? d.teams : [] }
+  return timeline
+}
+
+/**
+ * The part of `doc` that `sessionId` may see: for a document with `owners`, the first usable owner entry that lists the
+ * session, with that entry's timeline and only the teams it names, in document order; null when no entry lists it.
+ * A document without `owners` is returned whole.
+ */
+export function scope(doc: Doc | null, sessionId: string): Doc | null {
+  if (doc === null || doc.owners === null) return doc
+  const own = doc.owners.find((o) => o.sessions.includes(sessionId))
+  if (own === undefined) return null
+  return { ...doc, timeline: own.timeline, teams: records(doc.teams).filter((t) => own.teams.includes(t.team as string | null)) }
 }
 
 /**
@@ -70,12 +106,14 @@ export function parseDoc(text: string | null | undefined): Doc | null {
  * shows: no document, expired, the entry malformed or not visible, or `sessionId` a member session.
  */
 function current(doc: Doc | null, nowMs: number, sessionId: string): Record<string, unknown> | null {
-  if (doc === null || nowMs >= doc.expiresMs) return null
-  let picked = doc.timeline[0]
-  for (const t of doc.timeline) if (t.atMs <= nowMs) picked = t
+  if (doc === null || nowMs >= doc.expiresMs || doc.memberSessions.includes(sessionId)) return null
+  const mine = scope(doc, sessionId)
+  if (mine === null) return null
+  let picked = mine.timeline[0]
+  for (const t of mine.timeline) if (t.atMs <= nowMs) picked = t
   const { visible, tone, text, short } = picked.entry
   if (typeof visible !== 'boolean' || typeof tone !== 'string' || typeof text !== 'string' || typeof short !== 'string') return null
-  if (!visible || doc.memberSessions.includes(sessionId)) return null
+  if (!visible) return null
   return picked.entry
 }
 
@@ -88,6 +126,7 @@ export function nullCause(doc: Doc | null, nowMs: number, sessionId: string): st
   if (nowMs >= doc.expiresMs) return 'expired'
   if (doc.memberSessions.includes(sessionId)) return 'member session'
   if (doc.enabled === false) return 'hierarchy off'
+  if (scope(doc, sessionId) === null) return 'no team owned by this session'
   return 'not visible'
 }
 
@@ -212,8 +251,9 @@ const dispatchTone = (state: string): Tone =>
  */
 export function viewModel(doc: Doc | null, nowMs: number, sessionId: string): View | null {
   const entry = current(doc, nowMs, sessionId)
-  if (entry === null || doc === null) return null
-  const teams = readTeams(doc, nowMs)
+  const mine = scope(doc, sessionId)
+  if (entry === null || mine === null) return null
+  const teams = readTeams(mine, nowMs)
   const dispatches = teams.flatMap((t) => t.dispatches)
   const members = teams.flatMap((t) => t.members)
 

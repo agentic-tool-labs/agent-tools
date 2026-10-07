@@ -259,6 +259,8 @@ button: click it, or press ctrl+x then tab and Enter, to open the hierarchy Pane
 the same as `/hierarchy-pane`. Pressing it while the Pane is open closes it
 (and it stays closed for the session), which `/hierarchy-pane` never does. The
 button is only there while the band is, and not on a very narrow terminal.
+The band, the Pane, the status bar entry and the toasts show only the teams this
+session's orchestrator owns, not other orchestrators' teams in a shared checkout.
 
 ```
 architect is waiting on a prompt · answer it through the Orchestrator

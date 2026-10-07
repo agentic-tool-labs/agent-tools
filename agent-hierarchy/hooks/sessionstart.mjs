@@ -42,6 +42,7 @@ import {
   buildNudge,
   buildRoleSessionNotice,
   cliRootLine,
+  hierarchyDir,
   hierarchyRoleOf,
   HOOK_ERROR_LOG,
   isSubagent,
@@ -57,7 +58,7 @@ import {
 import { appendGate, appendRosterRecord, buildStateBlock, cacheSessionModel, effectiveRoute, ensureHierarchyDir, realCwd, sessionModel, sweep, SWEEP_DAYS } from "./lib-hier.mjs";
 import { attributeSessionTeam, clearTeam, expectedRootFor, herdrOnPath, readTeam, sessionMemberRow, teamIsLive } from "./lib-roster.mjs";
 import { writeSessionRole } from "./lib-session-role.mjs";
-import { writeStatus } from "./lib-status.mjs";
+import { appendSessionPid, writeStatus } from "./lib-status.mjs";
 
 /** Feature A (spec 0010 §2.5): advisory only, never blocks. */
 function herdrWarning() {
@@ -213,6 +214,8 @@ try {
     }
     // Every session start refreshes the status file, role or not, enabled or not, so a reboot or a
     // crash heals at the next session in the repo. Writes nothing without the hierarchy dir; never throws.
+    // The session record goes first so the document published here already maps this session to its process.
+    appendSessionPid(hierarchyDir(cwd), input.session_id, process.ppid);
     writeStatus(cwd);
   }
 

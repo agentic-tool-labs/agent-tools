@@ -98,5 +98,53 @@
       "text": "1 live · 1 out · 1 stalled",
       "short": "1/1 1s"
     }
+  ],
+  "owners": [
+    {
+      "sessions": [
+        "sess-orch"
+      ],
+      "teams": [
+        null
+      ],
+      "timeline": [
+        {
+          "at": "2026-01-01T12:00:00.000Z",
+          "visible": true,
+          "tone": "work",
+          "live": 1,
+          "out": 1,
+          "blocked": 0,
+          "overdue": 0,
+          "stalled": 0,
+          "text": "1 live · 1 out",
+          "short": "1/1"
+        },
+        {
+          "at": "2026-01-01T12:04:00.000Z",
+          "visible": true,
+          "tone": "bad",
+          "live": 1,
+          "out": 1,
+          "blocked": 0,
+          "overdue": 1,
+          "stalled": 0,
+          "text": "1 live · 1 out · 1 overdue",
+          "short": "1/1 1o"
+        },
+        {
+          "at": "2026-01-01T12:06:30.000Z",
+          "visible": true,
+          "tone": "bad",
+          "live": 1,
+          "out": 1,
+          "blocked": 0,
+          "overdue": 0,
+          "stalled": 1,
+          "text": "1 live · 1 out · 1 stalled",
+          "short": "1/1 1s"
+        }
+      ]
+    }
   ]
 }

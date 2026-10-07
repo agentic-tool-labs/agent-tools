@@ -89,16 +89,22 @@ case_member_session() {
   stub 20260101-115800-m001
 }
 
+# A busy team live in the pool that the viewing session does not own.
+case_foreign() {
+  case_work
+}
+
 mkdir -p "$FIXTURES"
-for c in idle work warn bad hidden pipeline member-session; do
+for c in idle work warn bad hidden pipeline member-session foreign; do
   pool "$SANDBOX/$c"
   "case_${c//-/_}"
+  [ "$c" = foreign ] || session sess-orch
   status "$REF"
   if [ -n "${AH_UPDATE_FIXTURES:-}" ]; then printf '%s\n' "$OUT" > "$FIXTURES/$c.json"; fi
   check "fixture $c: roster.mjs status --now $REF reproduces it byte for byte" '[ "$RC" = 0 ] && [ -f "$FIXTURES/$c.json" ] && [ "$(cat "$FIXTURES/$c.json")" = "$OUT" ]'
   check "fixture $c: holds no sandbox path" '! grep -q "$SANDBOX" "$FIXTURES/$c.json"'
 done
-check "the fixture set is exactly the seven cases" '[ "$(ls "$FIXTURES" | tr "\n" " ")" = "bad.json hidden.json idle.json member-session.json pipeline.json warn.json work.json " ]'
+check "the fixture set is exactly the eight cases" '[ "$(ls "$FIXTURES" | tr "\n" " ")" = "bad.json foreign.json hidden.json idle.json member-session.json pipeline.json warn.json work.json " ]'
 if [ -n "${AH_UPDATE_FIXTURES:-}" ]; then mkdir -p "$PLUGIN/mod/tests" && node "$PLUGIN/tests/gen-mod-fixtures.mjs" "$FIXTURES" > "$PLUGIN/mod/tests/fixtures.ts"; fi
 
 # What each case is for: a fixture that drifted into showing something else fails here, not in a consumer.
@@ -110,6 +116,7 @@ check "bad: an overdue and a stalled dispatch" '[ "$(f bad "o.timeline[0].tone +
 check "hidden: disabled, every entry visible:false" '[ "$(f hidden "o.enabled + \" \" + o.timeline.every(e => !e.visible)")" = "false true" ]'
 check "pipeline: an open run with an item and a parked decision" '[ "$(f pipeline "o.teams[0].team + \" \" + o.teams[0].pipeline.items.length + \" \" + o.teams[0].pipeline.waiting_on_user")" = "demo 1 1" ]'
 check "member-session: member_sessions is not empty; no other case has one" '[ "$(f member-session "o.member_sessions.join()")" = sess-demo-reviewer ] && for c in idle work warn bad hidden pipeline; do [ "$(f $c "o.member_sessions.length")" = 0 ] || exit 1; done'
+check "owners: sess-orch owns the team in every case but foreign, where the entry lists no session" '[ "$(f idle "o.owners.length + \" \" + o.owners[0].sessions.join()")" = "1 sess-orch" ] && [ "$(f foreign "o.owners.length + \" \" + o.owners[0].sessions.length")" = "1 0" ]'
 
 echo "---"
 echo "$PASS passed, $FAIL failed"

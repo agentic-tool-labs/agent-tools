@@ -61,5 +61,29 @@
       "text": "2 live · 0 out",
       "short": "2/0"
     }
+  ],
+  "owners": [
+    {
+      "sessions": [
+        "sess-orch"
+      ],
+      "teams": [
+        null
+      ],
+      "timeline": [
+        {
+          "at": "2026-01-01T12:00:00.000Z",
+          "visible": true,
+          "tone": "idle",
+          "live": 2,
+          "out": 0,
+          "blocked": 0,
+          "overdue": 0,
+          "stalled": 0,
+          "text": "2 live · 0 out",
+          "short": "2/0"
+        }
+      ]
+    }
   ]
 }

@@ -18,7 +18,7 @@ import { basename, dirname, join } from "node:path";
 
 import { hierarchyDir, isPaneMember, resolveConfig, validateHerdrName } from "./lib-config.mjs";
 import { decisionLogPath, decisionSummary, openRunAnchor, readDecisions } from "./lib-decisions.mjs";
-import { attributedRoster, CHECKIN_CADENCE, etaOf, listExchanges, attributedLiveness, readGates, readMsgFile, SELF_STATE, thresholdFor, TOOL_WRITE_INTERVAL_SEC } from "./lib-hier.mjs";
+import { appendJsonl, attributedRoster, CHECKIN_CADENCE, etaOf, listExchanges, attributedLiveness, readGates, readJsonl, readMsgFile, SELF_STATE, thresholdFor, TOOL_WRITE_INTERVAL_SEC } from "./lib-hier.mjs";
 import { dispatchOrigin } from "./lib-peer.mjs";
 import { listTeamNames, readTeam, teamIsLive } from "./lib-roster.mjs";
 
@@ -369,14 +369,38 @@ function buildTimeline(nowMs, members, dispatches, enabled, anyPipeline) {
   return timeline;
 }
 
+/** The append-only log that maps a Claude process pid to the session ids it has run. */
+export const sessionPidsPath = (dir) => join(dir, "session-pids.jsonl");
+
+/**
+ * Record that `sessionId` runs in the Claude process `pid`. The one writer of `session-pids.jsonl`.
+ * Writes nothing when `dir` does not exist, never creates it, skips a row that repeats the latest one,
+ * and never throws.
+ */
+export function appendSessionPid(dir, sessionId, pid) {
+  try {
+    if (!dir || !existsSync(dir) || typeof sessionId !== "string" || !sessionId || !Number.isInteger(pid)) return;
+    const rows = readJsonl(sessionPidsPath(dir));
+    const last = rows[rows.length - 1];
+    if (last && last.session_id === sessionId && last.pid === pid) return;
+    appendJsonl(sessionPidsPath(dir), { ts: new Date().toISOString(), session_id: sessionId, pid });
+  } catch {
+    // a session record never fails the operation that triggered it
+  }
+}
+
+const OWNER_SESSIONS_CAP = 32;
+
 /** The status document for the pool `dir` (by default the one `cwd` resolves to), evaluated at `nowMs`. Reads only. */
 export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd), enabledOverride = undefined) {
   const enabled = typeof enabledOverride === "boolean" ? enabledOverride : Boolean(resolveConfig(cwd).enabled);
   const teams = [];
   const allMembers = [];
   const allDispatches = [];
+  const owners = new Map();
   if (dir && existsSync(dir)) {
     const roster = attributedRoster(dir);
+    const sessionRows = readJsonl(sessionPidsPath(dir));
     const exchanges = listExchanges(dir);
     const gates = readGates(dir);
     const fmCache = new Map();
@@ -393,13 +417,31 @@ export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd), 
       const dispatches = describeDispatches(candidates, origins, key, members, gates, nowMs);
       allMembers.push(...members);
       allDispatches.push(...dispatches);
-      teams.push({
+      const team = {
         team: key,
         members,
         dispatches: dispatches.slice(0, DISPATCH_CAP),
         dispatches_truncated: Math.max(0, dispatches.length - DISPATCH_CAP),
         pipeline: describePipeline(dir, exchanges, fmCache, key),
-      });
+      };
+      teams.push(team);
+      const pid = t.orchestrator.pid;
+      let g = owners.get(pid);
+      if (!g) {
+        const rowSessions = [];
+        for (let i = sessionRows.length - 1; i >= 0; i--) {
+          const r = sessionRows[i];
+          if (r.pid === pid && typeof r.session_id === "string" && r.session_id && !rowSessions.includes(r.session_id)) rowSessions.push(r.session_id);
+        }
+        g = { sessions: rowSessions, teams: [], members: [], dispatches: [], anyPipeline: false };
+        owners.set(pid, g);
+      }
+      const sid = t.orchestrator.session_id;
+      if (typeof sid === "string" && sid && !g.sessions.includes(sid)) g.sessions.push(sid);
+      g.teams.push(key);
+      g.members.push(...members);
+      g.dispatches.push(...dispatches);
+      if (team.pipeline !== null) g.anyPipeline = true;
     }
   }
   return {
@@ -410,6 +452,11 @@ export function computeStatus(cwd, nowMs = Date.now(), dir = hierarchyDir(cwd), 
     member_sessions: [...new Set(allMembers.filter((m) => !isPaneMember(m) && typeof m.session_id === "string" && m.session_id).map((m) => m.session_id))],
     teams,
     timeline: buildTimeline(nowMs, allMembers, allDispatches, enabled, teams.some((t) => t.pipeline !== null)),
+    owners: [...owners.values()].map((g) => ({
+      sessions: g.sessions.slice(0, OWNER_SESSIONS_CAP),
+      teams: g.teams,
+      timeline: buildTimeline(nowMs, g.members, g.dispatches, enabled, g.anyPipeline),
+    })),
   };
 }
 

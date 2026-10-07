@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
-import { bandLine, BORDER_MIN, toastMs, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
+import { bandLine, BORDER_MIN, scope, toastMs, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
 const ms = (iso: string) => Date.parse(iso)
@@ -593,4 +593,82 @@ test('T9 any negative is the default, not off', async () => { expect(MS(-1, -5, 
 test('T10 a positive that rounds below two is two, not off', async () => { expect(MS(0.4, '0.4')).toEqual([2000, 2000]) })
 test('T11 values Number() would coerce, or that are not plain decimals, are the default and never off', async () => {
   expect(MS('', '  ', false, [], [0], '1e3', '0x10', '10s', '+5', '.5', '5.', '1,5')).toEqual(Array(12).fill(10000))
+})
+
+// ---- teams owned by other orchestrators
+const entryOf = (live: number, out: number, extra: Record<string, unknown> = {}) =>
+  ({ at: T0, live, blocked: 0, out, overdue: 0, stalled: 0, text: `${live} live · ${out} out`, short: `${live}/${out}`, tone: out > 0 ? 'work' : 'idle', visible: true, ...extra })
+const mine = team({ team: 'mine', members: [member({ name: 'mine-a', label: 'mine' })], dispatches: [] })
+const theirs = team({
+  team: 'theirs',
+  members: [member({ name: 'their-a', label: 'theirs', activity: 'blocked', blocked_by: 'permission', activity_at: at(-1000) })],
+  dispatches: [dispatch({ id: 'dx', slug: 'foreign-slug', label: 'theirs', member: 'their-a' }, 600000), dispatch({ id: 'dy', slug: 'foreign-done', label: 'theirs', member: 'their-a', reported_at: at(-1000), states: [{ at: at(-5000), state: 'reported' }] })],
+})
+const ownedDoc = (owners: unknown, over: Record<string, unknown> = {}) =>
+  docText({ teams: [mine, theirs], owners, ...over }, { out: 3, stalled: 1, blocked: 1, live: 2, text: '2 live · 3 out · 1 stalled · 1 blocked', tone: 'bad' })
+const OWNERS = [
+  { sessions: ['sess-orch'], teams: ['mine'], timeline: [entryOf(1, 0)] },
+  { sessions: ['sess-other'], teams: ['theirs'], timeline: [entryOf(1, 3, { stalled: 1, blocked: 1, text: '1 live · 3 out · 1 stalled · 1 blocked', tone: 'bad' })] },
+]
+const everything = (v: ReturnType<typeof viewModel>) => JSON.stringify([v, v === null ? null : paneSections(v, 120)])
+
+test('another orchestrator\'s team is hidden everywhere: Pane, band, toasts and status text', async () => {
+  const doc = parseDoc(ownedDoc(OWNERS))
+  const view = viewModel(doc, ms(T0), 'sess-orch')
+  expect(view).not.toBe(null)
+  expect(statusText(doc, ms(T0), 'sess-orch', true)).toBe('1 live · 0 out')
+  expect(bandLine(view, 200)).toEqual({ text: '1 live · 0 out', tone: 'idle' })
+  expect(view!.toasts).toEqual([])
+  for (const gone of ['their-a', 'theirs', 'foreign-slug', 'foreign-done', 'dx', 'dy']) expect(everything(view)).not.toContain(gone)
+  expect(everything(view)).toContain('mine-a')
+  // the other viewer sees theirs and not mine
+  const other = viewModel(doc, ms(T0), 'sess-other')
+  expect(everything(other)).toContain('their-a')
+  expect(everything(other)).not.toContain('mine-a')
+  expect(other!.toasts.map((t) => t.key).sort()).toEqual([`blocked:their-a:${at(-1000)}`, 'reported:dy', 'stalled:dx'])
+})
+
+test('a viewer that owns nothing gets no status text, band, Pane rows or toasts', async () => {
+  const doc = parseDoc(ownedDoc(OWNERS))
+  expect(statusText(doc, ms(T0), 'sess-nobody', true)).toBe(undefined)
+  const view = viewModel(doc, ms(T0), 'sess-nobody')
+  expect(view).toBe(null)
+  expect(bandLine(view, 200)).toBe(null)
+  expect(paneRows(view, 120, nullCause(doc, ms(T0), 'sess-nobody'))).toEqual([{ text: 'No hierarchy status here (no team owned by this session).', tone: 'idle' }])
+  expect(paneSections(view, 120).map((s) => s.section)).toEqual(['none'])
+})
+
+test('a viewer that owns two teams sees both, with the team headings', async () => {
+  const doc = parseDoc(ownedDoc([{ sessions: ['sess-orch'], teams: ['mine', 'theirs'], timeline: [entryOf(2, 3)] }, { sessions: ['sess-other'], teams: [], timeline: [entryOf(0, 0)] }]))
+  const view = viewModel(doc, ms(T0), 'sess-orch')
+  expect(paneSections(view, 120).filter((s) => s.section === 'team').map((s) => s.title)).toEqual(['TEAM mine', 'TEAM theirs'])
+  expect(statusText(doc, ms(T0), 'sess-orch', true)).toBe('2 live · 3 out')
+})
+
+test('a member session listed in an owner\'s sessions gets no view', async () => {
+  const doc = parseDoc(ownedDoc(OWNERS, { member_sessions: ['sess-orch'] }))
+  expect(viewModel(doc, ms(T0), 'sess-orch')).toBe(null)
+  expect(nullCause(doc, ms(T0), 'sess-orch')).toBe('member session')
+})
+
+test('owners that is not an array, or holds only unusable entries, gives no view; a document without owners is pool-wide', async () => {
+  const bad = [{ sessions: 'sess-orch', teams: ['mine'], timeline: [entryOf(1, 0)] }, { sessions: ['sess-orch'], teams: [3], timeline: [entryOf(1, 0)] }, { sessions: ['sess-orch'], teams: ['mine'], timeline: [] }, { sessions: ['sess-orch'], teams: ['mine'], timeline: [{ at: 'x' }] }, 7, null]
+  for (const owners of ['sess-orch', {}, 7, null, [], bad]) expect(viewModel(parseDoc(ownedDoc(owners)), ms(T0), 'sess-orch')).toBe(null)
+  const legacy = parseDoc(ownedDoc(OWNERS).replace(/"owners":.*\]\}\]/, '"x":1'))
+  expect(legacy!.owners).toBe(null)
+  expect(everything(viewModel(legacy, ms(T0), 'sess-orch'))).toContain('their-a')
+})
+
+test('the first usable owner entry listing the session wins; an invisible entry for the viewer\'s group gives no view', async () => {
+  const dup = [{ sessions: ['sess-orch'], teams: ['theirs'], timeline: [entryOf(1, 3)] }, { sessions: ['sess-orch'], teams: ['mine'], timeline: [entryOf(1, 0)] }]
+  expect(everything(viewModel(parseDoc(ownedDoc(dup)), ms(T0), 'sess-orch'))).toContain('their-a')
+  const hidden = [{ sessions: ['sess-orch'], teams: ['mine'], timeline: [entryOf(0, 0, { visible: false })] }]
+  expect(viewModel(parseDoc(ownedDoc(hidden)), ms(T0), 'sess-orch')).toBe(null)
+  expect(scope(parseDoc(ownedDoc(OWNERS)), 'sess-nobody')).toBe(null)
+})
+
+test('keepSeen on a scoped document drops the keys of another orchestrator\'s teams', async () => {
+  const doc = parseDoc(ownedDoc(OWNERS))
+  const seen = ['stalled:dx', `blocked:their-a:${at(-1000)}`, `blocked:mine-a:${at(-1000)}`]
+  expect(keepSeen(seen, scope(doc, 'sess-orch')!, ms(T0))).toEqual([`blocked:mine-a:${at(-1000)}`])
 })

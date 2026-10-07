@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneSections, parseDoc, SIZE_CAP, statusText, toastMs, viewModel, type Doc } from './view.ts'
+import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneSections, parseDoc, SIZE_CAP, scope, statusText, toastMs, viewModel, type Doc } from './view.ts'
 
 // The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
 // any tone not named here draws dim.
@@ -107,11 +107,12 @@ export const register: Register = (on, options) => {
       // Each toast key shows at most once per session. The first view a session sees only seeds the set, so old
       // events are not replayed. Nothing changes on a tick with no view: an unreadable or expired file for one
       // tick must not empty the set and replay everything when the file comes back.
-      if (view !== null && doc !== null) {
+      const mine = scope(doc, id)
+      if (view !== null && mine !== null) {
         const held = await $.state.get({ plugin: 'ah', key: 'seen' })
         if (held.value === undefined) await $.state.set({ plugin: 'ah', key: 'seen' }, view.toasts.map((t) => t.key))
         else {
-          const kept = keepSeen(held.value, doc, now)
+          const kept = keepSeen(held.value, mine, now)
           const fresh = view.toasts.filter((t) => !kept.includes(t.key))
           const seen = [...kept, ...fresh.map((t) => t.key)]
           // Written before toasting, so a toast that fails is not shown again.
