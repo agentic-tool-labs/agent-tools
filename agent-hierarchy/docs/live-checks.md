@@ -18,3 +18,13 @@ the recipe in [cli-tools.md](./cli-tools.md).
 
 Anything that disagrees is a real finding: the plugin's own tests cannot see any
 of it.
+
+## Probes that start a multiplexer server
+
+A sandboxed multiplexer server must not restore the user's saved session. Before
+starting it, point every state path it reads at an empty temp dir: the socket,
+the config, and the saved-session file. After it starts, confirm it lists zero
+panes before doing anything else. Never kill a sandbox server that lists a pane
+the probe did not create: stop and report instead. A restored pane can relaunch
+a copy of a real member session under the same session id, and that copy's
+session end would otherwise reach the real pool.
