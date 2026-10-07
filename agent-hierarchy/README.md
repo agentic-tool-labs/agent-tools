@@ -256,8 +256,9 @@ work is out, or a pipeline runs), whether or not the `status_entry` option shows
 in the status bar, one line sits just above the prompt and names
 the thing most worth your attention. It ends with a `[ Pane ]`
 button: click it, or press ctrl+x then tab and Enter, to open the hierarchy Pane,
-the same as `/hierarchy-pane`. The button is only there while the band is, and
-not on a very narrow terminal.
+the same as `/hierarchy-pane`. Pressing it while the Pane is open closes it
+(and it stays closed for the session), which `/hierarchy-pane` never does. The
+button is only there while the band is, and not on a very narrow terminal.
 
 ```
 architect is waiting on a prompt · answer it through the Orchestrator

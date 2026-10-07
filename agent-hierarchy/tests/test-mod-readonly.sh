@@ -28,7 +28,8 @@ check() {
 # keys sorted), any other takes none. RENDER_ELEMENTS is every RenderElement type; the banned words are
 # RETURN_KEYS plus every element type not in DRAWABLE. BAND_DRAWABLE is also drawable, but only inside the
 # ui.render hook matched by component=AbovePrompt, and only with an inline arrow onPress.
-ALLOWED_CALLS="session.cwd session.id fs.stat fs.read fs.exists clock.every clock.now state.get state.set ui.status ui.toast ui.open ui.resolve command.register"
+# ui.panes and ui.close only list and close this plugin's own panes: the band button toggles the Pane with them.
+ALLOWED_CALLS="session.cwd session.id fs.stat fs.read fs.exists clock.every clock.now state.get state.set ui.status ui.toast ui.open ui.panes ui.close ui.resolve command.register"
 ALLOWED_EVENTS="session.start ui.close command.run ui.render"
 MATCHERS="command.run:command=hierarchy-pane ui.render:component=Pane,requestId=ah-status ui.render:component=AbovePrompt ui.close:id=ah-status"
 RENDER_ELEMENTS="Box Text engine Button Input Select Link Code Markdown Client Svg Raster Image"
@@ -545,6 +546,7 @@ done <<'EOF'
 $.session.authorize()
 $.session.append()
 $.prompt.fill()
+$.ui.dismiss()
 $.turn.abort()
 $.mcp.call()
 $.command.run()
@@ -776,6 +778,10 @@ OUT=$(planted "const help = async (\$, x) => { await \$.state.set(x, 1) }" \
   "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button, Text } = \$.ui.resolve(e); return <Box><Text>x</Text><Button key=\"k\" label=\"L\" onPress={async () => { await help(\$, 1); await \$.ui.toast('x') }} /></Box> })" \
   "on('command.run', { command: 'hierarchy-pane' }, async (\$, e, next) => { await help(\$, 2); return ({ text: 'ok' }) })")
 check "lexer passes a band Button with an inline arrow onPress and a \$-first helper called from two hooks" '[ -z "$OUT" ]'
+
+# The band button may list this plugin's panes and close its own.
+OUT=$(planted "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return <Box><Button key=\"k\" label=\"L\" onPress={async () => { if ((await \$.ui.panes()).length) await \$.ui.close({ id: 'ah-status' }) }} /></Box> })")
+check "lexer passes \$.ui.panes and \$.ui.close in the band Button's onPress" '[ -z "$OUT" ]'
 
 # The position rule still passes a band Button with children, in a conditional return, after an early return.
 OUT=$(planted "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { if (e.props.hasSurvey) return next(e); const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.ok ? (<Button onPress={() => \$.ui.toast('x')}>Go</Button>) : null}</Box>) })" \

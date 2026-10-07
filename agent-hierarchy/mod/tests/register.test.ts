@@ -19,13 +19,14 @@ type World = {
   registered: unknown[]
   opens: unknown[]
   placed: boolean
+  panes: { id: string; title: string; isShown: boolean; isFocused: boolean; isPlaced: boolean }[]
   writes: { key: string; value: unknown }[]
   toasts: string[]
   toastCalls: any[]
   order: string[]
 }
 const world = (over: Partial<World> = {}): World => ({
-  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, writes: [], toasts: [], toastCalls: [], order: [], ...over,
+  cwd: REPO + '/sub', id: 'sess-orch', git: [REPO], files: { [FILE]: { text: fixtures.work, mtimeMs: 1 } }, shown: [], reads: 0, registered: [], opens: [], placed: true, panes: [], writes: [], toasts: [], toastCalls: [], order: [], ...over,
 })
 
 // Answers every $ call the module makes, from `w`; nothing real is read.
@@ -46,6 +47,7 @@ const stage = (on: any, w: World) => {
   on('ui.status', (_$: any, e: any) => { w.shown.push(e.text); return { value: undefined } })
   on('command.register', (_$: any, e: any) => { w.registered.push(e); return { value: undefined } })
   on('ui.open', (_$: any, e: any) => { w.order.push('open'); w.opens.push(e); return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } } })
+  on('ui.panes', () => ({ value: w.panes }))
   on('state.set', async (_$: any, e: any, next: any) => { w.order.push(`set:${e.key}`); w.writes.push({ key: e.key, value: e.value }); return next(e) })
   on('ui.toast', (_$: any, e: any) => { w.toasts.push(typeof e === 'string' ? e : e.text); w.toastCalls.push(e); return { value: undefined } })
 }
@@ -247,6 +249,62 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(writesOf(w, 'closed')).toEqual([false])
     expect(w.opens.slice(before)).toEqual([{ id: 'ah-status', title: 'Hierarchy' }])
     expect(w.toasts).toEqual([])
+  })
+
+  const paneUp = (isPlaced: boolean) => [{ id: 'ah-status', title: 'Hierarchy', isShown: true, isFocused: false, isPlaced }]
+  const press = async ($: any, on: any, surface: string, w: World) => {
+    const closes: unknown[] = []
+    stage(on, w)
+    beneath(on)
+    on('ui.close', (_$: any, e: any) => { w.order.push('close'); closes.push(e); return { value: undefined } })
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    const ui = await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
+    const before = w.opens.length
+    w.order.length = 0
+    await ui.press({ key: 'ah-pane' })
+    return { closes, opened: w.opens.length - before }
+  }
+
+  test(`${surface}: pressing the button while the Pane is open closes it and marks it closed`, async ($, on) => {
+    const w = world({ panes: paneUp(true) })
+    const r = await press($, on, surface, w)
+    expect(r.closes).toEqual([{ id: 'ah-status', origin: { kind: 'plugin' } }])
+    expect(r.opened).toBe(0)
+    expect(w.order).toEqual(['set:closed', 'close'])
+    expect(writesOf(w, 'closed')).toEqual([true])
+  })
+
+  test(`${surface}: pressing the button with no Pane open opens it and closes nothing`, async ($, on) => {
+    const r = await press($, on, surface, world({ panes: [] }))
+    expect(r.closes).toEqual([])
+    expect(r.opened).toBe(1)
+  })
+
+  test(`${surface}: pressing the button while the Pane waits undrawn opens it as before and closes nothing`, async ($, on) => {
+    const r = await press($, on, surface, world({ panes: paneUp(false) }))
+    expect(r.closes).toEqual([])
+    expect(r.opened).toBe(1)
+  })
+
+  test(`${surface}: another plugin's open pane is not the Pane, so the button opens`, async ($, on) => {
+    const r = await press($, on, surface, world({ panes: [{ ...paneUp(true)[0], id: 'other' }] }))
+    expect(r.closes).toEqual([])
+    expect(r.opened).toBe(1)
+  })
+
+  test(`${surface}: /hierarchy-pane while the Pane is open still only opens`, async ($, on) => {
+    const w = world({ panes: paneUp(true) })
+    stage(on, w)
+    beneath(on)
+    on('ui.close', () => { w.order.push('close'); return { value: undefined } })
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    const before = w.opens.length
+    const out = await $.command.run({ command: 'hierarchy-pane', args: '' })
+    expect(w.opens.length - before).toBe(1)
+    expect(w.order.includes('close')).toBe(false)
+    expect(out).toEqual({ text: 'Opened the hierarchy Pane.' })
   })
 
   test(`${surface}: a press that places no Pane toasts the not-placed text`, async ($, on) => {

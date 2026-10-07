@@ -10,6 +10,7 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
 ### Changed
 
 - The band above the prompt, and its `[ Pane ]` button, now show whenever a team is live (or work is out, or a pipeline runs), not only while a dispatch is out or a member is blocked; when nothing is working, stalled, overdue or blocked it shows the live/out counts (`1 live · 0 out`).
+- The band's `[ Pane ]` button toggles: pressed while the Pane is open it closes it and keeps it closed for the session; `/hierarchy-pane` still only opens.
 
 ### Fixed
 

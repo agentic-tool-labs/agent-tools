@@ -156,6 +156,12 @@ export const register: Register = (on, options) => {
                 label={PANE_BUTTON.label}
                 onPress={async () => {
                   try {
+                    const up = (await $.ui.panes()).some((pane: { id: string; isPlaced: boolean }) => pane.id === 'ah-status' && pane.isPlaced)
+                    if (up) {
+                      await $.state.set({ plugin: 'ah', key: 'closed' }, true)
+                      await $.ui.close({ id: 'ah-status' })
+                      return
+                    }
                     const r = await openPane($, member)
                     if (!r.placed && !member && toastFor > 0) await $.ui.toast(r.text, { timeoutMs: toastFor })
                   } catch {}
