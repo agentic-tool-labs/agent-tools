@@ -126,7 +126,11 @@ liveness check-ins use.
 - **`live` for a pane member (`route: pane`):** `false` when its activity record is `unknown`
   (Herdr no longer has the agent), `true` for any other record, and `null` when it has none.
 - **`activity`:** from the member's record in `<hier>/activity/`. It is `unknown` when there is no
-  record. A member with `live: false` is shown as gone.
+  record. `failed` means its last turn ended on an API error: the record then also holds `error` (the kind the
+  harness named, or `unknown`), `error_details` (one line, at most 300 characters), `failed_at`, `source`
+  (`stopfailure`, or `transcript` when the dispatch watcher found it from the transcript) and `streak` (the
+  consecutive failures, cleared by a normal end of turn). `failed` is not shown as `blocked`; a reader that
+  does not know it sees an unfamiliar activity. A member with `live: false` is shown as gone.
 - **`last_tool`:** written by the member's PostToolUse hook, at most every 15 s while its activity is unchanged. It is the last
   *finished* tool that won a write, so it can lag by up to 15 s plus one tool, and a long-running tool leaves the previous one
   showing with a growing age. It is kept when the member goes idle; a reader shows it only while the member is `working` and

@@ -8,6 +8,9 @@
 // UserPromptSubmit and Stop also refresh status.json in sessions that record nothing: a Claude peer
 // files its report with the Write tool, which no ah hook sees, so its turn ending is what surfaces it.
 //
+// A normal end of turn (Stop) clears the record's API-error streak; every other event carries it. The record also keeps
+// the session's transcript path, for the watcher's backup detection of an API-error end (lib-recovery.mjs).
+//
 // Role sessions only (the role sessionstart.mjs persisted for this session id), never a subagent.
 // UserPromptSubmit and Stop also re-register a session whose latest roster row is a false `down` (healFalseDown).
 // Never writes stdout, never blocks, always exits 0.
@@ -18,6 +21,7 @@
 import { hierarchyDir, isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
 import { healFalseDown, SELF_STATE } from "./lib-hier.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
+import { transcriptPathOk } from "./lib-recovery.mjs";
 import { recordActivity, statusChanged } from "./lib-status.mjs";
 
 try {
@@ -33,7 +37,9 @@ try {
       const activity = event === "PostToolUse" ? "working" : SELF_STATE[event];
       // A running member whose latest roster row is a false `down` re-registers at its next prompt or stop.
       if (event === "UserPromptSubmit" || event === "Stop") healFalseDown(dir, sessionId, process.ppid);
-      if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null, tool: event === "PostToolUse" ? input.tool_name : null });
+      // The transcript path lets the watcher read an API-error end the StopFailure hook missed; a normal end clears the failure streak.
+      const transcript = transcriptPathOk(input.transcript_path);
+      if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null, tool: event === "PostToolUse" ? input.tool_name : null, extra: transcript ? { transcript_path: transcript } : null, resetStreak: event === "Stop" });
     }
     if (!recorded && (event === "UserPromptSubmit" || event === "Stop")) statusChanged(dir);
   }
