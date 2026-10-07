@@ -144,8 +144,29 @@ ans demo-arch --cancel --choice 1 --screen-hash "$(hash_of)"
 check "--cancel with --choice: a usage error, nothing sent" '[ "$RC" -eq 2 ] && echo "$OUT" | grep -q "cannot be combined" && [ "$(keys)" = 0 ]'
 ans demo-arch --cancel
 check "--cancel without --screen-hash: a usage error" '[ "$RC" -eq 2 ] && echo "$OUT" | grep -q "screen-hash"'
-ans demo-arch --cancel yes --screen-hash "$(hash_of)"
-check "--cancel with a value: a usage error" '[ "$RC" -eq 2 ]'
+
+# --cancel is a boolean flag: it may come before the member name
+reset; team "$$" claude herdr; touch "$HS/esc_unblocks"
+ans --cancel demo-arch --screen-hash "$(hash_of)"
+check "--cancel before the member name still parses: cancelled" 'echo "$OUT" | grep -q "\"status\": \"cancelled\"" && [ "$(keys)" = 1 ]'
+
+# a cancelled member that blocks again while no watcher is running is a new episode
+reset; team "$$" claude herdr
+watch 8
+check "first block: a wake" '[ "$RC" -eq 3 ]'
+check "the BLOCKED wake carries the restart line, like every other wake" 'echo "$OUT" | grep -q "^Restart the watcher if anything is still open: Bash with run_in_background: true.*dispatch-watcher.mjs\" --session sess-w --cwd $PROJ"'
+touch "$HS/esc_unblocks"
+ans demo-arch --cancel --screen-hash "$(hash_of)"
+check "the cancel ends the episode: a clear row is written" '[ "$RC" -eq 0 ] && grep -q "\"type\":\"blocked-clear\"" "$HD/gates.jsonl" && grep -q "\"by\":\"answer\"" "$HD/gates.jsonl"'
+rm -f "$HS/esc_unblocks"; echo blocked > "$HS/status"
+watch 8
+check "it blocks again with no watcher up, then a watcher starts: a new wake" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "is BLOCKED at a prompt"'
+check "...which is the second time at that prompt" 'echo "$OUT" | grep -q "^Second time at the same prompt"'
+reset; team "$$" claude herdr
+watch 8
+ans demo-arch --cancel --screen-hash "$(hash_of)"
+watch 3
+check "a cancel that left the dialog up (still blocked) writes no clear: the same episode does not wake again" '[ "$RC" -eq 143 ] && [ -z "$OUT" ]'
 
 echo "---"
 echo "$PASS passed, $FAIL failed"

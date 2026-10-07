@@ -43,6 +43,7 @@ export const ROSTER_BOOL_FLAGS = new Set([
   "new-tab",
   "new-workspace",
   "allow-global",
+  "cancel",
   "clear",
   "close",
   "confirm",

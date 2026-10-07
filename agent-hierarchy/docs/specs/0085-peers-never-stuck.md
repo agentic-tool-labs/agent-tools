@@ -81,13 +81,15 @@ The fallback scans **command text only**. Before applying today's word rule, it 
    - The command receiving the heredoc is a shell: `sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `source` or `.`.
    - Or the receiver is a runtime word (today's runtime regex) whose only operands are flags or `-`, so it reads its program from stdin.
    - Or any later command in the same pipeline is one of those (`cat <<EOF | bash`).
+   - A here-string (`<<<`) is a heredoc whose body is one word: it is scanned under the same receiver rules (`bash <<< "…"`). Process substitution (`bash <(…)`) is scanned as the command it contains.
+   - Wrappers do not hide a shell, `eval` or runtime: `env`, `timeout`, `sudo`, `doas`, `nohup`, `command`, `exec`, `nice`, `time` and leading `VAR=x` assignments (with their options) are skipped to find the command proper.
 2. **Quoted spans.** Single- and double-quoted text is excluded, except:
    - `$( … )` and backtick spans inside double quotes are scanned.
    - The quoted word that is the argument of `-c` after a shell word is scanned.
    - The quoted arguments of `eval` are scanned.
 3. **Comments.** An unquoted `#` that starts a word, through end of line.
 
-Then today's word rule (runtime word, `roster.mjs` within two non-dash words, a later `dismiss|disband` word, a later `--close` word) applies **within one simple command**. Simple commands are separated by unquoted `;`, `&`, `&&`, `|`, `||`, newline, `(`, `)`, `{` and `}`. Words of different simple commands never combine.
+Then today's word rule (runtime word, `roster.mjs` within two non-dash words, a later `dismiss|disband` word, a later `--close` word) applies **within one simple command**. Simple commands are separated by unquoted `;`, `&`, `&&`, `|`, `||`, newline, `(`, `)`, and `{` and `}` standing alone as words. A brace inside a word (`${VAR}`) belongs to the word, and a redirection such as `2>&1`, `>&2` or `&>` is not a separator. Words of different simple commands never combine.
 
 **Fail safe:** when the scanner cannot classify the text, it treats the text as a match, as today. That covers an unterminated quote, an unterminated heredoc, or nesting deeper than 3 levels of `-c`/`eval`/`$( )`.
 

@@ -72,12 +72,6 @@ const BLOCKED_CALM = "ah: Ultra-Advisor is off for this session, so this escalat
 const RAW_HERDR_CALM = "ah: held a raw herdr brief to the Ultra-Advisor; it goes through the approved route instead.";
 
 /** Emit a PreToolUse decision and exit. Passing no decision lets the call proceed under normal permissions. */
-/** The each-time prompt: a member session cannot answer one, so there it is a deny (see askDecision). */
-function decideAsk(reason) {
-  const d = askDecision(reason);
-  decide(d.decision, d.reason);
-}
-
 function decide(decision, reason, systemMessage) {
   if (decision) {
     process.stdout.write(
@@ -92,6 +86,12 @@ function decide(decision, reason, systemMessage) {
     );
   }
   process.exit(0);
+}
+
+/** The each-time prompt: a member session cannot answer one, so there it is a deny (see askDecision). */
+function decideAsk(reason) {
+  const d = askDecision(reason);
+  decide(d.decision, d.reason);
 }
 
 function setCommand(sessionId, choice) {

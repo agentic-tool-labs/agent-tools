@@ -60,7 +60,30 @@ function ask(reason) {
 const RUNTIME_WORD = /^["']?(.*\/)?(node|nodejs|bun|deno|tsx)$/;
 const SHELL_WORDS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "source", "."]);
 const MAX_NESTING = 3;
+/** Commands that run the command after them: a shell or `eval` behind one of these is still a shell or `eval`. */
+const WRAPPERS = new Set(["env", "timeout", "sudo", "doas", "nohup", "command", "exec", "nice", "ionice", "time", "builtin", "stdbuf", "setsid"]);
+const baseOf = (w) => w.text.replace(/^.*\//, "");
 class Unclassified extends Error {}
+
+/** The index of the word that is the command proper: past `VAR=x` assignments and wrapper words (with their options). */
+function headIndex(words) {
+  let i = 0;
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i].text)) i++;
+  if (i < words.length && WRAPPERS.has(baseOf(words[i]))) {
+    for (let j = i + 1; j < Math.min(words.length, i + 9); j++) {
+      if (SHELL_WORDS.has(baseOf(words[j])) || baseOf(words[j]) === "eval" || RUNTIME_WORD.test(words[j].text)) return j;
+    }
+  }
+  return i;
+}
+
+/** Whether a command in this group hands its standard input to a shell, or to a runtime reading its program from stdin. */
+const readsStdinAsCode = (members) =>
+  members.some((x) => {
+    const k = headIndex(x.words);
+    const head = x.words[k];
+    return Boolean(head) && (SHELL_WORDS.has(baseOf(head)) || (RUNTIME_WORD.test(head.text) && x.words.slice(k + 1).every((w) => w.text.startsWith("-"))));
+  });
 
 /** The simple commands in `text`, each as `{ words: [{ text, raws }], group }`; words of one pipeline share a group. */
 function commandsOf(text, depth) {
@@ -68,6 +91,7 @@ function commandsOf(text, depth) {
   const src = text.replace(/\\\n/g, " ");
   const cmds = [];
   const pending = [];
+  const hereStrings = [];
   let group = 0;
   let cur = { words: [], group };
   let buf = "";
@@ -88,7 +112,7 @@ function commandsOf(text, depth) {
   // A quoted piece joins the word's text only when it is one plain token, so a message with spaces never does.
   const piece = (raw) => {
     raws.push(raw);
-    if (/^[^\s;&|()<>`$'"\\]+$/.test(raw)) buf += raw;
+    if (/^[^\s;&|()<>`'"\\]+$/.test(raw)) buf += raw;
     hasWord = true;
   };
   const closeParen = (from) => {
@@ -151,14 +175,30 @@ function commandsOf(text, depth) {
         }
         if (!closed) throw new Unclassified("unterminated heredoc");
         i = at - 1;
-        const members = cmds.filter((x) => x.group === h.group);
-        const first = (x) => (x.words[0] ? x.words[0].text.replace(/^.*\//, "") : "");
-        const reads = members.some((x) => SHELL_WORDS.has(first(x)) || (x.words[0] && RUNTIME_WORD.test(x.words[0].text) && x.words.slice(1).every((w) => w.text.startsWith("-"))));
+        const reads = readsStdinAsCode(cmds.filter((x) => x.group === h.group));
         if (reads) for (const inner of commandsOf(lines.join("\n"), depth)) cmds.push({ words: inner.words, group: ++group });
       }
     } else if (c === "<" || c === ">") {
-      if (c === "<" && src[i + 1] === "<" && src[i + 2] === "<") { endWord(); i += 2; }
-      else if (c === "<" && src[i + 1] === "<") {
+      if (c === "<" && src[i + 1] === "<" && src[i + 2] === "<") {
+        // A here-string: the word after it is the command's standard input.
+        endWord();
+        i += 3;
+        while (src[i] === " " || src[i] === "\t") i++;
+        let raw = "";
+        if (src[i] === "'" || src[i] === '"') {
+          const q = src[i];
+          let k = i + 1;
+          for (; k < src.length && src[k] !== q; k++) {
+            if (q === '"' && src[k] === "\\" && k + 1 < src.length) { k++; raw += /[\\"$`]/.test(src[k]) ? src[k] : "\\" + src[k]; } else raw += src[k];
+          }
+          if (k >= src.length) throw new Unclassified("unterminated here-string");
+          i = k;
+        } else {
+          while (i < src.length && !/[\s;&|()<>]/.test(src[i])) raw += src[i++];
+          i--;
+        }
+        hereStrings.push({ raw, group });
+      } else if (c === "<" && src[i + 1] === "<") {
         endWord();
         i += 2;
         const strip = src[i] === "-";
@@ -177,9 +217,14 @@ function commandsOf(text, depth) {
         if (!delim) throw new Unclassified("heredoc without a word");
         pending.push({ delim, strip, group });
       } else endWord();
-    } else if (c === ";" || c === "(" || c === ")" || c === "{" || c === "}" || c === "`") {
+    } else if (c === ";" || c === "(" || c === ")" || c === "`") {
+      endCmd(true);
+    } else if ((c === "{" || c === "}") && !hasWord && (i + 1 >= src.length || /[\s;&|()<>]/.test(src[i + 1]))) {
+      // A brace group's `{` and `}` stand alone; inside a word (`${VAR}`, `a{b,c}`) they are part of it.
       endCmd(true);
     } else if (c === "&") {
+      // `2>&1`, `>&2` and `&>` are redirections, not the end of a command.
+      if (src[i - 1] === ">" || src[i - 1] === "<" || src[i + 1] === ">") continue;
       if (src[i + 1] === "&") i++;
       endCmd(true);
     } else if (c === "|") {
@@ -191,15 +236,19 @@ function commandsOf(text, depth) {
   }
   endCmd(true);
   if (pending.length) throw new Unclassified("heredoc without a body");
+  for (const hs of hereStrings) {
+    if (readsStdinAsCode(cmds.filter((x) => x.group === hs.group))) for (const inner of commandsOf(hs.raw, depth + 1)) cmds.push({ words: inner.words, group: ++group });
+  }
   // The argument of `sh -c` and the arguments of `eval` are code, so their quoted text is scanned.
   for (const cmd of [...cmds]) {
     const w = cmd.words;
-    if (!w[0]) continue;
-    const head = w[0].text.replace(/^.*\//, "");
+    const at = headIndex(w);
+    if (!w[at]) continue;
+    const head = baseOf(w[at]);
     const code = [];
     if (SHELL_WORDS.has(head)) {
-      for (let k = 1; k + 1 < w.length; k++) if (/^-[A-Za-z]*c[A-Za-z]*$/.test(w[k].text)) code.push(...w[k + 1].raws);
-    } else if (head === "eval") for (const word of w.slice(1)) code.push(...word.raws);
+      for (let k = at + 1; k + 1 < w.length; k++) if (/^-[A-Za-z]*c[A-Za-z]*$/.test(w[k].text)) code.push(...w[k + 1].raws);
+    } else if (head === "eval") for (const word of w.slice(at + 1)) code.push(...word.raws);
     for (const raw of code) for (const inner of commandsOf(raw, depth + 1)) cmds.push({ words: inner.words, group: ++group });
   }
   return cmds;

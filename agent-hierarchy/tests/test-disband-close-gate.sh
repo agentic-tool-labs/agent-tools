@@ -166,6 +166,20 @@ matches "echo \"$CLOSE" "an unterminated quote (fail safe)"
 matches "cat <<EOF${NL}$CLOSE" "an unterminated heredoc (fail safe)"
 matches "echo \"\$(echo \"\$(echo \"\$(echo \"\$(echo $ROSTER --close)\")\")\")\"" "nesting deeper than three levels (fail safe)"
 
+# close shapes the scan must still catch (each asked before the scan read command text only)
+matches "node \${CLAUDE_PLUGIN_ROOT}/hooks/roster.mjs disband --close --confirm --plan-token t" "an unquoted \${VAR} script path"
+matches "node \"\$R/hooks/roster.mjs\" disband --close --confirm --plan-token t" "a quoted \$VAR script path"
+matches "node \"\${CLAUDE_PLUGIN_ROOT}/hooks/roster.mjs\" disband --close --confirm --plan-token t" "the quoted plugin-root script path"
+matches "timeout 30 bash -c \"$CLOSE\"" "timeout wrapping bash -c"
+matches "env bash -c \"$CLOSE\"" "env wrapping bash -c"
+matches "sudo -u root bash <<EOF${NL}$CLOSE${NL}EOF" "sudo wrapping a shell that reads a heredoc"
+matches "FOO=1 nohup sh <<EOF${NL}$CLOSE${NL}EOF" "assignments and nohup before a shell reading a heredoc"
+matches "cat <<EOF 2>&1 | bash${NL}$CLOSE${NL}EOF" "a heredoc piped through 2>&1 into bash"
+matches "bash <<< \"$CLOSE\"" "a here-string into bash"
+matches "timeout 5 node $ROSTER disband --close 2>&1 | tee /tmp/x" "a close with a redirection and a pipe after it"
+silent "cat <<< \"$CLOSE\"" "a here-string into cat"
+silent "{ echo \"$CLOSE\"; } > /tmp/x" "a brace group that only echoes the close"
+
 # a parsed close in a member is a deny carrying the original reason and the member tail; outside a member it is the ask it always was
 hook_member "node $ROSTER disband --close --confirm --plan-token t --team x --cwd $PROJ"
 check "a parsed close in a member: deny with the original reason" '[ "$RC" -eq 0 ] && is_deny && echo "$OUT" | grep -q "close the live session"'

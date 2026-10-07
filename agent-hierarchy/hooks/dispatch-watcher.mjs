@@ -103,9 +103,15 @@ function evaluate(now) {
 const episodes = new Map();
 const quote = (w) => (/^[A-Za-z0-9_\/.:@%+=-]+$/.test(w) ? w : `'${w.replace(/'/g, "'\\''")}'`);
 
-/** Whether the last blocked-wake / blocked-clear row for this member says an episode was already reported. */
+/**
+ * Whether the last blocked-wake / blocked-clear row for this member says an episode was already reported.
+ * A clear written by `answer --cancel` ends the episode whichever watcher is running: the member that
+ * blocks again after a cancel, while no watcher is up, is a new episode.
+ */
 function wokeBefore(gates, team, member) {
-  const rows = gates.filter((g) => (g.type === "blocked-wake" || g.type === "blocked-clear") && g.session_id === sessionId && (g.team ?? null) === team && g.member === member);
+  const rows = gates.filter(
+    (g) => ((g.type === "blocked-wake" && g.session_id === sessionId) || (g.type === "blocked-clear" && (g.session_id === sessionId || g.by === "answer"))) && (g.team ?? null) === team && g.member === member
+  );
   return rows.length > 0 && rows[rows.length - 1].type === "blocked-wake";
 }
 
@@ -183,6 +189,7 @@ function blockedEvents(now) {
           : `Default: this is not a Claude prompt (kind ${kind}) or its screen cannot be read here, so Esc does not apply: relay it to the user as the agent-team skill describes, and never answer it on your own.`,
       ];
       if (again && kind === "claude") lines.push(`Second time at the same prompt: cancel, then SendMessage ${m.name} to stop retrying and report BLOCKED with what it needed.`);
+      lines.push(`Restart the watcher if anything is still open: ${watcherCall(sessionId, cwd)}.`);
       events.push({ request_id: null, kind: "BLOCKED", text: lines.join("\n"), extra: { member: m.name, role: row.role, team: teamName, blocked_by: blockedBy, screen_hash: hash, excerpt } });
     }
   }
