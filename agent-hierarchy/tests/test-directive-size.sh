@@ -62,8 +62,8 @@ md_ceiling implementor   5930
 md_ceiling task-runner   5680
 md_ceiling orchestrator  7350
 # architect, implementor and task-runner each carry the response-command line with all three flag
-# sources spelled out (--id, --from, --req); that sentence is contract text and the ceilings above
-# were raised by +10, +30 and +30 B to hold it rather than cut it.
+# sources spelled out (--id, --from, --req); that sentence is contract text, so the ceilings above
+# hold it in full and it is not to be shortened to fit.
 
 # The secret scanner is not a role and carries no routing rule; it is spawned for every model-scanned push.
 md_ceiling secret-scanner 4500

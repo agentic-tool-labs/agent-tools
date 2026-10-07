@@ -230,7 +230,6 @@ check "K1: hooks.json no longer describes a route question or the prefer-peers d
 check "K1: comms-protocol.md no longer describes a route question or the prefer-peers default" '! grep -qE "Default when the user has not answered|ask ONCE per session|One routing question per session" "$PLUGIN/docs/comms-protocol.md"'
 # K1: every budget the size test holds, pinned at its value. Raising one means editing this list
 # as well, so it is a deliberate, reviewed change; lowering one needs nothing here.
-# The architect, implementor and task-runner pins were raised (+10, +30, +30 B) to hold the response-command line with all three flag sources spelled out; the contract text was kept, not cut.
 K1_PINS="AUTO_MAX=14700 CONFIRM_MAX=16000 architect=10510 ultra-advisor=7300 reviewer=8000 implementor=5930 task-runner=5680 orchestrator=7350"
 k1_raised() { # <size test file>: each pinned budget it raises or no longer defines
   local f=$1 pin name max got
