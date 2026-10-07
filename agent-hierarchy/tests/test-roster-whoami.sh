@@ -165,12 +165,55 @@ who "CLAUDE_PID=$$"
 check "no session id in the env -> the one on this pid's peers.jsonl row is used" 'echo "$OUT" | jsq "o.last_observed_brief.from_name===\"via-peers-row\""'
 who "CLAUDE_PID=$$ CLAUDE_CODE_SESSION_ID=s-me"
 check "the env session id outranks the peers.jsonl one" 'echo "$OUT" | jsq "o.last_observed_brief.from===\"uds:/x/4.sock\""'
+# a brief is only an untyped row: later typed bookkeeping rows never replace it
+LAST='{from:"uds:/x/4.sock",from_name:null,reply_to:"uds:/x/4.sock",ts:"2026-01-01T00:00:07Z"}'
+for T in subagent seen surfaced idle-seen watch-consumed watcher heard future-kind; do
+  row "{\"type\":\"$T\",\"session_id\":\"s-me\",\"from\":\"not-a-brief\",\"status\":\"started\",\"ts\":\"2026-01-01T00:01:00Z\"}"
+done
+who "HERDR_PANE_ID=P1 CLAUDE_CODE_SESSION_ID=s-me"
+check "typed rows (subagent, seen, surfaced, idle-seen, watch-consumed, watcher, heard, unknown) after a brief -> the brief still" \
+  'echo "$OUT" | jsq "JSON.stringify(o.last_observed_brief)===JSON.stringify($LAST)"'
+row '{"session_id":"s-nw","from":"uds:/x/6.sock","from_name":"nw-orch","reply_to":"uds:/x/6.sock","task":"t","status":"pending","nudges":0,"ts":"2026-01-02T00:00:01Z"}'
+row '{"session_id":"s-nw","from":"uds:/x/6.sock","from_name":"nw-orch","reply_to":"uds:/x/6.sock","task":"t","status":"pending","nudges":1,"ts":"2026-01-02T00:00:02Z"}'
+row '{"session_id":"s-nw","from":"uds:/x/6.sock","from_name":"nw-orch","reply_to":"uds:/x/6.sock","task":"t","status":"waived","nudges":2,"ts":"2026-01-02T00:00:03Z"}'
+row '{"type":"subagent","session_id":"s-nw","agent_id":"a1","status":"stopped","ts":"2026-01-02T00:00:04Z"}'
+who "HERDR_PANE_ID=P1 CLAUDE_CODE_SESSION_ID=s-nw"
+check "brief -> nudge copy -> waived copy -> subagent row -> the brief's fields, ts of the waived copy" \
+  'echo "$OUT" | jsq "JSON.stringify(o.last_observed_brief)===JSON.stringify({from:\"uds:/x/6.sock\",from_name:\"nw-orch\",reply_to:\"uds:/x/6.sock\",ts:\"2026-01-02T00:00:03Z\"})"'
+row '{"type":"subagent","session_id":"s-only-typed","agent_id":"a1","status":"started","ts":"2026-01-02T00:00:05Z"}'
+who "HERDR_PANE_ID=P1 CLAUDE_CODE_SESSION_ID=s-only-typed"
+check "a session with only a typed row -> null (not a brief with null fields)" 'echo "$OUT" | jsq "o.last_observed_brief===null"'
 STORE_SUM=$(cksum < "$STORE")
 who "HERDR_PANE_ID=P1"
 check "session id unresolvable -> block null, reason untouched (null on a resolved member), key present" \
   'echo "$OUT" | jsq "o.last_observed_brief===null&&(\"last_observed_brief\" in o)&&o.reason===null&&o.member.name===\"alpha-reviewer\""'
 check "the store is never written" '[ "$(cksum < "$STORE")" = "$STORE_SUM" ]'
 check "team files and peers.jsonl still byte-identical" '[ "$(state_sum)" = "$BEFORE" ]'
+
+# ---- registered_pid: the pid on this session's latest up row, matched by session id only
+rrow() { printf '%s\n' "$1" >> "$HIER/peers.jsonl"; }
+rrow '{"type":"peer","status":"up","role":"reviewer","session_id":"s-reg","pid":4242,"ts":"2026-02-01T00:00:00.000Z"}'
+rrow '{"type":"peer","status":"up","role":"reviewer","session_id":"s-other-sess","pid":777,"ts":"2026-02-01T00:00:01.000Z"}'
+who "HERDR_PANE_ID=P1 CLAUDE_CODE_SESSION_ID=s-reg"
+check "registered_pid with a member resolved = the up row's pid" 'echo "$OUT" | jsq "o.member.name===\"alpha-reviewer\"&&o.registered_pid===4242"'
+who "HERDR_PANE_ID=P9 CLAUDE_CODE_SESSION_ID=s-reg"
+check "registered_pid with member null (not-a-member) still filled" 'echo "$OUT" | jsq "o.member===null&&o.registered_pid===4242"'
+who "CLAUDE_CODE_SESSION_ID=s-reg"
+check "registered_pid on the no-pane-id (empty) shape still filled" 'echo "$OUT" | jsq "o.reason===\"no-pane-id\"&&o.registered_pid===4242"'
+who "HERDR_PANE_ID=P1 CLAUDE_CODE_SESSION_ID=s-none"
+check "no up row for this session id -> registered_pid null" 'echo "$OUT" | jsq "o.registered_pid===null&&(\"registered_pid\" in o)"'
+who "HERDR_PANE_ID=P1 CLAUDE_PID=777 CLAUDE_CODE_SESSION_ID=s-reg-other"
+check "same pid under another session id is not matched -> null" 'echo "$OUT" | jsq "o.registered_pid===null"'
+who "HERDR_PANE_ID=P1 CLAUDE_PID=777"
+check "session id unset, an up row whose pid = CLAUDE_PID -> null (no pid fallback)" 'echo "$OUT" | jsq "o.registered_pid===null"'
+rrow '{"type":"peer","status":"down","role":"reviewer","session_id":"s-reg","pid":4242,"ts":"2026-02-01T00:00:02.000Z"}'
+who "HERDR_PANE_ID=P1 CLAUDE_CODE_SESSION_ID=s-reg"
+check "a later down row is ignored: the latest UP row's pid" 'echo "$OUT" | jsq "o.registered_pid===4242"'
+rrow "{\"type\":\"peer\",\"status\":\"up\",\"role\":\"reviewer\",\"session_id\":\"s-ci\",\"pid\":$$,\"ts\":\"2026-02-01T00:00:03.000Z\"}"
+OUT=$(env -u HERDR_PANE_ID -u TMUX_PANE -u CLAUDE_CODE_SESSION_ID HOME="$FAKEHOME" CLAUDE_PID=$$ node "$H/roster.mjs" checkin --cwd "$PROJ" 2>&1); RC=$?
+check "checkin prints the pid it registered" 'echo "$OUT" | jsq "o.checked_in===true&&o.pid===$$"'
+who "HERDR_PANE_ID=P1 CLAUDE_CODE_SESSION_ID=s-ci"
+check "whoami registered_pid equals the pid checkin printed" 'echo "$OUT" | jsq "o.registered_pid===$$"'
 
 # ---- usage error
 who "HERDR_PANE_ID=P1" --bogus x

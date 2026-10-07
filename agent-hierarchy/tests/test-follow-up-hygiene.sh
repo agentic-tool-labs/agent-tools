@@ -187,6 +187,10 @@ run_r teams
 check "O1: teams lists only the live record under live_members, with who last briefed it" \
   '[ "$RC" -eq 0 ] && [ "$(jq_out "JSON.stringify(o.teams.find(t=>t.name===\"o1\").live_members)")" = "[{\"name\":\"o1-architect\",\"role\":\"architect\",\"last_brief_from\":\"orch-a\"}]" ]'
 check "O1: ...and no attributed_live" '[ "$(jq_out "String(o.teams.find(t=>t.name===\"o1\").attributed_live)")" = undefined ]'
+printf '%s\n' '{"type":"heard","session_id":"sid-a1","from":"x","from_name":"heard-peer","ts":"2099-01-01T00:00:00Z"}' >> "$FAKEHOME/.claude/agent-hierarchy.peer-pending.jsonl"
+run_r teams
+check "O1: a later typed (heard) row does not replace the brief as last_brief_from" \
+  '[ "$(jq_out "JSON.stringify(o.teams.find(t=>t.name===\"o1\").live_members.map(m=>m.last_brief_from))")" = "[\"orch-a\"]" ]'
 run_r reap
 check "O1: the reap plan lists the same live_members on the orphan" \
   '[ "$(jq_out "JSON.stringify(o.orphans.find(t=>t.name===\"o1\").live_members)")" = "[{\"name\":\"o1-architect\",\"role\":\"architect\",\"last_brief_from\":\"orch-a\"}]" ]'

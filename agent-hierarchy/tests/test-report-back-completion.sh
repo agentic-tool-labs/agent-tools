@@ -47,7 +47,7 @@ REQ_PATH="$HIER_DIR/msgs/${REQ_ID}--architect--t7--request.md"
 # file must actually be the failure mode, not any other gate condition)
 subagentstop_hook a7 "$REQ_PATH" "[hierarchy-msg $HIER_DIR/msgs/${REQ_ID}--orchestrator--t7--response.md]"
 check "T7: response file missing is blocked" 'is_block'
-check "T7: block names the missing file's response command" 'case "$OUT" in *"msg.mjs\\\" new --type response"*) true;; *) false;; esac'
+check "T7: block names the missing file's response command" 'case "$OUT" in *"msg.mjs new --type response"*) true;; *) false;; esac'
 
 # T8: token present, response file EXISTS but is frontmatter-only (empty body)
 RESP_STUB="$HIER_DIR/msgs/${REQ_ID}--orchestrator--t7--response.md"

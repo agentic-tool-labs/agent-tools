@@ -23,8 +23,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { classProp, logHookError, lookupRole, MSG_CLI, readHookInput, resolveConfig } from "./lib-config.mjs";
-import { appendGate, extractMsgToken, hasGate, hasResponseToken, hierarchyDir, parseMsgFilename, readMsgFile } from "./lib-hier.mjs";
+import { classProp, logHookError, lookupRole, readHookInput, resolveConfig, responseCommand } from "./lib-config.mjs";
+import { appendGate, extractMsgToken, hasGate, hasResponseToken, hierarchyDir, parseMsgFilename } from "./lib-hier.mjs";
 
 function allow() {
   process.exit(0);
@@ -132,11 +132,9 @@ try {
     allow();
   }
 
-  const req = readMsgFile(requestPath);
-  const from = req && req.fm && req.fm.from ? req.fm.from : "orchestrator";
   appendGate(dir, { type: "nudge", agent_id: agentId, session_id: input.session_id || null, id: meta.id });
   block(
-    `ah: your brief was a message file (${requestPath}); write your response file — node "${MSG_CLI}" new --type response --id ${meta.id} --req ${requestPath} --to ${from} --from ${role}; fill every section (bullets, no prose; [1] status first bullet done|partial|blocked) — and return exactly: [hierarchy-msg <response path>] + the [1] status bullet.`
+    `ah: your brief was a message file (${requestPath}); write your response file — ${responseCommand({ id: meta.id, role, req: requestPath })}; fill every section (bullets, no prose; [1] status first bullet done|partial|blocked) — and return exactly: [hierarchy-msg <response path>] + the [1] status bullet.`
   );
 } catch (err) {
   logHookError("subagentstop-msg-nudge.mjs", err);

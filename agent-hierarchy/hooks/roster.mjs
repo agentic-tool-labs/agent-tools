@@ -161,7 +161,7 @@ import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { SHELL_SELF_CARE, activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, isPaneMember, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
-import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, reviewIntentGap, reviewIntentReason, attributedRoster, createMessage, fmtAge, latestRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
+import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, reviewIntentGap, reviewIntentReason, attributedRoster, createMessage, fmtAge, latestRoster, readRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
 import { clearActivity, computeStatus, plainStatus, recordActivity, saveStatus } from "./lib-status.mjs";
@@ -4420,7 +4420,7 @@ function untrackedLive(dir, scope, tracked) {
 /** The latest obligation row any hook filed for a session, or null. Observed, not verified: a
     plain cross-session message files none. */
 function lastBriefRow(sessionId) {
-  return sessionId ? readPeerRecords().filter((r) => r.session_id === sessionId && r.type !== "turn" && r.type !== "dispatch").at(-1) || null : null;
+  return sessionId ? readPeerRecords().filter((r) => r.session_id === sessionId && r.type === undefined).at(-1) || null : null;
 }
 
 /** Who last briefed a session, best-effort: that row's `from_name`, else `from`, else null. */
@@ -7174,7 +7174,7 @@ try {
       appendRosterRecord(dir, rec);
       // `team` only when one resolved: `create --commit` refuses a member whose check-in names a
       // team other than the one being committed, and an absent key is what "not attributed" means.
-      out({ checked_in: true, cwd: observed, expected_root: expectedRoot, misplaced, ...(resolved ? { team: resolved.teamName } : {}) });
+      out({ checked_in: true, pid: myPid, cwd: observed, expected_root: expectedRoot, misplaced, ...(resolved ? { team: resolved.teamName } : {}) });
       if (misplaced) process.exitCode = 1;
       break;
     }
@@ -7191,6 +7191,9 @@ try {
       // Observed, not verified: the last obligation row any hook filed for this session. A plain
       // cross-session message files none, so null here is the ordinary case, not a fault.
       const mySessionId = process.env.CLAUDE_CODE_SESSION_ID || (myRow && myRow.session_id) || null;
+      const sid = process.env.CLAUDE_CODE_SESSION_ID || "";
+      const upRow = sid ? readRoster(dir).filter((r) => r.status === "up" && r.session_id === sid).at(-1) : null;
+      const registered_pid = upRow && Number.isInteger(upRow.pid) ? upRow.pid : null;
       const briefRow = lastBriefRow(mySessionId);
       const last_observed_brief = briefRow ? { from: briefRow.from ?? null, from_name: briefRow.from_name || null, reply_to: briefRow.reply_to ?? null, ts: briefRow.ts ?? null } : null;
       // `answered_by` names the step that placed this session: the team file it was launched into
@@ -7199,7 +7202,7 @@ try {
       // hiding what the pane lookup found.
       const env = teamArg || teamDefaultExplicit ? null : envTeamFile([dir, mainHierarchyDir(cwd)]);
       const envInvalid = env && env.invalid ? { env_team_invalid: { value: env.value, kind: env.kind, why: env.invalid } } : {};
-      const empty = (reason) => ({ member: null, team: null, team_file: null, orchestrator: null, last_observed_brief, reason, answered_by: null, ...envInvalid });
+      const empty = (reason) => ({ member: null, team: null, team_file: null, orchestrator: null, registered_pid, last_observed_brief, reason, answered_by: null, ...envInvalid });
       const describe = (home, teamName, team, member, answeredBy) => {
         const orch = team && team.orchestrator && typeof team.orchestrator === "object" ? team.orchestrator : null;
         const pid = orch && Number.isInteger(orch.pid) ? orch.pid : null;
@@ -7215,6 +7218,7 @@ try {
           team: teamName,
           team_file: teamPath(home, teamName),
           orchestrator: orch ? { pid, session_id: orch.session_id ?? null, live, send_to: live && existsSync(socket) ? `uds:${socket}` : null } : null,
+          registered_pid,
           last_observed_brief,
           reason: null,
           answered_by: answeredBy,

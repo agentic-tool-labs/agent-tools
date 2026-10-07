@@ -55,12 +55,15 @@ md_ceiling() { # <file> <max>
 
 # The four role contracts each carry the rule that a role routes other roles' work back to the
 # Orchestrator instead of dispatching it; these ceilings include that sentence.
-md_ceiling architect     10500
+md_ceiling architect     10510
 md_ceiling ultra-advisor 7300
 md_ceiling reviewer      8000
-md_ceiling implementor   5900
-md_ceiling task-runner   5650
+md_ceiling implementor   5930
+md_ceiling task-runner   5680
 md_ceiling orchestrator  7350
+# architect, implementor and task-runner each carry the response-command line with all three flag
+# sources spelled out (--id, --from, --req); that sentence is contract text, so the ceilings above
+# hold it in full and it is not to be shortened to fit.
 
 # The secret scanner is not a role and carries no routing rule; it is spawned for every model-scanned push.
 md_ceiling secret-scanner 4500

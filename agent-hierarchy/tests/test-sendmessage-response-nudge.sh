@@ -119,9 +119,31 @@ REPORT_NOTOKEN="$(node -e 'process.stdout.write("done: report inline. ".padEnd(2
 
 seed_qualifying "s5"
 hook "s5" "architect" "ct-orchestrator" "$REPORT_NOTOKEN"
+S5OUT=$OUT
 check "5: architect, pending msg record, report-sized, no token -> deny" 'denied'
 check "R3: inline-reply deny is quiet" 'quiet_deny "$AH_R3_CALM" "must reply with a response FILE"'
-check "5: deny reason carries --id and --to" "echo \"\$OUT\" | grep -q -- \"--id $ARCH_ID --to orchestrator\""
+check "5: deny reason carries --id and --from" "echo \"\$OUT\" | grep -q -- \"--id $ARCH_ID --from\""
+
+# T2: the command each hook prints for a shell-less architect is accepted by the self-care gate as printed.
+GATE="$H/pretooluse-self-care-gate.mjs"
+gate_cmd() { # <session_id> <command>: runs the self-care gate as that architect session; OUT, RC
+  OUT=$(node -e 'const[s,c]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:s,cwd:process.env.PROJ,agent_type:"ah:architect",tool_name:"Bash",tool_input:{command:c}}));' "$1" "$2" | PROJ="$PROJ" HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$GATE" 2>&1); RC=$?
+}
+gate_silent() { [ "$RC" = 0 ] && [ -z "$OUT" ]; }
+CMD=$(printf '%s' "$S5OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s).hookSpecificOutput.permissionDecisionReason;const m=r.match(/(node \S+ new --type response[^\n]*)/);process.stdout.write(m?m[1]:"")})')
+gate_cmd "t2a" "$CMD"
+check "T2: the sendmessage-response hook's printed command is allowed by the self-care gate as printed" '[ -n "$CMD" ] && gate_silent'
+check "T2: ...and carries the architect's own role with --from" 'case "$CMD" in *"--id $ARCH_ID --from architect --req $ARCH_REQ") true;; *) false;; esac'
+gate_cmd "t2a" "${CMD/--from architect/--from orchestrator}"
+check "T2: the same printed command with another role in --from is denied by the gate" 'denied'
+
+STOPHOOK="$H/stop-peer-nudge.mjs"
+seed_qualifying "t2b"
+STOPOUT=$(node -e 'const[s]=process.argv.slice(1);process.stdout.write(JSON.stringify({session_id:s,cwd:process.env.PROJ,agent_type:"ah:architect",stop_hook_active:false}));' "t2b" | PROJ="$PROJ" HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" node "$STOPHOOK" 2>&1)
+SCMD=$(printf '%s' "$STOPOUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s).reason||"";const m=r.match(/write it with (node \S+ new --type response[^;)]*)/);process.stdout.write(m?m[1]:"")})')
+gate_cmd "t2b" "$SCMD"
+check "T2: the stop-peer-nudge's printed command is allowed by the self-care gate as printed" '[ -n "$SCMD" ] && gate_silent'
+check "T2: ...and names the real role, not the placeholder" 'case "$SCMD" in *"--from architect --req $ARCH_REQ") true;; *) false;; esac'
 
 hook "s5" "architect" "ct-orchestrator" "$REPORT_NOTOKEN retry"
 check "6: second attempt -> allow" 'allowed'

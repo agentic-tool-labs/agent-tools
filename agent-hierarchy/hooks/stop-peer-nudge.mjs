@@ -65,7 +65,7 @@
  * contract governs.
  */
 
-import { isSubagent, logHookError, MSG_CLI, readHookInput } from "./lib-config.mjs";
+import { isSubagent, logHookError, readHookInput, resolveHierarchyRole, responseCommand } from "./lib-config.mjs";
 import { parseMsgFilename, responsePlan } from "./lib-hier.mjs";
 import { appendPeerRecord, appendTurnMarker, hasInflightSubagent, latestTurnMarker, MAX_NUDGES, pendingFor } from "./lib-peer.mjs";
 
@@ -85,7 +85,7 @@ function block(reason) {
  * `status: "waived"` record write (below) already existed pre-0028; this text
  * is the other half of Hole 2 — the give-up was silent before, now it isn't.
  */
-function owedLine(rec, isFinal) {
+function owedLine(rec, isFinal, role) {
   let line = `you were tasked as a peer (task ${rec.task}) by ${rec.from_name} and have not delivered your report. Call SendMessage now with to:"${rec.from}". Writing the response file is not delivery and neither is printing the token in your own output — your text is invisible to another session, so nothing has reached ${rec.from_name} until SendMessage returns.`;
   if (rec.msg) {
     const meta = parseMsgFilename(rec.msg);
@@ -93,7 +93,7 @@ function owedLine(rec, isFinal) {
     line += ` The message you send must carry [hierarchy-msg <response path>].`;
     const plan = responsePlan(rec.msg);
     if (plan) line += ` If that response file does not exist yet, its path is ${plan.path}`;
-    line += ` (write it with node "${MSG_CLI}" new --type response --id ${id} --req ${rec.msg}`;
+    line += ` (write it with ${responseCommand({ id, role: role || undefined, req: rec.msg })}`;
     // A role whose contract denies Bash cannot run that command, and the path is derivable here.
     if (plan)
       line += `; no Bash? write the file yourself with frontmatter \`id,type: response,to,from,slug,parent,reason,eta,to_name,from_name,team,created\` and the \`## [0] tldr\` / \`## [1] status\` … sections`;
@@ -118,6 +118,7 @@ try {
   const owed = pendingFor(sessionId);
   if (owed.length === 0) allow();
   if (hasInflightSubagent(sessionId)) allow();
+  const role = resolveHierarchyRole(input).role;
 
   const marker = latestTurnMarker(sessionId);
   const armed = !!marker && marker.status === "armed";
@@ -127,7 +128,7 @@ try {
   // single reminder is all one user turn can cost.
   if (!armed) {
     if (input.stop_hook_active === true) allow();
-    const lines = owed.map((rec) => owedLine(rec, false));
+    const lines = owed.map((rec) => owedLine(rec, false, role));
     block(lines.length === 1 ? lines[0] : ["You have more than one unsent peer report:", ...lines.map((l) => `- ${l}`)].join("\n"));
   }
 
@@ -153,8 +154,8 @@ try {
 
   const reason =
     toNudge.length === 1
-      ? owedLine(toNudge[0], toNudge[0].nudges >= MAX_NUDGES)
-      : ["You have more than one unsent peer report:", ...toNudge.map((rec) => `- ${owedLine(rec, rec.nudges >= MAX_NUDGES)}`)].join("\n");
+      ? owedLine(toNudge[0], toNudge[0].nudges >= MAX_NUDGES, role)
+      : ["You have more than one unsent peer report:", ...toNudge.map((rec) => `- ${owedLine(rec, rec.nudges >= MAX_NUDGES, role)}`)].join("\n");
   block(reason);
 } catch (err) {
   logHookError("stop-peer-nudge.mjs", err);

@@ -154,4 +154,29 @@ check "C1: architect.md keeps NotebookEdit and advisor denied" 'grep -q "^disall
 check "C1: architect.md has the exception and gate-down sentences" 'grep -q "Exception: self-care ah" "$PLUGIN/agents/architect.md" && tr "\n" " " < "$PLUGIN/agents/architect.md" | grep -q "the gate is down: do not use the shell, and report it"'
 check "C2: hooks.json lists the gate first under the PreToolUse Bash matcher" 'node -e "const h=require(process.argv[1]).hooks.PreToolUse.find(e=>e.matcher===\"Bash\"); process.exit(/pretooluse-self-care-gate/.test(h.hooks[0].command)?0:1)" "$PLUGIN/hooks/hooks.json"'
 
+# ---------------------------------------------------------------- one canonical response form
+# The form a refused architect is told to use, copied back with only the placeholders filled in.
+ARCH "ls"
+FORM=$(printf '%s' "$OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s).hookSpecificOutput.permissionDecisionReason;const m=r.match(/`(node \S+ new --type response[^`]*)`/);process.stdout.write(m?m[1].replace(/ \[--cwd <cwd>\]$/,""):"")})')
+FILLED=${FORM//<id>/x}; FILLED=${FILLED//<your request path>/$MSGS/x--request.md}
+ARCH "$FILLED"
+check "R1: the response form in the deny text, placeholders filled, is allowed (real architect session)" '[ -n "$FORM" ] && silent'
+check "R1: ...and it names the role with --from and carries no quotes" 'case "$FORM" in *"--from architect "*) true;; *) false;; esac; [ "${FORM#*\"}" = "$FORM" ]'
+ARCH "${FILLED/--from architect/--from orchestrator}"; check "R2: the same form with --from orchestrator is still denied" 'denied'
+ARCH "${FILLED/ --from architect/}"; check "R2: the same form without --from is still denied" 'denied'
+ARCH "${FILLED/node /node \"}"; check "R2: a quoted-looking CLI token is still denied" 'denied'
+ARCH "${FILLED/--type response/--type request}"; check "R2: --type request is still denied" 'denied'
+NOTICE=$(node --input-type=module -e "import { buildRoleSessionNotice } from '$PLUGIN/hooks/lib-config.mjs'; process.stdout.write(buildRoleSessionNotice('architect','ah:architect'))")
+PFORM=$(printf '%s' "$NOTICE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const m=s.match(/\((node \S+ new --type response[^)]*)\)/);process.stdout.write(m?m[1]:"")})')
+PFILLED=${PFORM//<id>/x}; PFILLED=${PFILLED//<that request path>/$MSGS/x--request.md}
+ARCH "$PFILLED"; check "R3: the peer prompt's response form, placeholders filled, is allowed" '[ -n "$PFORM" ] && silent'
+for H in pretooluse-sendmessage-response stop-peer-nudge subagentstop-msg-nudge; do
+  check "R4: $H builds its response command with the shared renderer" 'grep -q "responseCommand(" "$PLUGIN/hooks/$H.mjs" && ! grep -q "node \"\${MSG_CLI}\" new --type response" "$PLUGIN/hooks/$H.mjs"'
+done
+GEN=$(node --input-type=module -e "import { responseCommand } from '$PLUGIN/hooks/lib-config.mjs'; process.stdout.write(responseCommand({ id: 'x', role: 'architect', req: process.argv[1] }))" "$MSGS/x--request.md")
+ARCH "$GEN"; check "R4: the renderer's output for a real role and request is allowed by the gate" 'silent'
+for A in architect implementor reviewer task-runner ultra-advisor; do
+  check "R5: agents/$A.md: response line has --from <your role> and --req, and does not take from from the frontmatter" 'L=$(grep "new --type response" "$PLUGIN/agents/$A.md"); case "$L" in *"--from <your role>"*"--req"*) true;; *) false;; esac; tr "\n" " " < "$PLUGIN/agents/$A.md" | tr -s " " | grep -q "\`--id\` is the request.s \`id\`" && ! tr "\n" " " < "$PLUGIN/agents/$A.md" | grep -q "from the request frontmatter"'
+done
+
 echo "passed=$PASS failed=$FAIL"; [ "$FAIL" = 0 ]
