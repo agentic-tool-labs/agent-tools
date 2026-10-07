@@ -18,18 +18,19 @@
  * enrichment failed.
  */
 
-import { logHookError, readHookInput } from "./lib-config.mjs";
+import { askDecision, logHookError, readHookInput } from "./lib-config.mjs";
 import { hierarchyDir } from "./lib-hier.mjs";
 import { DEFAULT_TEAM_ARG, readTeam } from "./lib-roster.mjs";
 import { isCloseCommand, parseAhCommand } from "./lib-ah-cli.mjs";
 
 function ask(reason) {
+  const d = askDecision(reason);
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        permissionDecision: "ask",
-        permissionDecisionReason: reason,
+        permissionDecision: d.decision,
+        permissionDecisionReason: d.reason,
       },
     })
   );
@@ -40,28 +41,193 @@ function ask(reason) {
  * The parser reads only a command that begins `node <abs>/roster.mjs`. A `cd … &&` or env prefix,
  * a relative script path, a `;` chain, `sh -c "…"`, a backslash continuation, a runtime option
  * (`node --no-warnings`) or another runtime (`bun`, `tsx`, `deno run -A`) is a shape it cannot read,
- * and the close would then run unasked. Such a command is a close when a runtime word is followed
- * by a `roster.mjs` word — past any number of `-` options and at most two other words (`run`, an
- * option's value) — and, after it, a `dismiss`/`disband` word and a `--close` word. Requiring a runtime word keeps a mention that has none (`git commit -m
- * "roster.mjs dismiss --close"`) silent; one that spells out `node roster.mjs …` asks, which
- * fails safe — so test shapes belong in the test file and reach the hook through stdin, never in a
- * Bash command, where a grep pattern or heredoc mentioning one asks by design. Every command that does not mention both strings costs two substring tests and
- * reads no config.
+ * and the close would then run unasked. Such a command is scanned here, as command text only.
+ *
+ * Excluded from the scan: heredoc bodies, quoted text and comments, since text that merely mentions
+ * `node roster.mjs disband --close` (a message being written, a commit message, an echo) runs nothing.
+ * Scanned all the same, because they are code: a heredoc whose command is a shell (or feeds one, or is a
+ * runtime reading its program from stdin), the argument of `sh -c`, the arguments of `eval`, and
+ * `$( )` and backtick spans, also inside double quotes. A close is a runtime word followed by a
+ * `roster.mjs` word — past any number of `-` options and at most two other words (`run`, an option's
+ * value) — and, after it, a `dismiss`/`disband` word and a `--close` word, all in one simple command
+ * (simple commands end at `;`, `&`, `|`, a newline, a parenthesis or a brace). Text the scanner cannot
+ * classify (an unterminated quote or heredoc, nesting deeper than three levels) counts as a close.
+ *
+ * Known misses, accepted: `xargs`, `env -S`, a function defined earlier in the same command and `$VAR`
+ * expansion. This gate is a confirmation step, not the security boundary: a close still needs a valid
+ * plan token, and in a member session a close is denied.
  */
-function unparsedClose(command) {
-  if (typeof command !== "string" || !command.includes("roster.mjs") || !command.includes("--close")) return false;
-  const words = command.replace(/\\\n/g, " ").split(/[\s;&|()<>`]+/).filter(Boolean);
+const RUNTIME_WORD = /^["']?(.*\/)?(node|nodejs|bun|deno|tsx)$/;
+const SHELL_WORDS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "source", "."]);
+const MAX_NESTING = 3;
+class Unclassified extends Error {}
+
+/** The simple commands in `text`, each as `{ words: [{ text, raws }], group }`; words of one pipeline share a group. */
+function commandsOf(text, depth) {
+  if (depth > MAX_NESTING) throw new Unclassified("nested too deep");
+  const src = text.replace(/\\\n/g, " ");
+  const cmds = [];
+  const pending = [];
+  let group = 0;
+  let cur = { words: [], group };
+  let buf = "";
+  let raws = [];
+  let hasWord = false;
+  const endWord = () => {
+    if (hasWord) cur.words.push({ text: buf, raws });
+    buf = "";
+    raws = [];
+    hasWord = false;
+  };
+  const endCmd = (newGroup) => {
+    endWord();
+    if (cur.words.length) cmds.push(cur);
+    if (newGroup) group++;
+    cur = { words: [], group };
+  };
+  // A quoted piece joins the word's text only when it is one plain token, so a message with spaces never does.
+  const piece = (raw) => {
+    raws.push(raw);
+    if (/^[^\s;&|()<>`$'"\\]+$/.test(raw)) buf += raw;
+    hasWord = true;
+  };
+  const closeParen = (from) => {
+    for (let d = 1, k = from; k < src.length; k++) {
+      if (src[k] === "\\") k++;
+      else if (src[k] === "(") d++;
+      else if (src[k] === ")" && --d === 0) return k;
+    }
+    throw new Unclassified("unterminated $(");
+  };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      if (i + 1 < src.length) { buf += src[++i]; hasWord = true; }
+    } else if (c === "'") {
+      const e = src.indexOf("'", i + 1);
+      if (e < 0) throw new Unclassified("unterminated quote");
+      piece(src.slice(i + 1, e));
+      i = e;
+    } else if (c === '"') {
+      let raw = "";
+      let k = i + 1;
+      for (; k < src.length && src[k] !== '"'; k++) {
+        if (src[k] === "\\" && k + 1 < src.length) {
+          k++;
+          raw += /[\\"$`]/.test(src[k]) ? src[k] : "\\" + src[k];
+        } else if (src[k] === "$" && src[k + 1] === "(") {
+          const e = closeParen(k + 2);
+          for (const inner of commandsOf(src.slice(k + 2, e), depth + 1)) cmds.push({ words: inner.words, group: ++group });
+          raw += src.slice(k, e + 1);
+          k = e;
+        } else if (src[k] === "`") {
+          const e = src.indexOf("`", k + 1);
+          if (e < 0) throw new Unclassified("unterminated backtick");
+          for (const inner of commandsOf(src.slice(k + 1, e), depth + 1)) cmds.push({ words: inner.words, group: ++group });
+          raw += src.slice(k, e + 1);
+          k = e;
+        } else raw += src[k];
+      }
+      if (k >= src.length) throw new Unclassified("unterminated quote");
+      piece(raw);
+      i = k;
+    } else if (c === "#" && !hasWord && (i === 0 || /[\s;&|()]/.test(src[i - 1]))) {
+      while (i + 1 < src.length && src[i + 1] !== "\n") i++;
+    } else if (c === " " || c === "\t" || c === "\r") {
+      endWord();
+    } else if (c === "\n") {
+      endCmd(true);
+      for (const h of pending.splice(0)) {
+        const lines = [];
+        let closed = false;
+        let at = i + 1;
+        while (at <= src.length && !closed) {
+          const eol = src.indexOf("\n", at);
+          const line = src.slice(at, eol < 0 ? src.length : eol);
+          if ((h.strip ? line.replace(/^\t+/, "") : line) === h.delim) closed = true;
+          else lines.push(line);
+          if (eol < 0) { at = src.length + 1; break; }
+          at = eol + 1;
+        }
+        if (!closed) throw new Unclassified("unterminated heredoc");
+        i = at - 1;
+        const members = cmds.filter((x) => x.group === h.group);
+        const first = (x) => (x.words[0] ? x.words[0].text.replace(/^.*\//, "") : "");
+        const reads = members.some((x) => SHELL_WORDS.has(first(x)) || (x.words[0] && RUNTIME_WORD.test(x.words[0].text) && x.words.slice(1).every((w) => w.text.startsWith("-"))));
+        if (reads) for (const inner of commandsOf(lines.join("\n"), depth)) cmds.push({ words: inner.words, group: ++group });
+      }
+    } else if (c === "<" || c === ">") {
+      if (c === "<" && src[i + 1] === "<" && src[i + 2] === "<") { endWord(); i += 2; }
+      else if (c === "<" && src[i + 1] === "<") {
+        endWord();
+        i += 2;
+        const strip = src[i] === "-";
+        if (strip) i++;
+        while (src[i] === " " || src[i] === "\t") i++;
+        let delim = "";
+        if (src[i] === "'" || src[i] === '"') {
+          const e = src.indexOf(src[i], i + 1);
+          if (e < 0) throw new Unclassified("unterminated heredoc word");
+          delim = src.slice(i + 1, e);
+          i = e;
+        } else {
+          while (i < src.length && !/[\s;&|()<>]/.test(src[i])) delim += src[i++];
+          i--;
+        }
+        if (!delim) throw new Unclassified("heredoc without a word");
+        pending.push({ delim, strip, group });
+      } else endWord();
+    } else if (c === ";" || c === "(" || c === ")" || c === "{" || c === "}" || c === "`") {
+      endCmd(true);
+    } else if (c === "&") {
+      if (src[i + 1] === "&") i++;
+      endCmd(true);
+    } else if (c === "|") {
+      if (src[i + 1] === "|") { i++; endCmd(true); } else endCmd(false);
+    } else {
+      buf += c;
+      hasWord = true;
+    }
+  }
+  endCmd(true);
+  if (pending.length) throw new Unclassified("heredoc without a body");
+  // The argument of `sh -c` and the arguments of `eval` are code, so their quoted text is scanned.
+  for (const cmd of [...cmds]) {
+    const w = cmd.words;
+    if (!w[0]) continue;
+    const head = w[0].text.replace(/^.*\//, "");
+    const code = [];
+    if (SHELL_WORDS.has(head)) {
+      for (let k = 1; k + 1 < w.length; k++) if (/^-[A-Za-z]*c[A-Za-z]*$/.test(w[k].text)) code.push(...w[k + 1].raws);
+    } else if (head === "eval") for (const word of w.slice(1)) code.push(...word.raws);
+    for (const raw of code) for (const inner of commandsOf(raw, depth + 1)) cmds.push({ words: inner.words, group: ++group });
+  }
+  return cmds;
+}
+
+function isCloseWords(words) {
+  const texts = words.map((w) => w.text);
   let at = -1;
-  for (let i = 0; i < words.length && at < 0; i++) {
-    if (!/^["']?(.*\/)?(node|nodejs|bun|deno|tsx)$/.test(words[i])) continue;
-    for (let j = i + 1, other = 0; j < words.length; j++) {
-      if (/(^|\/)roster\.mjs["']?$/.test(words[j])) { at = j; break; }
-      if (!words[j].startsWith("-") && ++other > 2) break;
+  for (let i = 0; i < texts.length && at < 0; i++) {
+    if (!RUNTIME_WORD.test(texts[i])) continue;
+    for (let j = i + 1, other = 0; j < texts.length; j++) {
+      if (/(^|\/)roster\.mjs["']?$/.test(texts[j])) { at = j; break; }
+      if (!texts[j].startsWith("-") && ++other > 2) break;
     }
   }
   if (at < 0) return false;
-  const rest = words.slice(at + 1).map((w) => w.replace(/^["']+|["']+$/g, ""));
+  // Past the roster script, a quoted argument is the CLI's own argument, so its words count.
+  const rest = words.slice(at + 1).flatMap((w) => [w.text, ...w.raws.flatMap((r) => r.split(/\s+/))]);
   return rest.some((w) => w === "dismiss" || w === "disband") && rest.includes("--close");
+}
+
+function unparsedClose(command) {
+  if (typeof command !== "string" || !command.includes("roster.mjs") || !command.includes("--close")) return false;
+  try {
+    return commandsOf(command, 0).some((cmd) => isCloseWords(cmd.words));
+  } catch {
+    return true;
+  }
 }
 
 let recognised = false;

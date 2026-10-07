@@ -182,7 +182,7 @@ export function sweepActivity(dir, cutoffMs) {
   return removed;
 }
 
-function describeMembers(dir, team, roster) {
+export function describeMembers(dir, team, roster) {
   const members = (Array.isArray(team.members) ? team.members : []).filter((m) => m && typeof m.name === "string").map((m) => {
     const route = isPaneMember(m) ? "pane" : "peer";
     let live, sessionId = null, rec;

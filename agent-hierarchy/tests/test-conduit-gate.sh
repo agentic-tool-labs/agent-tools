@@ -136,6 +136,23 @@ eval_js "JSON.stringify(C.resolveHierarchyRole({agent_type:'ah:implementor',sess
 check "T26: agent_type present -> direct:true regardless of a conflicting persisted role" \
   'echo "$OUT" | grep -q "\"role\":\"implementor\",\"direct\":true"'
 
+# ---- a member session cannot answer a question dialog: AskUserQuestion is denied there, whatever the role
+member_hook() {
+  OUT=$(printf '{"tool_name":"%s","session_id":"%s","cwd":"%s","agent_type":"%s","tool_input":{}}' "$1" "$2" "$PROJ" "${3:-}" | AH_TEAM_FILE="$PROJ/.claude/hierarchy/team.json" HOME="$FAKEHOME" node "$H/pretooluse-conduit-gate.mjs" 2>&1); RC=$?
+}
+member_hook AskUserQuestion m1
+check "M1: AskUserQuestion in a member session is denied with the NEEDS-DECISION reason" 'is_deny && case "$OUT" in *"NEEDS-DECISION"*"your Orchestrator will ask the user"*) true;; *) false;; esac'
+member_hook AskUserQuestion m2 "ah:implementor"
+check "M2: AskUserQuestion in a member session with a role is denied too" 'is_deny'
+member_hook SendUserFile m3
+check "M3: another gated tool in a member session without a role is untouched" 'is_empty'
+member_hook Read m4
+check "M4: an ungated tool in a member session is untouched" 'is_empty'
+conduit_hook AskUserQuestion m5
+check "M5: the same call outside a member session (no role) still passes through" 'is_empty'
+AH_TEAM_FILE="" conduit_hook AskUserQuestion m6
+check "M6: an empty AH_TEAM_FILE is no member" 'is_empty'
+
 echo "----"
 echo "SUMMARY: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

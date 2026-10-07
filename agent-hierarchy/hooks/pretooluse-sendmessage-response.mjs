@@ -94,7 +94,8 @@ function denyReason(qualifying, role) {
     lines.push(`- ${id} (from ${from}): ${responseCommand({ id, role, req: rec.msg })}`);
     // A role whose contract denies Bash cannot run that command, and the path is derivable here.
     const plan = responsePlan(rec.msg);
-    if (plan) lines.push(`  Response path: ${plan.path} — No Bash? Write that file yourself with frontmatter \`id,type: response,to,from,slug,parent,reason,eta,to_name,from_name,team,created\` and the \`## [0] tldr\` / \`## [1] status\` … sections.`);
+    if (plan && role === "reviewer") lines.push(`  Response path: ${plan.path} — after that command creates it, fill the sections below the frontmatter with Edit; leave the frontmatter as written.`);
+    else if (plan) lines.push(`  Response path: ${plan.path} — No Bash? Write that file yourself with frontmatter \`id,type: response,to,from,slug,parent,reason,eta,to_name,from_name,team,created\` and the \`## [0] tldr\` / \`## [1] status\` … sections.`);
   }
   lines.push(
     "Then send: [hierarchy-msg <response path>] as the first line, followed by the [1] status bullet.",

@@ -15,7 +15,7 @@
  * readGateState/setDecision.
  */
 
-import { logHookError, readHookInput, resolveHierarchyRole, roleLabel } from "./lib-config.mjs";
+import { isMemberSession, logHookError, readHookInput, resolveHierarchyRole, roleLabel } from "./lib-config.mjs";
 
 function decide(decision, reason, systemMessage) {
   if (decision) {
@@ -56,6 +56,11 @@ try {
   const input = await readHookInput();
   const toolName = input.tool_name;
   if (!GATED_TOOLS.includes(toolName)) decide(null);
+
+  // Nobody is at a member session's prompt, so a question dialog there would wait forever.
+  if (toolName === "AskUserQuestion" && isMemberSession()) {
+    decide("deny", "No one is at this session's prompt. Put the question in your report as NEEDS-DECISION, with the options, and your Orchestrator will ask the user.");
+  }
 
   // §3.7: enforce only on positive direct attribution. `role` is never
   // "orchestrator" here — the Orchestrator has no entry in ROLES — so a

@@ -47,6 +47,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
+  askDecision,
   declaredTier,
   hierarchyRoleOf,
   KIND_DEFAULT,
@@ -71,6 +72,12 @@ const BLOCKED_CALM = "ah: Ultra-Advisor is off for this session, so this escalat
 const RAW_HERDR_CALM = "ah: held a raw herdr brief to the Ultra-Advisor; it goes through the approved route instead.";
 
 /** Emit a PreToolUse decision and exit. Passing no decision lets the call proceed under normal permissions. */
+/** The each-time prompt: a member session cannot answer one, so there it is a deny (see askDecision). */
+function decideAsk(reason) {
+  const d = askDecision(reason);
+  decide(d.decision, d.reason);
+}
+
 function decide(decision, reason, systemMessage) {
   if (decision) {
     process.stdout.write(
@@ -225,7 +232,7 @@ try {
         decide(null);
         break;
       case "each":
-        decide("ask", eachTimeReason(model));
+        decideAsk(eachTimeReason(model));
         break;
       case "off":
         decide("deny", blockedReason(sessionId), BLOCKED_CALM);
@@ -254,7 +261,7 @@ try {
       decide(null);
       break;
     case "each":
-      decide("ask", eachTimeReason(model));
+      decideAsk(eachTimeReason(model));
       break;
     case "off":
       decide("deny", blockedReason(sessionId), BLOCKED_CALM);

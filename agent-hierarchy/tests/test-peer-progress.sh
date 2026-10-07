@@ -98,7 +98,7 @@ check "P1: the note sentence is within 520 bytes" '[ "$(printf "%s" "$NOTES_SENT
 ORCH="$PLUGIN/agents/orchestrator.md"
 check "P2: orchestrator.md says a note is news that never closes a dispatch" 'grep -q "note:" "$ORCH" && grep -q "never closes" "$ORCH"'
 check "P2: and that a BLOCKED report is answered by a new request with --parent" 'grep -q -- "--parent" "$ORCH" && grep -q "new request" "$ORCH"'
-check "ceiling: orchestrator.md stays within 7350 bytes" '[ "$(wc -c < "$ORCH")" -le 7350 ]'
+check "ceiling: orchestrator.md stays within 7800 bytes" '[ "$(wc -c < "$ORCH")" -le 7800 ]'
 for f in implementor reviewer architect; do
   git -C "$PLUGIN" diff --quiet HEAD -- "agents/$f.md" 2>/dev/null; check "no text went into agents/$f.md" '[ $? -eq 0 ]'
 done

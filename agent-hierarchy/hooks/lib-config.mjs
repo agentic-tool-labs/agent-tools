@@ -66,6 +66,21 @@ let lastHookInput = null;
 export const HOOK_ERROR_LOG = join(homedir(), ".claude", "hierarchy", "hook-errors.jsonl");
 const HOOK_ERROR_CAP = 1024 * 1024;
 
+/** Whether this process runs in a roster-spawned member session: the launcher gives every member `AH_TEAM_FILE`. Nobody watches a member, so nothing may wait on one. Spoofing it only makes a session stricter. */
+export const isMemberSession = () => typeof process.env.AH_TEAM_FILE === "string" && process.env.AH_TEAM_FILE !== "";
+
+export const MEMBER_ASK_TAIL =
+  "No one is at this session's prompt, so ah does not ask here. Do not retry this command. Put what you needed in your report as BLOCKED or NEEDS-DECISION for your Orchestrator, who will ask the user.";
+
+/**
+ * The one place a PreToolUse prompt is decided. A gate that would ask the user calls this and emits the
+ * result: `ask` as is, except in a member session, where it is a `deny` carrying the same reason and the
+ * member tail. tests/test-no-bare-ask.sh fails if any other hook file names the decision.
+ */
+export function askDecision(reason) {
+  return isMemberSession() ? { decision: "deny", reason: `${reason} ${MEMBER_ASK_TAIL}` } : { decision: "ask", reason };
+}
+
 /**
  * Append one line about a hook failure. Hooks decide nothing on this path and keep whatever
  * fail-open behaviour they had; without it a crashed hook and a hook that chose to stay silent look

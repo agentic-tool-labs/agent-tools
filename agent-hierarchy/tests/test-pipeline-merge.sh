@@ -150,6 +150,8 @@ guard "$PIN_DRAFT"
 check "G3 the pinned compound form asks" 'asked'
 guard "$PIN" '{ agent_type: "ah:orchestrator" }'
 check "G3 a top-level --agent ah:orchestrator session gets the prompt" 'asked'
+AH_TEAM_FILE="$SANDBOX/member/.claude/hierarchy/team.json" guard "$PIN"
+check "G3 the same pinned merge in a member session is a deny, not a prompt, carrying the member tail" '[ "$RC" -eq 0 ] && [ "$(decision)" = deny ] && [[ "$(reason)" == *"does not ask here"* ]] && [[ "$(reason)" == *"PR #12"* ]]'
 
 # ---------------------------------------------------------------- G4 form refusals
 G4=(

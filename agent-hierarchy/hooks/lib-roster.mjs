@@ -102,6 +102,18 @@ export function teamHomeDir(dir) {
   return mainHierarchyDir(dirname(dirname(dir))) || dir;
 }
 
+/** The real msgs directories of the pool at `pool` (a hierarchy dir) and of its team home, those that exist. */
+export function msgsDirsOf(pool) {
+  const real = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return null;
+    }
+  };
+  return [join(pool, "msgs"), join(teamHomeDir(pool), "msgs")].map(real).filter(Boolean);
+}
+
 const rawTeamPath = (dir, team) => (team ? join(dir, "teams", `${team}.json`) : join(dir, "team.json"));
 
 /** `team.json` for the default team, or `teams/<team>.json` for a named one (spec 0011 §3), in the team home.

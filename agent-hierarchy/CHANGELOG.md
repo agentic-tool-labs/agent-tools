@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.123.0]
+
+### Changed
+
+- Members never wait at a prompt nobody watches. A hook decision that would ask is a denial with its reason in a member session; `AskUserQuestion` is denied there too. The disband/close confirmation scans command text only, so a heredoc body, quoted string or comment that mentions the command no longer triggers it. The Reviewer may Write/Edit its own response file (a gate allows only that file with its frontmatter unchanged), so it needs no Bash heredoc. The dispatch watcher wakes the Orchestrator when an owned member sits at a prompt for two polls, with the prompt text, and the new `roster.mjs answer <name> --cancel` presses Esc safely.
+
 ## [0.122.0]
 
 ### Added

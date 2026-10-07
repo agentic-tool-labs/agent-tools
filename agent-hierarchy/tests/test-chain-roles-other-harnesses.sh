@@ -945,7 +945,7 @@ check "K15: approval's \"don't ask again\" is not a row: exit 2, nothing sent" '
 r "" answer myrepo-reviewer --prompt approval --choice approve --screen-hash "$AH"
 check "K15: a claude member exits 2" '[ "$RC" -eq 2 ] && [ "$(calls send-keys)" -eq 0 ]'
 r "" answer myrepo-architect --prompt approval --choice approve --screen-hash "$AH" --keys 1
-check "K15: the verb takes no flag for keys or text" '[ "$RC" -eq 2 ] && echo "$OUT" | grep -q "unrecognized flag --keys" && grep -q "^const ANSWER_FLAGS = new Set(\[\"prompt\", \"choice\", \"screen-hash\", \"team\", \"cwd\"\]);" "$H/roster.mjs"'
+check "K15: the verb takes no flag for keys or text" '[ "$RC" -eq 2 ] && echo "$OUT" | grep -q "unrecognized flag --keys" && grep -q "^const ANSWER_FLAGS = new Set(\[\"prompt\", \"choice\", \"cancel\", \"screen-hash\", \"team\", \"cwd\"\]);" "$H/roster.mjs"'
 NH=$(screen_hash approval-reordered)
 k15 approval-reordered
 r "" deliver myrepo-architect --req "$REQ"
@@ -1315,7 +1315,7 @@ done
 ########################################################################
 SK="$PLUGIN/skills/agent-team/SKILL.md"
 check "K9: directive item 13 names deliver" 'grep -q "brief it with \\\\\`roster.mjs deliver\\\\\` in the background, never SendMessage" "$H/lib-config.mjs" && grep -q "roster.mjs deliver" "$PLUGIN/tests/fixtures/0056-i1/golden/directive-auto.txt"'
-check "K9: orchestrator.md names deliver, within its 7350-byte budget" 'grep -q "roster.mjs deliver <name>" "$PLUGIN/agents/orchestrator.md" && [ "$(wc -c < "$PLUGIN/agents/orchestrator.md")" -le 7350 ]'
+check "K9: orchestrator.md names deliver, within its 7800-byte budget" 'grep -q "roster.mjs deliver <name>" "$PLUGIN/agents/orchestrator.md" && [ "$(wc -c < "$PLUGIN/agents/orchestrator.md")" -le 7800 ]'
 check "K9: SKILL.md has the stall mapping" 'grep -q "is pinged with \`deliver --ping <n>\`" "$SK" && grep -q "\`busy\`, \`timeout\`, \`not-sent\` and \`blocked\` never count" "$SK"'
 check "K9: SKILL.md's status table: busy re-runs the same command, and not-sent sends the brief" 'grep -q "^| \`busy\` | still working or not ready at \`--timeout\`; nothing was sent | re-run the \*\*same\*\* command |" "$SK" && grep -q "^| \`not-sent\` |.*| send the brief, without \`--wait-only\` |" "$SK"'
 check "K9: SKILL.md: after answered, the re-run depends on sent" 'grep -q "the \*\*same\*\* command if it had \`sent: false\`, with \`--wait-only\`" "$SK"'

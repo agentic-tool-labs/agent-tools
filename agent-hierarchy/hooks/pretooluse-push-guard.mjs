@@ -29,7 +29,7 @@
 
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { logHookError, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
+import { askDecision, logHookError, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
 import { conventionSettings, git, globMatch, globRegExp, loadConventions, refExists, tryGit } from "./lib-conventions.mjs";
 
 // ---------------------------------------------------------------------------------------------
@@ -610,7 +610,8 @@ function topLevelOrchestrator(input) {
 }
 
 function ask(reason) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }));
+  const d = askDecision(reason);
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: d.decision, permissionDecisionReason: d.reason } }));
   process.exit(0);
 }
 
