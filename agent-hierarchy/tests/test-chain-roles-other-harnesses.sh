@@ -12,7 +12,7 @@ PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-other-harness-test.XXXXXX")"
 export AH_TEST_FAKE_BIN="$SANDBOX/bin:$SANDBOX/nolaunch"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach a real herdr, tmux or codex: stubs that fail every call sit first on PATH.
 mkdir -p "$SANDBOX/nolaunch"

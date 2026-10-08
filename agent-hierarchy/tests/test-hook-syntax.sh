@@ -37,7 +37,7 @@ check "every hooks.json command points at a file that exists" '[ -z "$MISSING" ]
 
 # Control: the check must be able to fail, or a syntax error would sail past it.
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-hook-syntax.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+hermetic_on_exit 'rm -rf "$TMP"'
 printf 'const x = {;\n' > "$TMP/broken.mjs"
 OUT=$(node --check "$TMP/broken.mjs" 2>&1)
 check "control: node --check reports a broken file" '[ -n "$OUT" ]'

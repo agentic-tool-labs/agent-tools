@@ -12,7 +12,7 @@ unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-role-contract-test.XXXXXX")"
 export AH_TEST_FAKE_BIN="$SANDBOX/faketmux:$SANDBOX/nolaunch"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH (a failing herdr or tmux is what a
 # machine without a running multiplexer gives), and the guard in lib-hermetic.sh is told it is a fake.

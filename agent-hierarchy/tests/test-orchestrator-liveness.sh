@@ -13,7 +13,7 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-liveness-test.XXXXXX")"
 SANDBOX="$(cd "$SANDBOX" && pwd)"  # canonicalize — TMPDIR can carry a trailing slash on macOS, which would otherwise
                                     # make shell-concatenated paths (e.g. mark_peer_route's) diverge byte-for-byte from
                                     # the same paths as built internally via Node's path.join (which collapses "//").
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 HIER_DIR="$SANDBOX/hier"

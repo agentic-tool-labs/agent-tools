@@ -19,7 +19,7 @@ PTU="$H/posttooluse-peer-resolve.mjs"
 STOP="$H/stop-peer-nudge.mjs"
 FIXTURE="$PLUGIN/tests/fixtures/subagentstop-payload.json"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-msgresp-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 HD="$SANDBOX/hier"

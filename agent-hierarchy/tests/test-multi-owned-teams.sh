@@ -22,7 +22,7 @@ check() {
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-multi-owned-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH (a failing herdr or tmux is what a
 # machine without a running multiplexer gives), and the guard in lib-hermetic.sh is told it is a fake.

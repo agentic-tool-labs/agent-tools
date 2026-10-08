@@ -10,7 +10,7 @@ unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 ROOT="$(cd "$PLUGIN/.." && pwd)"
 LIB="$PLUGIN/hooks/lib-config.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-flow-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 PASS=0; FAIL=0

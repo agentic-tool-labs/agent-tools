@@ -12,7 +12,7 @@ ROOT="$(cd "$PLUGIN/.." && pwd)"
 COLLECT="$PLUGIN/hooks/subagentstop-usage.mjs"
 REPORT="$PLUGIN/hooks/usage-report.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-usage-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/projects/myproj"
 PASS=0; FAIL=0

@@ -12,7 +12,7 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-pane-attr-test.XXXXXX")"
 export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
 sleep 600 & LIVE_PID=$!
 sleep 0 & DEAD_PID=$!; wait "$DEAD_PID" 2>/dev/null
-trap 'kill "$LIVE_PID" 2>/dev/null; rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'kill "$LIVE_PID" 2>/dev/null; rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH, and
 # the session's pane environment is dropped. A wrapper that sets PATH to its own fakes still wins.

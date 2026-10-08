@@ -11,7 +11,7 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-sessionend-test.XXXXXX")"
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 KIDS=()
 cleanup() { for k in "${KIDS[@]}"; do kill "$k" 2>/dev/null; wait "$k" 2>/dev/null; done; rm -rf "$SANDBOX"; }
-trap cleanup EXIT
+hermetic_on_exit cleanup
 unset AGENT_HIERARCHY_DIR AH_TEAM_FILE CLAUDE_PID
 FAKEHOME="$SANDBOX/home"; PROJ="$SANDBOX/repo"; ROSTER="$PROJ/.claude/hierarchy/peers.jsonl"
 mkdir -p "$FAKEHOME/.claude" "$PROJ/.claude/hierarchy"

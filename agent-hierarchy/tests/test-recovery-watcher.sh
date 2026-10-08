@@ -17,7 +17,7 @@ SB="$(cd "$SB" && pwd -P)"
 mkdir -p "$SB/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SB/nolaunch/herdr"; cp "$SB/nolaunch/herdr" "$SB/nolaunch/tmux"; chmod +x "$SB/nolaunch/herdr" "$SB/nolaunch/tmux"
 export PATH="$SB/nolaunch:$PATH"; export AH_TEST_FAKE_BIN="$SB/nolaunch"
 sleep 300 & OTHER=$!
-trap 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"' EXIT
+hermetic_on_exit 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"'
 unset AH_TEAM_FILE CLAUDE_PID CLAUDE_CODE_SESSION_ID AGENT_HIERARCHY_DIR
 export HOME="$SB/home" CLAUDE_PID=$$
 PROJ="$SB/proj"; HD="$PROJ/.claude/hierarchy"; PR="$HOME/.claude/projects/p"

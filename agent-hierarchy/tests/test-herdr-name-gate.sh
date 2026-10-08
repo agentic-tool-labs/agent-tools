@@ -9,7 +9,7 @@ unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 GATE="$PLUGIN/hooks/pretooluse-herdr-name-gate.mjs"
 SANDBOX="$(mktemp -d)"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 PASS=0; FAIL=0
 check() { if eval "$2"; then PASS=$((PASS+1)); echo "PASS: $1"; else FAIL=$((FAIL+1)); echo "FAIL: $1 (OUT=$OUT)"; fi; }
 gate() { # <bash command>

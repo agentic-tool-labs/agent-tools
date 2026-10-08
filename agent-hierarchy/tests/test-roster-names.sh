@@ -41,7 +41,7 @@ check "empty members -> empty array" '[ "$OUT" = "[]" ]'
 # git-root basename (spec 0010 §3), the same value the old repoBasename
 # derivations used to compute directly.
 NAMEDIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-teamprefix-test.XXXXXX")"
-trap 'rm -rf "$NAMEDIR"' EXIT
+hermetic_on_exit 'rm -rf "$NAMEDIR"'
 NAMEDIR="$(cd "$NAMEDIR" && pwd -P)"
 TEAMPREFIX_REPO="$NAMEDIR/some-repo-name"
 mkdir -p "$TEAMPREFIX_REPO"

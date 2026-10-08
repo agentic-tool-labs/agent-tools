@@ -15,7 +15,7 @@ MSG="$PLUGIN/hooks/msg.mjs"
 SKILL="$PLUGIN/skills/autonomous-pipeline/SKILL.md"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-merge-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME/.claude"

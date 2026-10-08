@@ -16,7 +16,7 @@ PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-status-pool.sh"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-status-triggers-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'chmod -R u+w "$SANDBOX" 2>/dev/null; rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'chmod -R u+w "$SANDBOX" 2>/dev/null; rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 PASS=0; FAIL=0
 

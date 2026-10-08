@@ -14,7 +14,7 @@ T="$(cd "$T" && pwd -P)"
 export AH_TEST_FAKE_BIN="$T/nolaunch:$T/bin"
 SLEEPER=""
 cleanup() { [ -n "$SLEEPER" ] && kill "$SLEEPER" 2>/dev/null; rm -rf "$T"; }
-trap cleanup EXIT
+hermetic_on_exit cleanup
 NODE_BIN="$(command -v node)"
 NODE_DIR="$(dirname "$NODE_BIN")"
 PASS=0; FAIL=0

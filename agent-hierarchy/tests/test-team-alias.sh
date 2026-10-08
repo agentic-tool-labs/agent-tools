@@ -17,7 +17,7 @@ check() {
 }
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-team-alias-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch"
 # No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH, and

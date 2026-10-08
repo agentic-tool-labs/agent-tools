@@ -11,7 +11,7 @@ H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-report-back-test.XXXXXX")"
 [ -n "$SANDBOX" ] || { echo "no sandbox"; exit 1; }
 SANDBOX="$(cd "$SANDBOX" && pwd)"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 HIER_DIR="$SANDBOX/hier"

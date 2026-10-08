@@ -155,7 +155,7 @@
 
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
-import { muxExec } from "./lib-mux.mjs";
+import { guardShellCommand, muxExec } from "./lib-mux.mjs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -3637,6 +3637,7 @@ function getMembersPlan(dir) {
 
 function runShell(commandString, opts = {}) {
   return new Promise((resolvePromise) => {
+    guardShellCommand(commandString);
     execFile("/bin/sh", ["-c", commandString], { encoding: "utf8", maxBuffer: 1024 * 1024, cwd: opts.cwd }, (err, stdout, stderr) => {
       resolvePromise({ err, stdout, stderr });
     });

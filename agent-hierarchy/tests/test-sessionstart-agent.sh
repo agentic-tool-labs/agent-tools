@@ -27,7 +27,7 @@ unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID
 # HOME and the hierarchy runtime dir are redirected: the hook now writes roster
 # and state files at SessionStart, and those must never touch real state.
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+hermetic_on_exit 'rm -rf "$TMP"'
 TMP="$(cd "$TMP" && pwd -P)"
 FAKEHOME="$TMP/home"
 HD="$TMP/hier"

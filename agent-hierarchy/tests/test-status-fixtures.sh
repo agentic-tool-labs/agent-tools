@@ -17,7 +17,7 @@ PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURES="$PLUGIN/tests/fixtures/status"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-status-fixtures-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 PASS=0; FAIL=0
 

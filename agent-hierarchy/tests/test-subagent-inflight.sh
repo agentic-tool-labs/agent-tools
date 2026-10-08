@@ -17,7 +17,7 @@ INFLIGHT="$H/subagent-inflight.mjs"
 MSG="$H/msg.mjs"
 FIXTURE="$PLUGIN/tests/fixtures/subagentstop-payload.json"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-inflight-test.XXXXXX")"
-trap 'chmod -R u+w "$SANDBOX" 2>/dev/null; rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'chmod -R u+w "$SANDBOX" 2>/dev/null; rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 HD="$SANDBOX/hier"

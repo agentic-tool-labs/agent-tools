@@ -11,7 +11,7 @@ LIB="$PLUGIN/hooks/lib-config.mjs"
 HOOK="$PLUGIN/hooks/pretooluse-ultra-gate.mjs"
 CLI="$PLUGIN/hooks/gate.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-gate-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 GATE_FILE="$FAKEHOME/.claude/agent-hierarchy.gate.json"

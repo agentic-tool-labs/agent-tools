@@ -13,7 +13,7 @@ INTAKE="$PLUGIN/hooks/issue-intake.mjs"
 FIX="$PLUGIN/tests/fixtures/issue-intake"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-intake-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME"

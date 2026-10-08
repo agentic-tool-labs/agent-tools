@@ -12,7 +12,7 @@ SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-blocked-watcher-test.XXXXXX")"
 [ -n "$SB" ] && [ -d "$SB" ] || { echo "mktemp failed"; exit 1; }
 SB="$(cd "$SB" && pwd -P)"
 sleep 300 & OTHER=$!
-trap 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"' EXIT
+hermetic_on_exit 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"'
 unset AH_TEAM_FILE CLAUDE_PID CLAUDE_CODE_SESSION_ID
 export CLAUDE_PID=$$  # the watcher's owner test reads it; the teams below are owned by this shell
 FAKEHOME="$SB/home"; PROJ="$SB/proj"; HS="$SB/hs"; BIN="$SB/bin"

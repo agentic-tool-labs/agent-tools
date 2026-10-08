@@ -13,7 +13,7 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-watcher-test.XXXXXX")"
 SANDBOX="$(cd "$SANDBOX" && pwd)"
 PIDS=()
 cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$SANDBOX"; }
-trap cleanup EXIT
+hermetic_on_exit cleanup
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 HIER_DIR="$SANDBOX/hier"

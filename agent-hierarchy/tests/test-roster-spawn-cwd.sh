@@ -14,7 +14,9 @@ PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-spawn-cwd-test.XXXXXX")"
 export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
-trap 'rm -rf "$SANDBOX"' EXIT
+# The private tmux servers this test starts are killed on every way out, before the sandbox goes.
+hermetic_on_exit '[ -z "$REAL_TMUX" ] || { "$REAL_TMUX" -S "$TMUX_SOCK" kill-server; "$REAL_TMUX" -S "$GUARD_TMUX_SOCK" kill-server; } 2>/dev/null'
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach the real herdr: a stub that fails every call sits first on PATH, and the
 # session's pane environment is dropped. tmux is left real here because T5 and the tmux guard
@@ -124,7 +126,7 @@ mkdir -p "$T5_ELSEWHERE"
 T5_REPO="$SANDBOX/t5-repo"
 setup_repo "$T5_REPO"
 if [ -n "$REAL_TMUX" ]; then
-  TMUX_SOCK="/tmp/ah-w1t5-$$.sock"
+  TMUX_SOCK="$TMUX_TMPDIR/w1t5.sock"
   # The real tmux, pinned to this test's own private socket by a wrapper the guard is told is a fake: a call that
   # reaches it can only reach the private server, whatever the environment says.
   TMUX_DIR="$SANDBOX/privtmux"; mkdir -p "$TMUX_DIR"
@@ -220,7 +222,7 @@ for transport in herdr tmux terminal; do
   case "$transport" in
     herdr) PLAN_OUT=$(HOME="$FAKEHOME" HERDR_ENV=1 node "$H/roster.mjs" create --plan --cwd "$GUARD_REPO" 2>&1) ;;
     tmux)
-      GUARD_TMUX_SOCK="/tmp/ah-w1guard-$$.sock"
+      GUARD_TMUX_SOCK="$TMUX_TMPDIR/w1guard.sock"
       GUARD_TMUX_DIR=""
       if [ -n "$REAL_TMUX" ]; then
         GUARD_TMUX_DIR="$SANDBOX/privtmux-guard"; mkdir -p "$GUARD_TMUX_DIR"

@@ -12,7 +12,7 @@ H="$PLUGIN/hooks"
 HOOK="$H/pretooluse-worktree-gate.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-worktree-gate-test.XXXXXX")"
 export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
 export PATH="$SANDBOX/nolaunch:$PATH"; unset AH_TEAM_FILE

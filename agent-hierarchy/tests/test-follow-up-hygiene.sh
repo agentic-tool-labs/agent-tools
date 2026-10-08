@@ -17,7 +17,7 @@ GATE="$H/pretooluse-route-gate.mjs"
 SKILL="$PLUGIN/skills/agent-team/SKILL.md"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-follow-up-hygiene-test.XXXXXX")"
 export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/claude"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux" "$SANDBOX/nolaunch/claude"
 export PATH="$SANDBOX/nolaunch:$PATH"; unset AGENT_HIERARCHY_DIR

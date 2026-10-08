@@ -13,7 +13,7 @@ H="$PLUGIN/hooks"
 MSG="$H/msg.mjs"
 GATE="$H/pretooluse-msg-gate.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-wtteam-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 MAIN="$SANDBOX/main"

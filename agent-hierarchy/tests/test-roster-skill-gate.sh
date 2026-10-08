@@ -13,7 +13,7 @@ HOOK="$PLUGIN/hooks/pretooluse-roster-skill-gate.mjs"
 ROSTER="$PLUGIN/hooks/roster.mjs"
 PROMPT_HOOK="$PLUGIN/hooks/userpromptsubmit-peer-tracking.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-roster-skill-gate-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 mkdir -p "$FAKEHOME/.claude" "$PROJ/.claude"

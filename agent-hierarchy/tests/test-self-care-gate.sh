@@ -12,7 +12,7 @@ R="$PLUGIN/hooks/roster.mjs"; MG="$PLUGIN/hooks/msg.mjs"
 unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-self-care-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"; PROJ="$SANDBOX/proj"; WT="$SANDBOX/wt"
 HIER="$PROJ/.claude/hierarchy"; MSGS="$HIER/msgs"

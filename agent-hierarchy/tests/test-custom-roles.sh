@@ -9,7 +9,7 @@ PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-custom-roles-test.XXXXXX")"
 export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach the real herdr or tmux: stubs that fail every call sit first on PATH, and the
 # session's pane environment is dropped. The tmux transport case sets its own PATH to a fake.

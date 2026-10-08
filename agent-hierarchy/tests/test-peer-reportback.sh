@@ -15,7 +15,7 @@ UPS="$PLUGIN/hooks/userpromptsubmit-peer-tracking.mjs"
 PTU="$PLUGIN/hooks/posttooluse-peer-resolve.mjs"
 STOP="$PLUGIN/hooks/stop-peer-nudge.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-peer-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 STATE_FILE="$FAKEHOME/.claude/agent-hierarchy.peer-pending.jsonl"

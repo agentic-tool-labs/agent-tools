@@ -14,7 +14,7 @@ PTU="$H/posttooluse-peer-resolve.mjs"
 STOP="$H/stop-peer-nudge.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-besidereq-test.XXXXXX")"
 [ -n "$SANDBOX" ] || exit 1
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 MAIN="$SANDBOX/main"
