@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.125.0]
+
+### Fixed
+
+- The Pane finds the viewer's own teams in two cases it used to miss. A session registers itself (session id and Claude pid) at every prompt, not only at SessionStart, so a session started under an older release, or after `/reload-plugins`, is listed as the owner of its team; the file does not grow, because a row is skipped when the session's newest row already has the pid. In a linked worktree the session is recorded in the main checkout's hierarchy dir as well and that dir's `status.json` is refreshed, and the Pane reads the main checkout's document first, falling back to the worktree's own for a team recorded there by an older release.
+
 ## [0.124.0]
 
 ### Added

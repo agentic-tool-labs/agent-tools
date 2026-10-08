@@ -783,7 +783,7 @@ export function rosterLevelPaths(cwd) {
  * the same `.git`-file mechanism but resolves under `.git/modules/`, so the
  * `worktrees` check below is what keeps submodules out.
  */
-function mainCheckoutRoot(worktreeRoot) {
+export function mainCheckoutRoot(worktreeRoot) {
   const dotgit = join(worktreeRoot, ".git");
   let raw;
   try {

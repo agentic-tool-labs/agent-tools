@@ -119,6 +119,70 @@ owned - 2147483646 null "[$ARCH]"
 cli env CLAUDE_PID=$$ node "$H/roster.mjs" adopt --orchestrator-pid "$OTHER" --cwd "$PROJ" >/dev/null 2>&1
 check "adopt naming another pid binds nothing: no row" '[ ! -e "$HD/session-pids.jsonl" ]'
 
+# ---- prompt-time registration (UserPromptSubmit, activity.mjs)
+# phook <env assignments...> -- <payload json>...: one driver process whose pid is every hook run's parent. With
+# DRV_TEAM=<path> the driver first writes a live default team there, owned by its own pid. Prints the driver pid.
+phook() {
+  local envs=()
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done; shift
+  env "${envs[@]}" node -e '
+    const { spawnSync } = require("child_process");
+    const fs = require("fs");
+    if (process.env.DRV_TEAM) fs.writeFileSync(process.env.DRV_TEAM, JSON.stringify({ team_id: "t-drv", created: new Date().toISOString(), orchestrator: { session_id: null, pid: process.pid }, members: [] }));
+    for (const p of process.argv.slice(1)) spawnSync("node", [process.env.HOOK], { input: p, env: process.env, stdio: ["pipe", "ignore", "ignore"] });
+    process.stdout.write(String(process.pid));' "$@"
+}
+rows_of() { node -e 'const f=process.argv[1]; let t=""; try{t=require("fs").readFileSync(f,"utf8")}catch{}; process.stdout.write(String(t.split("\n").filter(Boolean).length))' "$1"; }
+owners_of() { node -e 'const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(o.owners.map((x) => x.sessions.join()).join(";") + "|" + o.member_sessions.join())' "$1"; }
+
+pool "$SANDBOX/pr"
+P=$(phook HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" HOOK="$H/activity.mjs" DRV_TEAM="$HD/team.json" -- "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-prompt\",\"cwd\":\"$PROJ\"}")
+check "a prompt from a session with no row registers it: its pid row exists and the same run's status.json lists it as owner" '[ "$(owners_of "$HD/status.json")" = "sess-prompt|" ] && [ "$(grep -c "\"pid\":$P" "$HD/session-pids.jsonl")" = 1 ]'
+
+pool "$SANDBOX/pr-grow"
+phook HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" HOOK="$H/activity.mjs" DRV_TEAM="$HD/team.json" -- $(for i in 1 2 3 4 5; do for s in a b; do echo "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-$s\",\"cwd\":\"$PROJ\"}"; done; done | tr '\n' ' ') >/dev/null
+check "two sessions alternating five prompts each leave exactly two rows" '[ "$(rows_of "$HD/session-pids.jsonl")" = 2 ]'
+
+pool "$SANDBOX/pr-sub"
+phook HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" HOOK="$H/activity.mjs" -- "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-sub\",\"cwd\":\"$PROJ\",\"agent_id\":\"a1\",\"agent_type\":\"reviewer\"}" >/dev/null
+check "a subagent prompt writes no row" '[ ! -e "$HD/session-pids.jsonl" ]'
+
+pool "$SANDBOX/pr-nodir"
+rm -rf "$HD"
+phook HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" HOOK="$H/activity.mjs" -- "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-nd\",\"cwd\":\"$PROJ\"}" >/dev/null
+check "a prompt with no hierarchy dir creates nothing" '[ ! -e "$HD" ]'
+
+pool "$SANDBOX/pr-pid"
+row sess-p 111; row sess-q 222; row sess-p 333; row sess-p 333; row sess-q 222
+check "a new pid for a known session appends once; repeats of any session's newest pid do not" '[ "$(rows_of "$HD/session-pids.jsonl")" = 3 ]'
+
+pool "$SANDBOX/pr-member"
+REF="2026-01-01T12:00:00.000Z"
+MEM='{"role":"reviewer","name":"demo-reviewer","route":"peer","kind":"claude","transport_id":"w1:p2"}'
+owned - $$ null "[$MEM]"; row sess-boss $$
+up demo-reviewer reviewer sess-member w1:p2
+phook HOME="$FAKEHOME" AGENT_HIERARCHY_DIR="$HD" HOOK="$H/activity.mjs" -- "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-member\",\"cwd\":\"$PROJ\"}" >/dev/null
+check "the member's own prompt wrote a row" 'grep -q "\"sess-member\"" "$HD/session-pids.jsonl"'
+check "...but it is in no owner's sessions and stays in member_sessions" '[ "$(owners_of "$HD/status.json")" = "sess-boss|sess-member" ]'
+
+# A real linked worktree: the main checkout holds the team, the session prompts from the worktree.
+WT_MAIN="$SANDBOX/wtmain"; WT="$SANDBOX/wt"
+mkdir -p "$WT_MAIN"
+git -C "$WT_MAIN" init -q && git -C "$WT_MAIN" -c user.email=a@b -c user.name=n commit -q --allow-empty -m i && git -C "$WT_MAIN" worktree add -q "$WT" -b wtb
+mkdir -p "$WT_MAIN/.claude/hierarchy" "$WT/.claude/hierarchy" "$SANDBOX/wthome/.claude"
+WT_MAIN="$(cd "$WT_MAIN" && pwd -P)"; WT="$(cd "$WT" && pwd -P)"
+phook HOME="$SANDBOX/wthome" HOOK="$H/activity.mjs" DRV_TEAM="$WT_MAIN/.claude/hierarchy/team.json" -- "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-wt\",\"cwd\":\"$WT\"}" >/dev/null
+check "a prompt from a linked worktree writes a row in both pools" '[ "$(rows_of "$WT/.claude/hierarchy/session-pids.jsonl")" = 1 ] && [ "$(rows_of "$WT_MAIN/.claude/hierarchy/session-pids.jsonl")" = 1 ]'
+check "...and the main checkout's status.json lists the session as owner" '[ "$(owners_of "$WT_MAIN/.claude/hierarchy/status.json")" = "sess-wt|" ]'
+rm -f "$WT_MAIN/.claude/hierarchy/session-pids.jsonl" "$WT/.claude/hierarchy/session-pids.jsonl"
+phook HOME="$SANDBOX/wthome" HOOK="$H/sessionstart.mjs" DRV_TEAM="$WT_MAIN/.claude/hierarchy/team.json" -- "{\"session_id\":\"sess-wt2\",\"source\":\"startup\",\"cwd\":\"$WT\"}" >/dev/null
+check "SessionStart in a linked worktree writes a row in both pools, and the main status.json lists the session" '[ "$(rows_of "$WT/.claude/hierarchy/session-pids.jsonl")" = 1 ] && [ "$(rows_of "$WT_MAIN/.claude/hierarchy/session-pids.jsonl")" = 1 ] && [ "$(owners_of "$WT_MAIN/.claude/hierarchy/status.json")" = "sess-wt2|" ]'
+
+rm -f "$WT_MAIN/.claude/hierarchy/session-pids.jsonl"
+pool "$SANDBOX/pr-env"
+phook HOME="$SANDBOX/wthome" AGENT_HIERARCHY_DIR="$HD" HOOK="$H/activity.mjs" -- "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-env\",\"cwd\":\"$WT\"}" >/dev/null
+check "with AGENT_HIERARCHY_DIR set, a worktree prompt writes the pool only" '[ "$(rows_of "$HD/session-pids.jsonl")" = 1 ] && [ ! -e "$WT_MAIN/.claude/hierarchy/session-pids.jsonl" ]'
+
 echo "---"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

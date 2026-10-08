@@ -1,6 +1,8 @@
 import { test, expect } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { vectors } from './vectors.ts'
+import { mainVectors } from './main-vectors.ts'
+import { mainCheckoutRoot } from '../view.ts'
 import { anywayQuestion, bandButtons, bandLine, BORDER_MIN, closeToast, DISMISS_BUTTON, dismissQuestion, failReason, inFlight, ownedTeams, readPlan, teamLabels, scope, toastMs, cut, nullCause, PANE_BUTTON, keepSeen, paneRows, paneSections, STYLE, parseDoc, SIZE_CAP, statusText, utf8Bytes, viewModel } from '../view.ts'
 
 const T0 = '2026-01-01T12:00:00.000Z'
@@ -795,4 +797,24 @@ test('closeToast: dismissed only for exit 0 with closed true and nothing still l
   expect(closeToast('t', 1, j({ closed: true }), '')).toBe('Could not dismiss t: close failed')
   expect(closeToast('t', 0, 'not json', '')).toBe('Could not dismiss t: close failed')
   expect(closeToast('t', 0, '[]', '')).toBe('Could not dismiss t: close failed')
+})
+
+// The shared cases tests/gen-mod-main-vectors.mjs computes from hooks/lib-config.mjs `mainCheckoutRoot`: the mod's mirror gives the same answer for each.
+for (const v of mainVectors) {
+  test(`mainCheckoutRoot mirrors lib-config: ${v.name}`, async () => {
+    const io = {
+      kind: async (p: string) => (p in v.files ? 'file' : v.dirs.includes(p) ? 'directory' : null),
+      read: async (p: string) => { if (!(p in v.files)) throw new Error('ENOENT'); return v.files[p] },
+    }
+    expect(await mainCheckoutRoot(v.root, io)).toBe(v.expected)
+  })
+}
+
+test('mainCheckoutRoot: the vectors include both a root and a null answer, so the loop cannot pass vacuously', () => {
+  expect(mainVectors.some((v) => v.expected !== null)).toBe(true)
+  expect(mainVectors.some((v) => v.expected === null)).toBe(true)
+})
+
+test('mainCheckoutRoot: a non-POSIX root resolves no main checkout', async () => {
+  expect(await mainCheckoutRoot('C:\\work\\wt', { kind: async () => 'file', read: async () => 'gitdir: C:\\main\\.git\\worktrees\\wt' })).toBe(null)
 })

@@ -126,8 +126,54 @@ export function nullCause(doc: Doc | null, nowMs: number, sessionId: string): st
   if (nowMs >= doc.expiresMs) return 'expired'
   if (doc.memberSessions.includes(sessionId)) return 'member session'
   if (doc.enabled === false) return 'hierarchy off'
-  if (scope(doc, sessionId) === null) return 'no team owned by this session'
+  if (scope(doc, sessionId) === null) return NO_OWNED_TEAM
   return 'not visible'
+}
+
+/** The `nullCause` for a document that lists no team owned by the viewing session. */
+export const NO_OWNED_TEAM = 'no team owned by this session'
+
+// POSIX path helpers for mainCheckoutRoot; a Windows path never starts with `/`, so it resolves no main checkout.
+const normalizePath = (p: string): string => {
+  const out: string[] = []
+  for (const s of p.split('/')) {
+    if (s === '' || s === '.') continue
+    if (s === '..') out.pop()
+    else out.push(s)
+  }
+  return '/' + out.join('/')
+}
+const resolveFrom = (base: string, p: string): string => normalizePath(p.startsWith('/') ? p : base + '/' + p)
+const baseName = (p: string): string => p.slice(p.lastIndexOf('/') + 1)
+const dirName = (p: string): string => { const i = p.lastIndexOf('/'); return i <= 0 ? '/' : p.slice(0, i) }
+
+/**
+ * The main checkout's root when `root` (a directory holding `.git`) is a linked worktree, else null. A mirror of
+ * `mainCheckoutRoot` in hooks/lib-config.mjs, which the mod cannot import; tests/gen-mod-main-vectors.mjs
+ * generates the shared cases that pin the two to the same answers. `io.kind` answers `file`, `directory` or null.
+ */
+export async function mainCheckoutRoot(root: string, io: { kind: (path: string) => Promise<string | null>; read: (path: string) => Promise<string> }): Promise<string | null> {
+  if (!root.startsWith('/')) return null
+  let raw: string
+  try {
+    if ((await io.kind(root + '/.git')) !== 'file') return null
+    raw = await io.read(root + '/.git')
+  } catch {
+    return null
+  }
+  const m = /^gitdir:\s*(.+)$/m.exec(raw)
+  if (m === null) return null
+  const gitdir = resolveFrom(root, m[1].trim())
+  if (baseName(dirName(gitdir)) !== 'worktrees') return null
+  let commonDir: string
+  try {
+    commonDir = resolveFrom(gitdir, (await io.read(gitdir + '/commondir')).trim())
+  } catch {
+    commonDir = dirName(dirName(gitdir))
+  }
+  if (baseName(commonDir) !== '.git') return null
+  const main = dirName(commonDir)
+  return main !== '' && main !== root ? main : null
 }
 
 /**

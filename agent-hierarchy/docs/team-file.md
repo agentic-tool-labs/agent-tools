@@ -16,8 +16,14 @@ The message pool is its sibling: `<hierarchy dir>/msgs/`.
 A team file has one home: the hierarchy dir of the repo's **main checkout**. A team spawned
 from a linked worktree is recorded there too, whatever `--cwd` the spawn was given, so a team
 whose members run in the main checkout and in worktrees is still one file. Under
-`AGENT_HIERARCHY_DIR`, or outside git, the home is that dir. `msgs/`, `peers.jsonl`, `session-pids.jsonl`, gates and
+`AGENT_HIERARCHY_DIR`, or outside git, the home is that dir. `msgs/`, `peers.jsonl`, gates and
 status stay per pool.
+
+`session-pids.jsonl` is written to the pool **and**, from a linked worktree, to the main checkout's dir: a session
+records its row at SessionStart and again at every prompt (skipped when the session's newest row already has the
+same pid), and the main checkout's `status.json` is refreshed too. The Pane reads the main checkout's `status.json`
+first and falls back to the worktree's own only when the main one does not list the viewer as owning a team (a
+legacy team recorded in the worktree's own dir).
 
 A team recorded in a worktree's own dir by an older release is **legacy**: it is read and
 updated where it is (never moved), and teardown and `teams` also read it when a team has

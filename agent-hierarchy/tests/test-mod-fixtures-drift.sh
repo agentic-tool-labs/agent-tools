@@ -48,6 +48,13 @@ check "a removed fixture is drift" '! fresh "$SANDBOX/fx" "$SANDBOX/fixtures.ts"
 reset_copy; printf ' ' >> "$SANDBOX/fixtures.ts"
 check "a hand edit to fixtures.ts is drift" '! fresh "$SANDBOX/fx" "$SANDBOX/fixtures.ts"'
 
+# mod/tests/main-vectors.ts is the shared cases for the mod's mirror of lib-config's mainCheckoutRoot; it is generated
+# from that function, so a change to the function (or a hand edit to the file) cannot go unseen.
+VECTORS="$PLUGIN/mod/tests/main-vectors.ts"
+check "mod/tests/main-vectors.ts is byte-identical to a fresh generation from lib-config's mainCheckoutRoot" 'node "$PLUGIN/tests/gen-mod-main-vectors.mjs" | cmp -s - "$VECTORS"'
+cp "$VECTORS" "$SANDBOX/main-vectors.ts"; printf ' ' >> "$SANDBOX/main-vectors.ts"
+check "a hand edit to main-vectors.ts is drift" '! node "$PLUGIN/tests/gen-mod-main-vectors.mjs" | cmp -s - "$SANDBOX/main-vectors.ts"'
+
 echo "---"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
