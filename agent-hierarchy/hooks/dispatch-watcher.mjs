@@ -48,6 +48,26 @@ const pollMs = Number(process.env.AH_WATCH_POLL_MS) > 0 ? Number(process.env.AH_
 
 const fmtAge = (sec) => (sec < 3600 ? `${Math.floor(sec / 60)}m` : `${Math.floor(sec / 3600)}h`);
 
+/**
+ * The distinct `to_addr` of this session's unreported dispatches that belong to the member `name`: its
+ * request was written for that name, or it was sent to the name itself. The liveness clock matches
+ * `heard` rows by `to_addr`, and a member addressed by socket has no other link to its name.
+ */
+function addressesOf(name) {
+  const out = new Set();
+  for (const row of latestDispatchRows(sessionId)) {
+    if (!row.to_addr || reportShown(sessionId, row.request_id)) continue;
+    let mine = row.to_addr === name;
+    if (!mine && row.path) {
+      const e = listExchanges(dirname(dirname(row.path))).find((x) => x.id === row.request_id);
+      const fm = e && e.open && (readMsgFile(e.request.path) || {}).fm;
+      mine = Boolean(fm) && fm.to_name === name;
+    }
+    if (mine) out.add(row.to_addr);
+  }
+  return out;
+}
+
 /** The events due now across this session's watchable dispatches; each also writes its own store row. */
 function evaluate(now) {
   const events = [];
@@ -258,7 +278,7 @@ function recoveryEvents(now) {
     if (sub.own) {
       events.push({ request_id: null, kind: "RESUME", text: `ah watcher: ${head}\n${RESUME_PARAGRAPH}\n${restart}`, extra: { subject: sub.id, error, streak, failed_at: failedAt } });
     } else {
-      appendPeerRecord({ type: "heard", session_id: sessionId, from: sub.name, ts: new Date().toISOString() });
+      for (const to of addressesOf(sub.name)) appendPeerRecord({ type: "heard", session_id: sessionId, from: to, request: null, ts: new Date().toISOString() });
       events.push({
         request_id: null,
         kind: "RESUME",
