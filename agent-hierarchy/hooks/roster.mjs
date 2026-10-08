@@ -155,6 +155,7 @@
 
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
+import { guardShellCommand, muxExec } from "./lib-mux.mjs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -2405,7 +2406,7 @@ function removeConfigMember(name, key = rosterArg, { sideEffect = false } = {}) 
 function detectTransport() {
   if (process.env.HERDR_ENV === "1") return "herdr";
   try {
-    execFileSync("tmux", ["list-sessions"], { stdio: "ignore" });
+    muxExec("tmux", ["list-sessions"], { stdio: "ignore" });
     return "tmux";
   } catch {
     return "terminal";
@@ -2947,7 +2948,8 @@ function nextSplit({ mode, paneCount, self, created, geometry }) {
   return { target, direction };
 }
 
-// Sole exec site for herdr (spec 0002 §11.3's grep assertion; spec 0005 extends the permitted
+// Sole exec site for herdr, run through muxExec (hooks/lib-mux.mjs, the guard that keeps a test off the real
+// binary) (spec 0002 §11.3's grep assertion; spec 0005 extends the permitted
 // callers to `create --spawn` alongside `layout-splits` — see tests/test-roster-layout-splits.sh).
 function herdrCall(args, opts = {}) {
   // A call that waits on an agent's turn (`agent prompt --wait`, `agent wait`) carries its own
@@ -2955,7 +2957,7 @@ function herdrCall(args, opts = {}) {
   const timeout = opts.timeoutMs || Number(process.env.AH_HERDR_TIMEOUT_MS || 10000);
   let stdout;
   try {
-    stdout = execFileSync("herdr", args, { encoding: "utf8", timeout, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    stdout = muxExec("herdr", args, { encoding: "utf8", timeout, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     // Spec 0043 §1.6: `herdr agent get` on a missing name exits 1 and writes its error as JSON
     // on STDOUT, not stderr — so the failure path has to be inspectable, not just thrown. Kept
@@ -3635,6 +3637,7 @@ function getMembersPlan(dir) {
 
 function runShell(commandString, opts = {}) {
   return new Promise((resolvePromise) => {
+    guardShellCommand(commandString);
     execFile("/bin/sh", ["-c", commandString], { encoding: "utf8", maxBuffer: 1024 * 1024, cwd: opts.cwd }, (err, stdout, stderr) => {
       resolvePromise({ err, stdout, stderr });
     });
@@ -4011,7 +4014,7 @@ async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, calle
   } else if (transport === "tmux") {
     for (let i = 0; i < peerMembers.length; i++) {
       try {
-        panes.push(execFileSync("tmux", ["new-window", "-P", "-F", "#{pane_id}", "-c", splitCwd], { encoding: "utf8" }).trim());
+        panes.push(muxExec("tmux", ["new-window", "-P", "-F", "#{pane_id}", "-c", splitCwd], { encoding: "utf8" }).trim());
       } catch (err) {
         // Mirrors runLayoutLoop's herdr-path partial(): preserve the windows already created
         // rather than losing them to the generic top-level catch (spec 0005 review, tmux gap).
@@ -4063,7 +4066,7 @@ function closeMemberPane(transport, transportId) {
     return;
   }
   if (transport === "tmux") {
-    execFileSync("tmux", ["kill-pane", "-t", transportId]);
+    muxExec("tmux", ["kill-pane", "-t", transportId]);
     return;
   }
   throw new Error(`disband --close: transport ${JSON.stringify(transport)} has no addressable pane to close`);
@@ -4487,7 +4490,7 @@ const sleepMs = (ms) => new Promise((done) => setTimeout(done, ms));
 function livePaneIds(transport) {
   if (transport === "herdr") return new Set(queryHerdrTopology(true).map((a) => a.pane_id));
   if (transport === "tmux") {
-    const listed = execFileSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+    const listed = muxExec("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
     return new Set(listed.split("\n").filter(Boolean));
   }
   throw new Error(`transport ${JSON.stringify(transport)} has no pane list to query`);

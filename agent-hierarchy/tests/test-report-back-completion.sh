@@ -3,12 +3,13 @@
 # HOME-redirected; real config and real state are never touched.
 # Usage: bash tests/test-report-back-completion.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-report-back-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 HIER_DIR="$SANDBOX/hier"

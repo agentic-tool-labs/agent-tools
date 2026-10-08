@@ -4,15 +4,17 @@
 # worktree, a scratch HOME and a PATH herdr shim; no real herdr, claude or repo is touched.
 # Usage: bash tests/test-roster-team-home.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
-unset AH_TEAM_FILE HERDR_ENV HERDR_PANE_ID TMUX TMUX_PANE CLAUDE_PID AGENT_HIERARCHY_DIR
+unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 T="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-team-home-test.XXXXXX")"
 [ -n "$T" ] || exit 9
 T="$(cd "$T" && pwd -P)"
+export AH_TEST_FAKE_BIN="$T/nolaunch:$T/bin"
 SLEEPER=""
 cleanup() { [ -n "$SLEEPER" ] && kill "$SLEEPER" 2>/dev/null; rm -rf "$T"; }
-trap cleanup EXIT
+hermetic_on_exit cleanup
 NODE_BIN="$(command -v node)"
 NODE_DIR="$(dirname "$NODE_BIN")"
 PASS=0; FAIL=0

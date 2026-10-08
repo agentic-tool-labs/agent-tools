@@ -6,6 +6,7 @@
 # HOME-redirected; every repo lives in a throwaway sandbox.
 # Usage: bash tests/test-pipeline-merge.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 HOOK="$PLUGIN/hooks/pretooluse-push-guard.mjs"
@@ -14,7 +15,7 @@ MSG="$PLUGIN/hooks/msg.mjs"
 SKILL="$PLUGIN/skills/autonomous-pipeline/SKILL.md"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-merge-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME/.claude"

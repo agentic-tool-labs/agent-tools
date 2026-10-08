@@ -5,18 +5,20 @@
 # HOME-redirected, with a scripted fake herdr: nothing reaches a real herdr, codex, gate state or
 # config. Usage: bash tests/test-chain-roles-other-harnesses.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 . "$PLUGIN/tests/lib-intent.sh"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-other-harness-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+export AH_TEST_FAKE_BIN="$SANDBOX/bin:$SANDBOX/nolaunch"
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach a real herdr, tmux or codex: stubs that fail every call sit first on PATH.
 mkdir -p "$SANDBOX/nolaunch"
 for b in herdr tmux codex; do printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/$b"; chmod +x "$SANDBOX/nolaunch/$b"; done
 export PATH="$SANDBOX/nolaunch:$PATH"
-unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE CODEX_HOME CLAUDE_CODE_SESSION_ID AGENT_HIERARCHY_DIR AH_HERDR_READY_WAIT_MS
+unset AH_TEAM_FILE CODEX_HOME CLAUDE_CODE_SESSION_ID AGENT_HIERARCHY_DIR AH_HERDR_READY_WAIT_MS
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/myrepo"
@@ -929,6 +931,12 @@ rm -f "$HIER/gates.jsonl"
 k15 approval
 r "" answer myrepo-architect --prompt approval --choice deny --screen-hash "$AH"
 check "K15: deny sends esc; the prompt still shown after is answered, reported, keys sent once" '[ "$(keys_sent)" = "[\"esc\"]" ] && [ "$(jo o.status)" = answered ] && [ "$(jo o.prompt_after)" = approval ]'
+(echo "  Claude Code will automatically deny this request in 1:39"; cat "$SCREENS/approval.txt") > "$SCREENS/approval-cd1.txt"
+(echo "  Claude Code will automatically deny this request in 1:12"; cat "$SCREENS/approval.txt") > "$SCREENS/approval-cd2.txt"
+CD1=$(screen_hash approval-cd1)
+k15 approval-cd2
+r "" answer myrepo-architect --prompt approval --choice approve --screen-hash "$CD1"
+check "V5: a countdown that ticked between the read and the answer: the choice is sent once" '[ "$RC" -eq 0 ] && [ "$(jo o.status)" = answered ] && [ "$(keys_sent)" = "[\"1\"]" ]'
 TH=$(screen_hash trust)
 k15 trust "" "$IDLE"
 r "" answer myrepo-architect --prompt trust-dialog --choice trust --screen-hash "$TH"

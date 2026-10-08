@@ -4,6 +4,7 @@
 # passes the msg gate from the worktree. HOME-redirected; real state untouched.
 # Usage: bash tests/test-msg-worktree-team.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-intent.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
@@ -12,7 +13,7 @@ H="$PLUGIN/hooks"
 MSG="$H/msg.mjs"
 GATE="$H/pretooluse-msg-gate.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-wtteam-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 MAIN="$SANDBOX/main"

@@ -52,7 +52,7 @@ install records — hence `[].concat(p[k])[0]`.
 - One simple command. No `cd … &&` prefix, no `VAR=1` prefix, no pipe, no redirection, no `$VAR`
   and no command substitution — `--cwd` and `--orchestrator-pid` exist precisely so nothing needs
   shell expansion. The permission hook below recognises only this form.
-- JSON arguments (`--args`, `--verified`, `--created`, `--geometry`) travel **single-quoted**.
+- JSON arguments (`--args`, `--verified`, `--created`, `--geometry`, `--body`) travel **single-quoted**.
 - Output is always JSON. A non-zero exit means the JSON or the stderr line says why. Exit 3 is a
   *partial* result (`layout-splits`, `create`): real work happened, not all of it — read the JSON.
 - `--help`, or no verb at all, prints the script's usage block and exits 0.
@@ -117,6 +117,7 @@ read the fresh root line, or resolve it with the recipe above.
 |---|---|
 | new message file | `node <R>/hooks/msg.mjs new --to <role> --from <role> --slug <s> [--to-name <n>] [--from-name <n>] [--parent <id>] [--reason context\|second-opinion\|parallel] [--eta small\|medium\|large] [--type request\|response] [--id <id>] [--team <t>] [--req <abs request path>]` |
 | answer a brief (response file) | `node <R>/hooks/msg.mjs new --type response --id <id> --from <your role> --req <abs request path> --cwd <abs cwd>` — `--from` is your own role, not the request's `from`; `--to` is derived from the request |
+| write a response body | `node <R>/hooks/msg.mjs fill --id <id> --from <your role> --req <abs request path> --body '<JSON string>' --cwd <abs cwd>` — replaces everything after the frontmatter of the response `new --type response` made beside that request (`fill` never creates one), keeping the frontmatter byte for byte; `--from` must equal the response's `from`. The body is one JSON string: `\n` for a newline and `\u0027` for a single quote, since a literal `'` cannot sit inside the single quotes; at most 64 KiB, and no line that is exactly `---`. A body without a trailing newline gets one, and one that does not start with an empty line gets an empty line after the frontmatter, as `new`'s skeleton has. The permission hook runs `fill` without a prompt only for a session whose own role (the one its hook payload names) equals `--from`; a session with no known role, or another role's `--from`, is denied. Repeatable: each run replaces the body. Prints `{id, path, bytes}` (`bytes` is the size of the file written). Any role may use it for a response whose `from` it names; the Architect and other self-care roles do not (their shell refuses it) |
 | list exchanges | `node <R>/hooks/msg.mjs list [--open\|--closed\|--all] [--to <role>] [--team <t>] [--plain]` |
 | downstream dispatches | `node <R>/hooks/msg.mjs downstream [--root-name <n>]` |
 | index one message file | `node <R>/hooks/msg.mjs index <abs path>` |

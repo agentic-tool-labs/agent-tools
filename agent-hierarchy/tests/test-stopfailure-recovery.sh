@@ -5,13 +5,14 @@
 # HOME- and hierarchy-redirected; real state untouched.
 # Usage: bash tests/test-stopfailure-recovery.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-stopfailure-test.XXXXXX")"
 [ -n "$SB" ] && [ -d "$SB" ] || { echo "mktemp failed"; exit 1; }
 SB="$(cd "$SB" && pwd -P)"
 sleep 300 & OTHER=$!
-trap 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"' EXIT
+hermetic_on_exit 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"'
 unset AH_TEAM_FILE CLAUDE_PID CLAUDE_CODE_SESSION_ID AGENT_HIERARCHY_DIR
 export HOME="$SB/home" CLAUDE_PID=$$
 PROJ="$SB/proj"; HD="$PROJ/.claude/hierarchy"

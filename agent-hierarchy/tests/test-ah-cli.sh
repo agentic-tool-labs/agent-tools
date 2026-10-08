@@ -4,14 +4,16 @@
 # HOME-redirected; real state untouched.
 # Usage: bash tests/test-ah-cli.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-ah-cli-test.XXXXXX")"
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch"
 # No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH, and
 # the session's pane environment is dropped. A wrapper that sets PATH to its own fakes still wins.
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
-export PATH="$SANDBOX/nolaunch:$PATH"; unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE
+export PATH="$SANDBOX/nolaunch:$PATH"; unset AH_TEAM_FILE
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 mkdir -p "$FAKEHOME/.claude"
 PASS=0; FAIL=0
@@ -59,6 +61,19 @@ ok(`node ${M} list --open --to implementor --cwd /repo`, { script: "msg", verb: 
 ok(`node ${M} index /repo/.claude/hierarchy/msgs/x--request.md`, { script: "msg", verb: "index", positional: ["/repo/.claude/hierarchy/msgs/x--request.md"] });
 ok(`node "${R}" show --cwd /repo`, { script: "roster", verb: "show" });            // wholly double-quoted path
 ok(`node \x27${R}\x27 show --cwd "/re po"`, { script: "roster", flags: {"cwd": "/re po"} }); // quoted arg with a space
+// spec 0090: msg.mjs fill carries its report as one single-quoted JSON string. Everything but a single quote may sit inside
+// the quotes (a newline is the two characters backslash-n, a single quote is backslash-u0027), and none of it is expanded.
+const BS = String.fromCharCode(92);
+const FILL_BODY = "\"line one " + BS + "n semi; hash # dollar $x tick" + BS + "u0027s pipe | amp & lt < gt > paren ( ) brace { } star * q ? tilde ~ \"";
+const FILL_REQ = "/repo/.claude/hierarchy/msgs/20261008-000000-aaaa--reviewer--s--request.md";
+const FILL_HEAD = `node ${M} fill --id 20261008-000000-aaaa --from reviewer --req ${FILL_REQ} --body `;
+ok(FILL_HEAD + "\x27" + FILL_BODY + "\x27 --cwd /repo", { script: "msg", verb: "fill", flags: {"id": "20261008-000000-aaaa", "from": "reviewer", "req": FILL_REQ, "body": FILL_BODY, "cwd": "/repo"} });
+no(FILL_HEAD + "\x27\"a\"\x27 | tee /tmp/x --cwd /repo");          // a pipe outside the quotes
+no(FILL_HEAD + "\x27\"a\"\x27 > /tmp/x --cwd /repo");              // a redirection outside the quotes
+no(FILL_HEAD + "$(id) --cwd /repo");                              // a substitution outside the quotes
+no(FILL_HEAD + "\x27\"a\"\x27 ; id");                              // a second command
+no(FILL_HEAD + "\x27\"a\nb\"\x27 --cwd /repo");                    // a literal newline inside the quotes: the command is one line
+no(FILL_HEAD + "\"a\"; id --cwd /repo");                          // the body unquoted, with a metacharacter
 
 // rejections — every one must fail closed
 no(`cd /x && node ${R} show --cwd /repo`);
@@ -146,6 +161,45 @@ allow_hook "node $INST/A/hooks/roster.mjs whoami --team alpha --cwd /repo"
 check "T2: whoami is allowed" '[ "$RC" -eq 0 ] && is_allow'
 allow_hook "node $INST/A/hooks/msg.mjs list --open --cwd /repo"
 check "T2: msg.mjs is allowed too" '[ "$RC" -eq 0 ] && is_allow'
+BS=$(printf '\134')
+FILL_REQ="/repo/.claude/hierarchy/msgs/20261008-000000-aaaa--reviewer--s--request.md"
+FILL_CMD="node $INST/A/hooks/msg.mjs fill --id 20261008-000000-aaaa --from reviewer --req $FILL_REQ --body"
+# allow_hook_as <command> <agent_type or -> [session id]: the same payload with the role the session runs as.
+allow_hook_as() {
+  OUT=$(node -e 'const o = { session_id: process.argv[3] || "s1", cwd: "/repo", tool_name: "Bash", tool_input: { command: process.argv[1] } }; if (process.argv[2] !== "-") o.agent_type = process.argv[2]; process.stdout.write(JSON.stringify(o))' "$1" "$2" "$3" \
+    | HOME="$FAKEHOME" node "$AHOOK" 2>&1); RC=$?
+}
+is_deny() { case "$OUT" in *'"permissionDecision":"deny"'*) return 0;; *) return 1;; esac; }
+allow_hook_as "$FILL_CMD '\"line one${BS}nline two${BS}u0027s; \$x | y # z\"' --cwd /repo" ah:reviewer
+check "T2 (spec 0090): msg.mjs fill with a single-quoted JSON body, from a direct reviewer whose --from is reviewer → allow" '[ "$RC" -eq 0 ] && is_allow'
+BIGBODY=$(node -e 'process.stdout.write("\"" + "a".repeat(65536) + "\"")')
+allow_hook_as "$FILL_CMD '$BIGBODY' --cwd /repo" ah:reviewer
+check "T2 (spec 0090): ...a 64 KiB body is allowed too: the hook has no length cap" '[ "$RC" -eq 0 ] && is_allow'
+allow_hook_as "$FILL_CMD '\"a\"' --cwd /repo" ah:implementor
+check "T2 (spec 0090) forged --from: a direct implementor's fill --from reviewer → deny, naming the mismatch" '[ "$RC" -eq 0 ] && is_deny && printf %s "$OUT" | grep -q "may only write a response from your own role (implementor); --from names reviewer"'
+allow_hook_as "node $INST/A/hooks/msg.mjs fill --id 20261008-000000-aaaa --from implementor --req $FILL_REQ --body '\"a\"' --cwd /repo" ah:reviewer
+check "T2 (spec 0090) another role's file: a direct reviewer's fill --from implementor → deny, naming the mismatch" '[ "$RC" -eq 0 ] && is_deny && printf %s "$OUT" | grep -q "(reviewer); --from names implementor"'
+allow_hook_as "node $INST/A/hooks/msg.mjs fill --id 20261008-000000-aaaa --req $FILL_REQ --body '\"a\"' --cwd /repo" ah:reviewer
+check "T2 (spec 0090): a fill with no --from at all → deny" '[ "$RC" -eq 0 ] && is_deny && printf %s "$OUT" | grep -q "names nothing"'
+allow_hook_as "$FILL_CMD '\"a\"' --cwd /repo" - s-nobody
+check "T2 (spec 0090) unknown role: a payload with no role and no persisted one → deny 'needs a known ah role session'" '[ "$RC" -eq 0 ] && is_deny && printf %s "$OUT" | grep -q "needs a known ah role session"'
+HOME="$FAKEHOME" node --input-type=module -e "const S = await import('$INST/A/hooks/lib-session-role.mjs'); S.writeSessionRole('s-persisted', 'reviewer');"
+allow_hook_as "$FILL_CMD '\"a\"' --cwd /repo" - s-persisted
+check "T2 (spec 0090) attributed but not direct: a session whose role is only the persisted one (no role in the payload) → deny" '[ "$RC" -eq 0 ] && is_deny'
+allow_hook_as "$FILL_CMD '\"a\"' --cwd /repo" ah:reviewer s-persisted
+check "T2 (spec 0090): ...whereas the same session with the role in the payload → allow (nearest non-match)" '[ "$RC" -eq 0 ] && is_allow'
+allow_hook_as "$FILL_CMD '\"a\"' --cwd /repo" task-gopher:task-gopher s-persisted
+check "T2 (spec 0090): a subagent of the reviewer session (another agent type, same session id) → deny" '[ "$RC" -eq 0 ] && is_deny'
+allow_hook_as "node $INST/A/hooks/msg.mjs list --open --cwd /repo" ah:implementor
+check "T2 (spec 0090): the role binding is for fill alone: msg.mjs list from the same implementor → allow" '[ "$RC" -eq 0 ] && is_allow'
+allow_hook_as "$FILL_CMD '\"a\"' | tee /tmp/ah-test-out" ah:reviewer
+check "T2 (spec 0090): fill with a pipe outside the quotes → no output, whatever the role" '[ -z "$OUT" ]'
+allow_hook_as "$FILL_CMD '\"a\"' > /tmp/ah-test-out" ah:implementor
+check "T2 (spec 0090): fill with a redirection outside the quotes → no output (not parsed, so no decision)" '[ -z "$OUT" ]'
+allow_hook_as "$FILL_CMD \$(id) --cwd /repo" ah:reviewer
+check "T2 (spec 0090): fill with a command substitution outside the quotes → no output" '[ -z "$OUT" ]'
+allow_hook_as "node $SANDBOX/outside/hooks/msg.mjs fill --id 20261008-000000-aaaa --from reviewer --req $FILL_REQ --body '\"a\"' --cwd /repo" ah:implementor
+check "T2 (spec 0090): fill from a copy outside the root → no output (normal prompt), the binding is only for the plugin's own script" '[ -z "$OUT" ]'
 allow_hook "node $SANDBOX/outside/hooks/roster.mjs show --cwd /repo"
 check "T2: a copy outside the root and its siblings → no output (normal prompt)" '[ -z "$OUT" ]'
 allow_hook "node $INST/A/hooks/roster.mjs dismiss bob --close --confirm --plan-token t --cwd /repo"

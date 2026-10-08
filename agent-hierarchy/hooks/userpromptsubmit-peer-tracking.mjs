@@ -47,10 +47,10 @@
 import { cliRootLine, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
 import { dirname } from "node:path";
 
-import { extractMsgToken, listExchanges, parseMsgFilename, readMsgFile, responseLanded } from "./lib-hier.mjs";
+import { extractMsgToken, ID_RE, listExchanges, parseMsgFilename, readMsgFile, responseLanded } from "./lib-hier.mjs";
 import { thresholdFor } from "./lib-liveness.mjs";
 import { matchedTeamIntentPhrase } from "./lib-team-intent.mjs";
-import { appendPeerRecord, appendReportRecord, appendTurnMarker, dispatchRecordsFor, extractPendingRecord, latestDispatchRows, parseWrapper, pendingFor, readPeerRecords, reportShown, unconsumedWatchEvents } from "./lib-peer.mjs";
+import { appendPeerRecord, appendReportRecord, appendTurnMarker, dispatchRecordsFor, extractPendingRecord, latestDispatchRows, parseWrapper, pendingFor, readPeerRecords, reportShown, stripRef, unconsumedWatchEvents } from "./lib-peer.mjs";
 
 const IDLE_NOTICE_RE = /^\s*\[Cross-session idle notice\]\s+"([^"]+)"([\s\S]*)$/;
 
@@ -131,8 +131,18 @@ try {
       const wrapper = parseWrapper(prompt);
       // A peer that writes to us restarts the watcher's schedule for it; an idle notice is not
       // wrapped, so it never counts as hearing from the peer.
-      if (wrapper && wrapper.fromName && latestDispatchRows(sessionId).some((r) => r.to_addr === wrapper.fromName)) {
-        appendPeerRecord({ type: "heard", session_id: sessionId, from: wrapper.fromName, ts: new Date().toISOString() });
+      if (wrapper) {
+        // The sender counts as a dispatched peer by its socket address, by its name, or by a progress note
+        // naming one of this session's requests (a peer re-spawned on a new socket still sends those).
+        const noteId = (wrapper.body.match(/^\s*note\s+(\S+?):/) || [])[1];
+        const heardFor = new Map();
+        for (const r of latestDispatchRows(sessionId)) {
+          if (!r.to_addr || heardFor.has(r.to_addr)) continue;
+          const byAddr = stripRef(wrapper.from) === r.to_addr || (wrapper.fromName && wrapper.fromName === r.to_addr);
+          const byNote = ID_RE.test(noteId || "") && noteId === r.request_id;
+          if (byAddr || byNote) heardFor.set(r.to_addr, byNote && !byAddr ? noteId : null);
+        }
+        for (const [to, request] of heardFor) appendPeerRecord({ type: "heard", session_id: sessionId, from: to, request, ts: new Date().toISOString() });
       }
       if (wrapper) {
         const token = extractMsgToken(prompt);

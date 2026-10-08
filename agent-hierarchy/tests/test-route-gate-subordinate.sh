@@ -7,6 +7,7 @@
 # Orchestrator. The role contracts say the same thing. HOME- and AGENT_HIERARCHY_DIR-redirected.
 # Usage: bash tests/test-route-gate-subordinate.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
@@ -15,7 +16,7 @@ H="$PLUGIN/hooks"
 GATE="$H/pretooluse-route-gate.mjs"
 MSG="$H/msg.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-routegate-sub-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 HD="$SANDBOX/hier"

@@ -559,9 +559,42 @@ export function rowOffered(row, block) {
   return (block || []).some((o) => (digit === undefined || o.n === Number(digit)) && reads(o.label));
 }
 
-/** SHA-256 hex of a screen read, with trailing whitespace cut from each line and trailing blank lines dropped. */
+/** The words of the auto-deny countdown sentence; the time value right after them ticks every second, so it stays out of the hash. */
+const COUNTDOWN_PHRASE = ["automatically", "deny", "this", "request", "in"];
+/** A time value: clock (`1:39`) or seconds (`45s`, `9 seconds`). */
+const COUNTDOWN_TIME = "(\\d+:\\d{2}|\\d+[ \\t]*s(?:ec(?:ond)?s?)?\\b)";
+/** Whitespace, line breaks and box-drawing border characters between two words of a soft-wrapped sentence. */
+const COUNTDOWN_SEP = "[\\s\\u2500-\\u257f]+";
+const COUNTDOWN_RE = new RegExp(`^${COUNTDOWN_PHRASE.join(COUNTDOWN_SEP)}${COUNTDOWN_SEP}${COUNTDOWN_TIME}`, "id");
+/** A countdown sentence may span at most this many screen lines, and never a blank one. */
+const COUNTDOWN_MAX_LINES = 6;
+
+/** `lines` with each countdown time replaced by a placeholder; only the time token's characters change. */
+function maskCountdown(lines) {
+  const out = lines.slice();
+  for (let i = 0; i < lines.length; i++) {
+    for (const start of lines[i].matchAll(/automatically/gi)) {
+      let text = lines[i].slice(start.index);
+      const origins = [{ line: i, pos: 0, col: start.index }];
+      for (let j = i + 1; j < lines.length && j < i + COUNTDOWN_MAX_LINES && lines[j] !== ""; j++) {
+        origins.push({ line: j, pos: text.length + 1, col: 0 });
+        text += "\n" + lines[j];
+      }
+      const m = COUNTDOWN_RE.exec(text);
+      if (m === null) continue;
+      const [from, to] = m.indices[1];
+      const o = origins.findLast((x) => x.pos <= from);
+      if (to > o.pos + lines[o.line].length - o.col) continue;
+      const col = o.col + from - o.pos;
+      out[o.line] = out[o.line].slice(0, col) + "<time>" + out[o.line].slice(col + (to - from));
+    }
+  }
+  return out;
+}
+
+/** SHA-256 hex of a screen read, with trailing whitespace cut from each line, a countdown's time masked, and trailing blank lines dropped. */
 export function screenHash(screen) {
-  const lines = String(screen ?? "").split("\n").map((l) => l.replace(/\s+$/, ""));
+  const lines = maskCountdown(String(screen ?? "").split("\n").map((l) => l.replace(/\s+$/, "")));
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }

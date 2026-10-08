@@ -7,12 +7,13 @@
 # HOME-redirected; real config never touched.
 # Usage: bash tests/test-directive-size.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 LIB="$PLUGIN/hooks/lib-config.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-dirsize-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 PASS=0; FAIL=0

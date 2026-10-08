@@ -6,13 +6,18 @@
 # for a backoff. HOME- and hierarchy-redirected; real state untouched.
 # Usage: bash tests/test-recovery-watcher.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-recovery-watcher-test.XXXXXX")"
 [ -n "$SB" ] && [ -d "$SB" ] || { echo "mktemp failed"; exit 1; }
 SB="$(cd "$SB" && pwd -P)"
+# No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH (a failing herdr or tmux is what a
+# machine without a running multiplexer gives), and the guard in lib-hermetic.sh is told it is a fake.
+mkdir -p "$SB/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SB/nolaunch/herdr"; cp "$SB/nolaunch/herdr" "$SB/nolaunch/tmux"; chmod +x "$SB/nolaunch/herdr" "$SB/nolaunch/tmux"
+export PATH="$SB/nolaunch:$PATH"; export AH_TEST_FAKE_BIN="$SB/nolaunch"
 sleep 300 & OTHER=$!
-trap 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"' EXIT
+hermetic_on_exit 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"'
 unset AH_TEAM_FILE CLAUDE_PID CLAUDE_CODE_SESSION_ID AGENT_HIERARCHY_DIR
 export HOME="$SB/home" CLAUDE_PID=$$
 PROJ="$SB/proj"; HD="$PROJ/.claude/hierarchy"; PR="$HOME/.claude/projects/p"
@@ -96,12 +101,44 @@ for kind in billing_error authentication_failed invalid_request model_not_found 
 done
 
 # ---- a member of an owned team
+# dreq <id> <to_name or null> <to_addr> <age>: an open request to the member (created <age> s ago) and this session's dispatch row for it
+dreq() {
+  mkdir -p "$HD/msgs"
+  printf -- '---\nid: %s\ntype: request\nto: architect\nfrom: orchestrator\nslug: rw\nparent: null\nreason: null\neta: small\nto_name: %s\nfrom_name: null\nteam: null\ncreated: %s\n---\n\n## [0] tldr\n- none\n' "$1" "$2" "$(ago "$4")" > "$HD/msgs/$1--architect--rw--request.md"
+  printf '{"type":"dispatch","session_id":"sess-w","request_id":"%s","to":"architect","path":"%s","to_addr":"%s","created":"%s"}\n' "$1" "$HD/msgs/$1--architect--rw--request.md" "$3" "$(ago "$4")" >> "$PEERS"
+}
+heard_from() { grep -h "\"type\":\"heard\"" "$PEERS" | grep -c "\"from\":\"$1\""; }
 reset; team "$$"; failed sess-m overloaded 1 40
+dreq 20260101-000000-rw00 null demo-arch 60
 watch 6
 check "member, overloaded, 40 s: a RESUME wake telling the Orchestrator to SendMessage it" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "architect \"demo-arch\" ended a turn on an API error (overloaded)" && echo "$OUT" | grep -q "SendMessage demo-arch" && echo "$OUT" | grep -q "automatic resume 1/3" && echo "$OUT" | grep -q "$RESUME_LINE"'
 check "the wake says: no re-brief, no ETA reset" 'echo "$OUT" | grep -q "no re-brief, no ETA reset"'
 check "the member wake carries the restart line, outside the text to forward" 'echo "$OUT" | grep -q "^Restart the watcher if anything is still open: Bash with run_in_background: true" && [ "$(echo "$OUT" | grep -n "^---$" | tail -1 | cut -d: -f1)" -lt "$(echo "$OUT" | grep -n "^Restart the watcher" | cut -d: -f1)" ]'
 check "a resume counts as hearing from the member (the check-in clock restarts)" 'grep -rh "\"type\":\"heard\"" "$HOME/.claude" | grep -q "\"from\":\"demo-arch\""'
+# N7: a member addressed by socket is matched through its request's to_name
+reset; team "$$"; failed sess-m overloaded 1 40
+dreq 20260101-000000-rw07 demo-arch uds:/tmp/cc-socks/1.sock 290
+watch 6
+check "N7: a resume writes heard keyed by the dispatch's socket address, not the member's name" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "automatic resume 1/3" && [ "$(heard_from uds:/tmp/cc-socks/1.sock)" = 1 ] && [ "$(heard_from demo-arch)" = 0 ]'
+dreq_age() { sed -i.bak "s|^created: .*|created: $(ago "$2")|" "$HD/msgs/$1--architect--rw--request.md"; rm -f "$HD/msgs/$1--architect--rw--request.md.bak"; }
+dreq_age 20260101-000000-rw07 360
+watch 3
+check "N7: the request is now past T, yet no CHECK-IN: the resume restarted its clock" '! echo "$OUT" | grep -q "CHECK-IN\|no report\." && ! grep -rh "\"kind\":\"CHECK-IN\"" "$HOME/.claude" | grep -q .'
+# N7b: no to_name and a socket address: nothing to match on, so no heard row, and the wake is unchanged
+reset; team "$$"; failed sess-m overloaded 1 40
+dreq 20260101-000000-rw0b null uds:/tmp/cc-socks/1.sock 290
+watch 6
+check "N7b: a request with no to_name sent by socket gets no heard row, and the RESUME wake is still emitted" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "automatic resume 1/3" && [ "$(heard_from uds:/tmp/cc-socks/1.sock)" = 0 ] && [ "$(heard_from demo-arch)" = 0 ]'
+# N7c: addressed by the member's name, no to_name: rule 2
+reset; team "$$"; failed sess-m overloaded 1 40
+dreq 20260101-000000-rw0c null demo-arch 290
+watch 6
+check "N7c: a dispatch addressed by the member's name gets a heard row" '[ "$RC" -eq 3 ] && [ "$(heard_from demo-arch)" = 1 ]'
+# N7d: a request for another member, or one already reported, is not this member's
+reset; team "$$"; failed sess-m overloaded 1 40
+dreq 20260101-000000-rw0d someone-else uds:/tmp/cc-socks/2.sock 290
+watch 6
+check "N7d: a request written for another member gets no heard row" '[ "$RC" -eq 3 ] && [ "$(heard_from uds:/tmp/cc-socks/2.sock)" = 0 ]'
 reset; team "$$"; failed sess-m overloaded 4 600
 watch 6
 check "member, 4th failure: an API-FAILED wake, no resume, tell the user" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "stopped on an API error (overloaded" && echo "$OUT" | grep -q "after 3 automatic resumes. Not resuming. Tell the user in one line" && ! echo "$OUT" | grep -q "SendMessage demo-arch" && echo "$OUT" | grep -q "^.*Restart the watcher if anything is still open"'

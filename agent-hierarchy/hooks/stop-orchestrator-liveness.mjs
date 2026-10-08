@@ -36,8 +36,8 @@ import { fileURLToPath } from "node:url";
 
 import { hierarchyDir, isPaneMember, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole } from "./lib-config.mjs";
 import { appendGate, CHECKIN_CADENCE, etaOf, exchangeAgeSec, listExchanges, openExchanges, readGates, readMsgFile, responseLanded, thresholdFor } from "./lib-hier.mjs";
-import { dueForNudge, watcherCall } from "./lib-liveness.mjs";
-import { appendReportRecord, dispatchOrigin, dispatchRecordsFor, latestDispatchRows, pendingFor, reportShown, watcherAlive } from "./lib-peer.mjs";
+import { dueForNudge, livenessClock, watcherCall } from "./lib-liveness.mjs";
+import { appendReportRecord, dispatchOrigin, dispatchRecordsFor, latestDispatchRows, pendingFor, readPeerRecords, reportShown, watcherAlive } from "./lib-peer.mjs";
 import { readTeam, teamMemberByName } from "./lib-roster.mjs";
 
 const ROSTER = join(dirname(fileURLToPath(import.meta.url)), "roster.mjs");
@@ -59,7 +59,7 @@ function block(reason) {
  * dispatch record either — that alone is what excludes it here (T14), no
  * separate check needed.
  */
-function outstandingDispatches(dir, resolved, sessionId, now) {
+function outstandingDispatches(dir, resolved, sessionId, now, records, gates) {
   // Rows that carry no `path` predate the field; they keep the scan of this pool.
   const myDispatches = new Map(latestDispatchRows(sessionId).filter((r) => !r.path).map((r) => [r.request_id, r]));
   const candidates = [];
@@ -78,8 +78,9 @@ function outstandingDispatches(dir, resolved, sessionId, now) {
     if (!Number.isFinite(origin)) continue;
     const ageSec = Math.max(0, (now - origin) / 1000);
     const eta = etaOf(fm.eta);
-    if (ageSec < thresholdFor(eta) * CHECKIN_CADENCE[0]) continue; // too young to flag (T13)
-    out.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta, pane: paneMemberName(dir, fm, e.to) });
+    const { base } = livenessClock({ records, gates, sessionId, requestId: e.id, toAddr: myDispatches.get(e.id).to_addr, start: origin });
+    if (now - base < thresholdFor(eta) * CHECKIN_CADENCE[0] * 1000) continue; // too young to flag (T13), or the peer spoke since
+    out.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta, base, pane: paneMemberName(dir, fm, e.to) });
   }
   return out;
 }
@@ -97,7 +98,7 @@ function paneMemberName(dir, fm, role) {
  * a request written to another checkout's pool is still seen. Returns the open ones past their eta
  * threshold, and the exchanges whose response file exists but was never shown to this session.
  */
-function pathDispatches(sessionId, now) {
+function pathDispatches(sessionId, now, records, gates) {
   const outstanding = [];
   const landed = [];
   for (const row of latestDispatchRows(sessionId)) {
@@ -113,8 +114,9 @@ function pathDispatches(sessionId, now) {
     }
     const ageSec = exchangeAgeSec(e, now);
     const eta = etaOf(fm.eta);
-    if (ageSec < thresholdFor(eta) * CHECKIN_CADENCE[0]) continue;
-    outstanding.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta });
+    const { base } = livenessClock({ records, gates, sessionId, requestId: e.id, toAddr: row.to_addr, start: now - ageSec * 1000 });
+    if (now - base < thresholdFor(eta) * CHECKIN_CADENCE[0] * 1000) continue;
+    outstanding.push({ id: e.id, role: e.to, to_name: fm.to_name || "(unnamed)", path: e.request.path, ageSec, created: fm.created, eta, base });
   }
   return { outstanding, landed };
 }
@@ -188,15 +190,16 @@ try {
 
   const dir = hierarchyDir(cwd);
   const now = Date.now();
-  const byPath = pathDispatches(sessionId, now);
-  const outstanding = [...outstandingDispatches(dir, resolved, sessionId, now), ...byPath.outstanding];
   const gates = readGates(dir);
+  const records = readPeerRecords();
+  const byPath = pathDispatches(sessionId, now, records, gates);
+  const outstanding = [...outstandingDispatches(dir, resolved, sessionId, now, records, gates), ...byPath.outstanding];
   const wn = watcherNudge(sessionId, cwd, gates);
   if (outstanding.length === 0 && byPath.landed.length === 0 && !wn) allow();
 
   const toBlockOn = [];
   for (const item of outstanding) {
-    if (!dueForNudge(gates, sessionId, item, now)) continue;
+    if (!dueForNudge(gates, sessionId, item, now, item.base)) continue;
     appendGate(dir, { type: "liveness-nudge", session_id: sessionId, request_id: item.id });
     toBlockOn.push(item);
   }

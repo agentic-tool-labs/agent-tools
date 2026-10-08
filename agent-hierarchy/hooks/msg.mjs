@@ -6,6 +6,11 @@
  *               [--parent <id>] [--reason context|second-opinion|parallel]
  *               [--eta small|medium|large] [--type request|response] [--id <id>] [--team <name>]
  *               [--req <abs request path>]   (response only: write it beside that request — spec 0037)
+ *   msg.mjs fill --id <id> --from <role> --req <abs request path> --body '<JSON string>'
+ *               (replace everything after the frontmatter of the response `new --type response` made beside that request;
+ *               the frontmatter is kept byte for byte. The body is one JSON string: `\n` for a newline, `\u0027` for a
+ *               single quote, since a literal one cannot sit inside the shell's single quotes. At most 64 KiB, no line
+ *               that is exactly `---`. May be repeated: each run replaces the body. Prints {id, path, bytes}.)
  *   msg.mjs list [--open|--closed|--all] [--to <role>] [--team <name>] [--json] [--plain]
  *   msg.mjs downstream [--root-name <name>]
  *   msg.mjs index <path>
@@ -43,6 +48,7 @@ import {
   effectiveRoute,
   ensureHierarchyDir,
   exchangeAgeSec,
+  fillResponse,
   fmtAge,
   hierarchyDir,
   indexAnchors,
@@ -248,6 +254,16 @@ try {
       }
       break;
     }
+    case "fill": {
+      const res = fillResponse({
+        id: typeof opts.id === "string" ? opts.id : undefined,
+        from: typeof opts.from === "string" ? opts.from : undefined,
+        reqPath: typeof opts.req === "string" ? opts.req : undefined,
+        body: typeof opts.body === "string" ? opts.body : undefined,
+      });
+      out(plain ? `${res.id}  ${res.path}` : res, plain);
+      break;
+    }
     case "list": {
       const dir = hierarchyDir(cwd);
       const which = opts.all ? "all" : opts.closed ? "closed" : "open";
@@ -409,7 +425,7 @@ try {
       break;
     }
     default:
-      fail(`usage: msg.mjs new|list|downstream|index|sweep|roster|route|decision [--cwd <path>] [--plain]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
+      fail(`usage: msg.mjs new|fill|list|downstream|index|sweep|roster|route|decision [--cwd <path>] [--plain]${cmd ? ` (unknown command ${JSON.stringify(cmd)})` : ""}`);
   }
 } catch (err) {
   fail(err && err.message ? err.message : String(err));

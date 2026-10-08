@@ -4,6 +4,7 @@
 # in array order. Names are derived, never stored.
 # Usage: bash tests/test-roster-names.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
@@ -40,7 +41,7 @@ check "empty members -> empty array" '[ "$OUT" = "[]" ]'
 # git-root basename (spec 0010 §3), the same value the old repoBasename
 # derivations used to compute directly.
 NAMEDIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-teamprefix-test.XXXXXX")"
-trap 'rm -rf "$NAMEDIR"' EXIT
+hermetic_on_exit 'rm -rf "$NAMEDIR"'
 NAMEDIR="$(cd "$NAMEDIR" && pwd -P)"
 TEAMPREFIX_REPO="$NAMEDIR/some-repo-name"
 mkdir -p "$TEAMPREFIX_REPO"

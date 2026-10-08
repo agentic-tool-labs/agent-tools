@@ -25,18 +25,38 @@ export function watcherCall(sessionId, cwd) {
 export { thresholdFor };
 
 /**
+ * One dispatch's liveness clock, shared by the Stop hook and the watcher: `base` is the later of the
+ * dispatch `start` (ms; 0 if unknown) and the latest `heard` row from `toAddr` for this session, and
+ * `nudges` are the `liveness-nudge` gate times (ms, ascending) after `base`. Whatever the peer said
+ * restarts the clock, and nudges from before it no longer count.
+ */
+export function livenessClock({ records, gates, sessionId, requestId, toAddr, start }) {
+  let heard = 0;
+  for (const r of records) {
+    if (toAddr && r && r.type === "heard" && r.session_id === sessionId && r.from === toAddr) heard = Math.max(heard, Date.parse(r.ts) || 0);
+  }
+  const base = Math.max(start, heard);
+  const nudges = gates
+    .filter((g) => g.type === "liveness-nudge" && g.session_id === sessionId && g.request_id === requestId && Date.parse(g.ts) > base)
+    .map((g) => Date.parse(g.ts))
+    .sort((a, b) => a - b);
+  return { base, nudges };
+}
+
+/**
  * A dispatch is due for a check-in when it has never been nudged, or when the gap CHECKIN_CADENCE
  * gives for its next check-in has passed since its last nudge: half a threshold before the second,
  * a full one before each later one. An unparseable or absent `ts` counts as due — nudging one extra
  * time is the harmless direction.
  */
-export function dueForNudge(gates, sessionId, item, now) {
+export function dueForNudge(gates, sessionId, item, now, since = 0) {
   let lastTs = 0;
   let count = 0;
   for (const r of gates) {
     if (r.type !== "liveness-nudge" || r.session_id !== sessionId || r.request_id !== item.id) continue;
     const t = Date.parse(r.ts);
     if (!Number.isFinite(t)) return true;
+    if (t <= since) continue;
     count++;
     if (t > lastTs) lastTs = t;
   }

@@ -87,7 +87,7 @@ export function parseWrapper(text) {
   const from = tag.match(/\bfrom="([^"]+)"/);
   const fromName = tag.match(/\bfrom-name="([^"]+)"/);
   if (!from) return null;
-  return { from: from[1], fromName: fromName ? fromName[1] : "" };
+  return { from: from[1], fromName: fromName ? fromName[1] : "", body: text.slice(tagMatch.index + tag.length) };
 }
 
 /** `[hierarchy-msg <path>]` — matched against the first non-blank line, same anchoring discipline as `SENTINEL_RE` below. */

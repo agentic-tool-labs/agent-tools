@@ -5,6 +5,7 @@
 # HOME-redirected; the conventions repos live in a throwaway sandbox and nothing touches the network.
 # Usage: bash tests/test-issue-intake.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
@@ -12,7 +13,7 @@ INTAKE="$PLUGIN/hooks/issue-intake.mjs"
 FIX="$PLUGIN/tests/fixtures/issue-intake"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-intake-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME"

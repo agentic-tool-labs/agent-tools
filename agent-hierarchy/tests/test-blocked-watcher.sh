@@ -5,14 +5,15 @@
 # hierarchy dir, HOME and the poll period are redirected, so real state is untouched.
 # Usage: bash tests/test-blocked-watcher.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-blocked-watcher-test.XXXXXX")"
 [ -n "$SB" ] && [ -d "$SB" ] || { echo "mktemp failed"; exit 1; }
 SB="$(cd "$SB" && pwd -P)"
 sleep 300 & OTHER=$!
-trap 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"' EXIT
-unset AH_TEAM_FILE CLAUDE_PID HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX CLAUDE_CODE_SESSION_ID
+hermetic_on_exit 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"'
+unset AH_TEAM_FILE CLAUDE_PID CLAUDE_CODE_SESSION_ID
 export CLAUDE_PID=$$  # the watcher's owner test reads it; the teams below are owned by this shell
 FAKEHOME="$SB/home"; PROJ="$SB/proj"; HS="$SB/hs"; BIN="$SB/bin"
 mkdir -p "$FAKEHOME/.claude" "$PROJ" "$HS" "$BIN"
@@ -36,6 +37,7 @@ esac
 exit 0
 EOF
 chmod +x "$BIN/herdr"
+export AH_TEST_FAKE_BIN="$BIN"
 export PATH="$BIN:$PATH" FAKE_HS="$HS" AH_HERDR_TIMEOUT_MS=3000
 
 # team <pid> <kind> <transport>: the default team, owned by <pid>, with one pane member.
@@ -180,6 +182,63 @@ for i in $(seq 1 60); do kill -0 "$RUNNING" 2>/dev/null || break; sleep 0.1; don
 if kill -0 "$RUNNING" 2>/dev/null; then kill "$RUNNING" 2>/dev/null; wait "$RUNNING" 2>/dev/null; RC=143; else wait "$RUNNING" 2>/dev/null; RC=$?; fi
 OUT=$(cat "$SB/run.out")
 check "...and an answer-written clear newer than the wake ends it while that watcher runs: a new wake" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "is BLOCKED at a prompt"'
+
+# ---- an auto-deny countdown does not change the screen hash
+# cdtext <wide|narrow> <time> [command]: the prompt with its countdown, as one line or wrapped as a narrow pane draws it
+cdtext() {
+  printf 'Allow this tool?\n  1. Yes\n  2. No\n%s\n' "${3:-rm a}"
+  if [ "$1" = wide ]; then printf '⚠ Claude Code will automatically deny this request in %s, to avoid blocking progress on an unattended session\n' "$2"
+  else printf '⚠ Claude Code will\nautomatically deny\nthis request in %s,\nto avoid blocking\nprogress on an\nunattended session\n' "$2"; fi
+}
+cdscreen() { cdtext "${2:-wide}" "$1" > "$HS/screen"; }
+hash_text() { node --input-type=module -e "import { screenHash } from '$H/lib-roster.mjs'; process.stdout.write(screenHash(process.argv[1]))" "$1"; }
+
+for W in wide narrow; do
+reset; team "$$" claude herdr; touch "$HS/esc_unblocks"
+cdscreen 1:39 $W; CH=$(hash_of); cdscreen 1:12 $W
+ans demo-arch --cancel --screen-hash "$CH"
+check "V1 ($W): a countdown that ticked between the read and the cancel: cancelled" 'echo "$OUT" | grep -q "\"status\": \"cancelled\"" && [ "$(keys)" = 1 ] && [ "$(cat "$HS/keys")" = esc ]'
+
+reset; team "$$" claude herdr
+cdtext $W 1:39 "rm a" > "$HS/screen"; CH=$(hash_of)
+cdtext $W 1:12 "rm b" > "$HS/screen"
+ans demo-arch --cancel --screen-hash "$CH"
+check "V2 ($W): the prompt's command changed while the countdown ticked: screen-changed, nothing sent" 'echo "$OUT" | grep -q "\"status\": \"screen-changed\"" && [ "$(keys)" = 0 ]'
+done
+
+reset; team "$$" claude herdr; cdscreen 1:39
+watch 8
+check "V3: first wake on the countdown screen" '[ "$RC" -eq 3 ]'
+echo idle > "$HS/status"; watch 2
+cdscreen 1:12; echo blocked > "$HS/status"; watch 8
+check "V3: the second wake, countdown changed between wakes, carries the second-time line" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "^Second time at the same prompt"'
+
+check "V4a: 1:39 and 0:05 on a phrase line hash equal" '[ "$(hash_text "x
+Claude Code will automatically deny this request in 1:39")" = "$(hash_text "x
+Claude Code will automatically deny this request in 0:05")" ]'
+check "V4b: 45s and 9 seconds on a phrase line hash equal" '[ "$(hash_text "Claude Code will automatically deny this request in 45s")" = "$(hash_text "Claude Code will automatically deny this request in 9 seconds")" ]'
+check "V4c: sleep 1:30 and sleep 1:31 without the phrase hash differently" '[ "$(hash_text "sleep 1:30")" != "$(hash_text "sleep 1:31")" ]'
+check "V4d: the no-countdown screen hashes as it did before the mask" '[ "$(hash_text "$(printf "Allow this tool?\n  1. Yes\n  2. No\n")")" = 0a18ad31e717a4b348bcdb8747b0c7d08dc23c97c435ce535923fc33d80d7a85 ]'
+same() { [ "$(hash_text "$1")" = "$(hash_text "$2")" ]; }
+check "V4e: mixed case phrase is masked; changed words are still hashed" 'same "Automatically Deny This Request In 1:39" "Automatically Deny This Request In 0:05" && ! same "will automatically deny this request in 1:39" "will automatically deny this request on 1:39"'
+for W in wide narrow; do
+check "V6 ($W): the time ticking gives the same hash" 'same "$(cdtext $W 1:38)" "$(cdtext $W 1:12)"'
+check "V6 ($W): a changed command gives a different hash" '! same "$(cdtext $W 1:38 "rm a")" "$(cdtext $W 1:38 "rm b")"'
+done
+P1=$'x\n⚠ Claude Code will automatically\ndeny this request in\n1:38, to avoid'; P2=${P1/1:38/1:12}
+B1=$'x\n│ ⚠ Claude Code will automatically │\n│ deny this request in │\n│ 1:38, to avoid │'; B2=${B1/1:38/1:12}
+check "V7: the phrase split between automatically and deny, time alone on the next line: same hash" 'same "$P1" "$P2"'
+check "V7: the same with a border on every line: same hash" 'same "$B1" "$B2"'
+check "V7: a changed word elsewhere on the span still differs" '! same "$P1" "${P2/avoid/avoids}"'
+BL1=$'Claude Code will automatically deny this request in\n\n1:38, to avoid'
+L1=$'automatically\ndeny\nthis\nrequest\nin\n│\n1:38'
+check "V8: a blank line before the time: not masked" '! same "$BL1" "${BL1/1:38/1:12}"'
+check "V8: a span of 7 lines: not masked" '! same "$L1" "${L1/1:38/1:12}"'
+L6=$'automatically\ndeny\nthis\nrequest\nin\n1:38'
+check "V8 control: the same span of 6 lines: masked" 'same "$L6" "${L6/1:38/1:12}"'
+check "V8: approve in place of deny: not masked" '! same "Claude Code will automatically approve this request in 1:38" "Claude Code will automatically approve this request in 1:12"'
+check "V8: the phrase with no in <time>: nothing masked" '! same "automatically deny this request 1:38" "automatically deny this request 1:12"'
+check "V8: sleep 1:30 on the line after a countdown block is not masked" '! same "$(cdtext wide 1:38; echo "sleep 1:30")" "$(cdtext wide 1:38; echo "sleep 1:31")"'
 
 echo "---"
 echo "$PASS passed, $FAIL failed"

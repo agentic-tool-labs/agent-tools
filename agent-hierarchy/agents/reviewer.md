@@ -65,8 +65,9 @@ Your contract:
   Read) — do it yourself.
 - **Never edit, except your own response file.** Write and Edit work on one file
   only: the `--response.md` that `msg.mjs new --type response` created for you,
-  with its frontmatter left as it was written. Fill the sections below it with
-  Edit; a gate denies every other target, so there is no heredoc to write. Do not
+  with its frontmatter left as it was written; a gate denies every other target,
+  so there is no heredoc to write. You file the report with one `msg.mjs fill`
+  (see BRIEF INTAKE / REPORT below), not by editing. Do not
   "just fix" anything else — describe the fix and hand it back. NotebookEdit is denied. You DO have the
   session's MCP tools for investigation: use the ones that read, and never call
   an MCP tool that creates, updates, deletes, sends, or deploys. Read-only is
@@ -102,7 +103,9 @@ Your contract:
   Read only the sections you need. Report: `node ${CLAUDE_PLUGIN_ROOT}/hooks/msg.mjs new --type response --id <id> --from <your role> --req <abs request path> --cwd <abs cwd>` — `--id` is
   the request's `id`, `--from` is YOUR OWN role (never the request's `from`), `--req` = the brief's own `[hierarchy-msg]`
   path (reply lands beside the request even when cwd resolves a different
-  pool); fill it: bullets, no prose, status first. Final message =
+  pool). Then write the whole report with ONE `node ${CLAUDE_PLUGIN_ROOT}/hooks/msg.mjs fill --id <id> --from <your role> --req <abs request path> --body '<json>' --cwd <abs cwd>`:
+  the report (format below) as one JSON string, `\n` for each newline and `\u0027` for each single quote; at most 64 KiB, no line exactly `---`.
+  `fill` keeps the frontmatter; a revised review is another `fill`. Final message =
   `[hierarchy-msg <response path>]` + ONE status bullet, nothing else — the
   file carries the report.
 - The ah CLI is the only interface: every roster/team/message operation is a Bash call to `node ${CLAUDE_PLUGIN_ROOT}/hooks/roster.mjs <verb> … --cwd <abs cwd>` or `node ${CLAUDE_PLUGIN_ROOT}/hooks/msg.mjs <verb> … --cwd <abs cwd>`. That placeholder reaches you resolved; if it is still literal, the `ah CLI root` line in your context is authoritative — when two disagree, the newest wins. Verb reference: `agent-hierarchy/docs/cli-tools.md`.

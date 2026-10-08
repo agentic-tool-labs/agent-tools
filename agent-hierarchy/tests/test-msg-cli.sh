@@ -4,13 +4,14 @@
 # AGENT_HIERARCHY_DIR-redirected; real state untouched.
 # Usage: bash tests/test-msg-cli.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 H="$PLUGIN/hooks"
 MSG="$H/msg.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-msg-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)" # normalized: paths below are compared byte-for-byte against node's resolve()
 FAKEHOME="$SANDBOX/home"
 HD="$SANDBOX/hier"

@@ -40,7 +40,7 @@
  * Fails open on every error path, exactly like the rest of this plugin.
  */
 
-import { classProp, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole, responseCommand } from "./lib-config.mjs";
+import { classProp, fillCommand, isSubagent, logHookError, readHookInput, resolveConfig, resolveHierarchyRole, responseCommand } from "./lib-config.mjs";
 import { appendGate, extractMsgToken, hasGate, hierarchyDir, parseMsgFilename, readMsgFile, responsePlan, validateResponseToken } from "./lib-hier.mjs";
 import { pendingFor, targetSatisfiesRecord } from "./lib-peer.mjs";
 
@@ -94,7 +94,7 @@ function denyReason(qualifying, role) {
     lines.push(`- ${id} (from ${from}): ${responseCommand({ id, role, req: rec.msg })}`);
     // A role whose contract denies Bash cannot run that command, and the path is derivable here.
     const plan = responsePlan(rec.msg);
-    if (plan && role === "reviewer") lines.push(`  Response path: ${plan.path} — after that command creates it, fill the sections below the frontmatter with Edit; leave the frontmatter as written.`);
+    if (plan && role === "reviewer") lines.push(`  Response path: ${plan.path} — after that command creates it, file the report with one \`${fillCommand({ id, role, req: rec.msg })}\`; leave the frontmatter as written (Write and Edit on the file work as a fallback).`);
     else if (plan) lines.push(`  Response path: ${plan.path} — No Bash? Write that file yourself with frontmatter \`id,type: response,to,from,slug,parent,reason,eta,to_name,from_name,team,created\` and the \`## [0] tldr\` / \`## [1] status\` … sections.`);
   }
   lines.push(

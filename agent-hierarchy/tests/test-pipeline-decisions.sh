@@ -5,6 +5,7 @@
 # HOME- and AGENT_HIERARCHY_DIR-redirected; real state untouched.
 # Usage: bash tests/test-pipeline-decisions.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 H="$PLUGIN/hooks"
@@ -12,7 +13,7 @@ MSG="$H/msg.mjs"
 SKILL="$PLUGIN/skills/autonomous-pipeline/SKILL.md"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-decisions-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 HD="$SANDBOX/hier"

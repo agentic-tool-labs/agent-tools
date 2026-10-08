@@ -4,6 +4,7 @@
 # Real main checkout + linked worktree; HOME-redirected; AGENT_HIERARCHY_DIR unset.
 # Usage: bash tests/test-response-pointer-beside-request.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 H="$PLUGIN/hooks"
@@ -13,7 +14,7 @@ PTU="$H/posttooluse-peer-resolve.mjs"
 STOP="$H/stop-peer-nudge.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-besidereq-test.XXXXXX")"
 [ -n "$SANDBOX" ] || exit 1
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 MAIN="$SANDBOX/main"

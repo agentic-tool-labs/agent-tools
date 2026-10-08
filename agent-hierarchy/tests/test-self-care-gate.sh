@@ -5,13 +5,14 @@
 # HOME-redirected, throwaway repo; the real config and pool are never touched.
 # Usage: bash tests/test-self-care-gate.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK="${HOOK:-$PLUGIN/hooks/pretooluse-self-care-gate.mjs}"
 R="$PLUGIN/hooks/roster.mjs"; MG="$PLUGIN/hooks/msg.mjs"
-unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR HERDR_ENV HERDR_PANE_ID
+unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-self-care-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"; PROJ="$SANDBOX/proj"; WT="$SANDBOX/wt"
 HIER="$PROJ/.claude/hierarchy"; MSGS="$HIER/msgs"
@@ -92,6 +93,7 @@ ARCH "node $R/ status"; check "D5: refuses a trailing slash" 'denied'
 ARCH "node /other/plugin/hooks/roster.mjs status"; check "D5: refuses another version's path" 'denied'
 for v in create spawn dismiss disband deliver role teams stream "role set"; do ARCH "node $R $v"; check "D6: refuses roster $v" 'denied'; done
 for v in sweep route "decision add"; do ARCH "node $MG $v"; check "D6: refuses msg $v" 'denied'; done
+ARCH "node $MG fill --id x --from architect --req $MSGS/x--request.md --body x"; check "D6 (spec 0090): refuses msg fill, a form with no quote in it, so only the unlisted verb can be the reason" 'denied'
 ARCH "node $R checkin --orchestrator-pid 1"; check "D7: refuses --orchestrator-pid" 'denied'
 ARCH "node $R checkin --team other --cwd $PROJ"; check "D8: refuses checkin --team of another team" 'denied'
 gate s9 ah:architect - "node $R checkin --team t1"

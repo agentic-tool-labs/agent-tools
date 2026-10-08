@@ -4,6 +4,7 @@
 # HOME-redirected; real state untouched.
 # Usage: bash tests/test-roster-skill-gate.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
@@ -12,7 +13,7 @@ HOOK="$PLUGIN/hooks/pretooluse-roster-skill-gate.mjs"
 ROSTER="$PLUGIN/hooks/roster.mjs"
 PROMPT_HOOK="$PLUGIN/hooks/userpromptsubmit-peer-tracking.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-roster-skill-gate-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 mkdir -p "$FAKEHOME/.claude" "$PROJ/.claude"

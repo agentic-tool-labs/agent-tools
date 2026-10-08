@@ -7,6 +7,7 @@
 # reaches the real herdr, tmux, or ~/.claude.
 # Usage: bash tests/test-follow-up-hygiene.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports its own; a test must not inherit it — each call below passes the pid it needs
 
@@ -15,10 +16,11 @@ H="$PLUGIN/hooks"
 GATE="$H/pretooluse-route-gate.mjs"
 SKILL="$PLUGIN/skills/agent-team/SKILL.md"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-follow-up-hygiene-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/claude"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux" "$SANDBOX/nolaunch/claude"
-export PATH="$SANDBOX/nolaunch:$PATH"; unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AGENT_HIERARCHY_DIR
+export PATH="$SANDBOX/nolaunch:$PATH"; unset AGENT_HIERARCHY_DIR
 FAKEHOME="$SANDBOX/home"
 NODE_DIR="$(dirname "$(command -v node)")"
 FAKE_STATE_DIR="$SANDBOX/state"

@@ -5,6 +5,16 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.129.0]
+
+### Added
+- `msg.mjs fill` writes a response body into an existing response file and keeps its frontmatter intact. It runs without a prompt only for a response from the caller's own ah role. The Reviewer now files its own report with it, instead of relying on a file write that a member session could not approve.
+
+### Fixed
+- `roster.mjs answer --cancel` and `answer --choice` no longer refuse with `screen-changed` on a permission prompt that shows an auto-deny countdown. The screen hash now ignores the ticking time, including when the pane wraps the sentence across lines, and still changes for any other difference on screen. The watcher's "second time at this prompt" line works on such prompts too.
+- A peer's `note <request id>: …`, or any message from it, now restarts its check-in clock in both the dispatch watcher and the Stop hook, whether the peer was addressed by name or by socket. Busy peers that report progress are no longer flagged silent. The watcher's resume path counts too, and a second watcher start now says plainly that it did nothing.
+- The test suite can no longer open tabs in your real herdr or windows in your real tmux, or start a real agent session. Every test runs under a shared guard that refuses any herdr, tmux, claude or codex binary the test did not declare as a fake, and stops that test. Private tmux servers that tests start are always shut down, and a test that leaves one running fails.
+
 ## [0.125.0]
 
 ### Fixed

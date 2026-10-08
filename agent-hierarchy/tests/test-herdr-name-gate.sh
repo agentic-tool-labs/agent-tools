@@ -2,13 +2,14 @@
 # pretooluse-herdr-name-gate.mjs: a raw `herdr agent start <name>` with a name Herdr would reject
 # is denied before it runs; every other Bash call passes untouched. HOME-redirected.
 set -u
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 GATE="$PLUGIN/hooks/pretooluse-herdr-name-gate.mjs"
 SANDBOX="$(mktemp -d)"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 PASS=0; FAIL=0
 check() { if eval "$2"; then PASS=$((PASS+1)); echo "PASS: $1"; else FAIL=$((FAIL+1)); echo "FAIL: $1 (OUT=$OUT)"; fi; }
 gate() { # <bash command>
