@@ -5,6 +5,14 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.127.0]
+
+### Fixed
+
+- A peer's progress note, or any other message from it, now restarts its check-in clock, whether the Orchestrator addressed the peer by name or by socket address. A note that names the request also counts when the peer was re-spawned on a new socket. Before, a note from a peer addressed by socket was not recorded, so the dispatch watcher and the Stop hook kept calling a busy peer silent.
+- The Stop hook no longer asks for check-ins on a peer it has heard from within its eta. It shares the watcher's clock: after the peer speaks, it waits a full interval, and check-ins sent before that no longer count toward the next one.
+- Starting a second dispatch watcher for a session now says plainly that nothing was started and nothing landed, instead of a bare `already running` line that read like a finished watcher.
+
 ## [0.125.0]
 
 ### Fixed

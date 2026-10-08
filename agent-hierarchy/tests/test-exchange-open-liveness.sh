@@ -134,6 +134,7 @@ check "AC21: no check-in before T after the origin" '! is_block'
 age_rows "$ID" 301
 stop o21
 check "AC21: the first check-in at T after the origin" 'is_block && [ "$(nudges "$ID")" = 1 ]'
+age_rows "$ID" 900
 set_nudges "$ID" 130
 stop o21
 check "AC21: the second is not due before T/2 after the first" '! is_block && [ "$(nudges "$ID")" = 1 ]'

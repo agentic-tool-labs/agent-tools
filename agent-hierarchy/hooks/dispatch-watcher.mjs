@@ -34,7 +34,7 @@ import {
   reportShown,
   watcherAlive,
 } from "./lib-peer.mjs";
-import { thresholdFor, watcherCall, WATCH_MAX_MS, WATCH_POLL_MS } from "./lib-liveness.mjs";
+import { livenessClock, thresholdFor, watcherCall, WATCH_MAX_MS, WATCH_POLL_MS } from "./lib-liveness.mjs";
 
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -47,15 +47,6 @@ const cwd = arg("cwd") || process.cwd();
 const pollMs = Number(process.env.AH_WATCH_POLL_MS) > 0 ? Number(process.env.AH_WATCH_POLL_MS) : WATCH_POLL_MS;
 
 const fmtAge = (sec) => (sec < 3600 ? `${Math.floor(sec / 60)}m` : `${Math.floor(sec / 3600)}h`);
-
-/** The latest `heard` timestamp from `name` for this session, in ms, or 0. */
-function lastHeardMs(records, name) {
-  let t = 0;
-  for (const r of records) {
-    if (r && r.type === "heard" && r.session_id === sessionId && r.from === name) t = Math.max(t, Date.parse(r.ts) || 0);
-  }
-  return t;
-}
 
 /** The events due now across this session's watchable dispatches; each also writes its own store row. */
 function evaluate(now) {
@@ -79,11 +70,7 @@ function evaluate(now) {
     }
     const T = thresholdFor(fm.eta) * 1000;
     const created = Date.parse(fm.created);
-    const base = Math.max(Number.isFinite(created) ? created : 0, lastHeardMs(records, row.to_addr));
-    const checkins = gates
-      .filter((g) => g.type === "liveness-nudge" && g.session_id === sessionId && g.request_id === e.id && Date.parse(g.ts) > base)
-      .map((g) => Date.parse(g.ts))
-      .sort((a, b) => a - b);
+    const { base, nudges: checkins } = livenessClock({ records, gates, sessionId, requestId: e.id, toAddr: row.to_addr, start: Number.isFinite(created) ? created : 0 });
     const ageSec = Math.max(0, (now - (Number.isFinite(created) ? created : now)) / 1000);
     if (checkins.length === 0 && now >= base + T) {
       appendGate(dir, { type: "liveness-nudge", session_id: sessionId, request_id: e.id });
@@ -289,7 +276,7 @@ function main() {
     process.exit(0);
   }
   if (watcherAlive(sessionId, process.pid)) {
-    console.log(`already running (pid ${latestWatcher(sessionId).pid})`);
+    console.log(`ah watcher: not started — watcher pid ${latestWatcher(sessionId).pid} is already watching this session. Nothing landed; no action needed.`);
     process.exit(0);
   }
   appendPeerRecord({ type: "watcher", session_id: sessionId, pid: process.pid, started: new Date().toISOString() });
