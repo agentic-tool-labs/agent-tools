@@ -163,8 +163,34 @@ write_request 20260101-000000-wa7a wa7 "$(iso_ago 10)" small
 mark_dispatch 20260101-000000-wa7a wa7 s-wa7
 start_watcher s-wa7; FIRST=$WPID; sleep 0.6
 start_watcher s-wa7; wait_exit "$WPID" 20
-check "WA7: a second start exits 0 at once saying already running" '[ "$WRC" = "0" ] && grep -q "already running" "$WOUT"'
+check "WA7: a second start exits 0 at once saying it did nothing" '[ "$WRC" = "0" ] && grep -q "^ah watcher: not started — watcher pid $FIRST is already watching this session. Nothing landed; no action needed.$" "$WOUT"'
+check "WA7: and writes no second watcher row" '[ "$(grep -c "\"type\":\"watcher\".*\"session_id\":\"s-wa7\"\|\"session_id\":\"s-wa7\".*\"type\":\"watcher\"" "$PENDING")" = "1" ]'
 stop_watcher "$FIRST"
+
+# ---- N1-N3: a peer's note counts as hearing from it, however it is addressed
+heard_rows() { { [ -f "$PENDING" ] && grep "\"type\":\"heard\"" "$PENDING" | grep "\"session_id\":\"$1\""; } | wc -l | tr -d ' '; }
+# N1: dispatched by socket address; the note's from= is that socket, from-name is something else
+write_request 20260101-000000-n1aa n1 "$(iso_ago 360)" small
+mark_dispatch 20260101-000000-n1aa n1 s-n1 uds:/tmp/cc-socks/1.sock
+ups s-n1 "$(wrapped "note 20260101-000000-n1aa: building" peer-x)"
+check "N1: a note from a peer addressed by socket writes a heard row for that address" '[ "$(heard_rows s-n1)" = "1" ] && grep "\"session_id\":\"s-n1\"" "$PENDING" | grep "\"type\":\"heard\"" | grep -q "\"from\":\"uds:/tmp/cc-socks/1.sock\""'
+start_watcher s-n1; wait_exit "$WPID" 12
+check "N1: no CHECK-IN follows the note" '[ -z "$WRC" ] && alive "$WPID"'
+stop_watcher "$WPID"
+# N2: neither address matches; the note names the open request
+write_request 20260101-000000-n2aa n2 "$(iso_ago 360)" small
+mark_dispatch 20260101-000000-n2aa n2 s-n2 uds:/tmp/cc-socks/9.sock
+ups s-n2 "$(wrapped "note 20260101-000000-n2aa: respawned" peer-x)"
+check "N2: a note naming the open request writes heard from the row's to_addr, carrying the request id" 'grep "\"session_id\":\"s-n2\"" "$PENDING" | grep "\"type\":\"heard\"" | grep -q "\"from\":\"uds:/tmp/cc-socks/9.sock\".*\"request\":\"20260101-000000-n2aa\""'
+# N3 (negatives): the nearest inputs that must not match
+ups s-n2 "$(wrapped "note 20260101-000000-zzzz: respawned" peer-x)"
+ups s-n2 "$(wrapped "see note 20260101-000000-n2aa: mid-line" peer-x)"
+ups s-n2 "$(wrapped "note not-an-id: x" peer-x)"
+check "N3: an unknown id, a mid-line note and a malformed id write no heard row" '[ "$(heard_rows s-n2)" = "1" ]'
+ups s-n3 "$(wrapped "note 20260101-000000-n2aa: wrong session" peer-x)"
+check "N3: a session with no dispatch gets no heard row" '[ "$(heard_rows s-n3)" = "0" ]'
+ups s-n2 "$(wrapped "ok" uds:/tmp/cc-socks/9.sock)"
+check "N3: a non-note message from the dispatched peer still counts" '[ "$(heard_rows s-n2)" = "2" ]'
 
 # ---- WA8: a watcher whose parent is gone exits
 bash -c "HOME='$FAKEHOME' AGENT_HIERARCHY_DIR='$HIER_DIR' AH_WATCH_POLL_MS=300 node '$H/dispatch-watcher.mjs' --session s-wa8 --cwd '$PROJ' > '$SANDBOX/w8.out' 2>&1 & echo \$! > '$SANDBOX/w8.pid'; wait" &

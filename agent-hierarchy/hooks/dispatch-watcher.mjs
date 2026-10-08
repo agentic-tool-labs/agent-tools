@@ -34,7 +34,7 @@ import {
   reportShown,
   watcherAlive,
 } from "./lib-peer.mjs";
-import { thresholdFor, watcherCall, WATCH_MAX_MS, WATCH_POLL_MS } from "./lib-liveness.mjs";
+import { livenessClock, thresholdFor, watcherCall, WATCH_MAX_MS, WATCH_POLL_MS } from "./lib-liveness.mjs";
 
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -48,13 +48,24 @@ const pollMs = Number(process.env.AH_WATCH_POLL_MS) > 0 ? Number(process.env.AH_
 
 const fmtAge = (sec) => (sec < 3600 ? `${Math.floor(sec / 60)}m` : `${Math.floor(sec / 3600)}h`);
 
-/** The latest `heard` timestamp from `name` for this session, in ms, or 0. */
-function lastHeardMs(records, name) {
-  let t = 0;
-  for (const r of records) {
-    if (r && r.type === "heard" && r.session_id === sessionId && r.from === name) t = Math.max(t, Date.parse(r.ts) || 0);
+/**
+ * The distinct `to_addr` of this session's unreported dispatches that belong to the member `name`: its
+ * request was written for that name, or it was sent to the name itself. The liveness clock matches
+ * `heard` rows by `to_addr`, and a member addressed by socket has no other link to its name.
+ */
+function addressesOf(name) {
+  const out = new Set();
+  for (const row of latestDispatchRows(sessionId)) {
+    if (!row.to_addr || reportShown(sessionId, row.request_id)) continue;
+    let mine = row.to_addr === name;
+    if (!mine && row.path) {
+      const e = listExchanges(dirname(dirname(row.path))).find((x) => x.id === row.request_id);
+      const fm = e && e.open && (readMsgFile(e.request.path) || {}).fm;
+      mine = Boolean(fm) && fm.to_name === name;
+    }
+    if (mine) out.add(row.to_addr);
   }
-  return t;
+  return out;
 }
 
 /** The events due now across this session's watchable dispatches; each also writes its own store row. */
@@ -79,11 +90,7 @@ function evaluate(now) {
     }
     const T = thresholdFor(fm.eta) * 1000;
     const created = Date.parse(fm.created);
-    const base = Math.max(Number.isFinite(created) ? created : 0, lastHeardMs(records, row.to_addr));
-    const checkins = gates
-      .filter((g) => g.type === "liveness-nudge" && g.session_id === sessionId && g.request_id === e.id && Date.parse(g.ts) > base)
-      .map((g) => Date.parse(g.ts))
-      .sort((a, b) => a - b);
+    const { base, nudges: checkins } = livenessClock({ records, gates, sessionId, requestId: e.id, toAddr: row.to_addr, start: Number.isFinite(created) ? created : 0 });
     const ageSec = Math.max(0, (now - (Number.isFinite(created) ? created : now)) / 1000);
     if (checkins.length === 0 && now >= base + T) {
       appendGate(dir, { type: "liveness-nudge", session_id: sessionId, request_id: e.id });
@@ -271,7 +278,7 @@ function recoveryEvents(now) {
     if (sub.own) {
       events.push({ request_id: null, kind: "RESUME", text: `ah watcher: ${head}\n${RESUME_PARAGRAPH}\n${restart}`, extra: { subject: sub.id, error, streak, failed_at: failedAt } });
     } else {
-      appendPeerRecord({ type: "heard", session_id: sessionId, from: sub.name, ts: new Date().toISOString() });
+      for (const to of addressesOf(sub.name)) appendPeerRecord({ type: "heard", session_id: sessionId, from: to, request: null, ts: new Date().toISOString() });
       events.push({
         request_id: null,
         kind: "RESUME",
@@ -289,7 +296,7 @@ function main() {
     process.exit(0);
   }
   if (watcherAlive(sessionId, process.pid)) {
-    console.log(`already running (pid ${latestWatcher(sessionId).pid})`);
+    console.log(`ah watcher: not started — watcher pid ${latestWatcher(sessionId).pid} is already watching this session. Nothing landed; no action needed.`);
     process.exit(0);
   }
   appendPeerRecord({ type: "watcher", session_id: sessionId, pid: process.pid, started: new Date().toISOString() });

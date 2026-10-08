@@ -248,6 +248,44 @@ liveness_hook s20
 check "T20e: closing the exchange is what ends the check-ins" 'is_empty'
 rm -f "$HIER_DIR"/msgs/20260101-000000-t20a--*
 
+# ---- N4-N6: a peer that spoke restarts the Stop hook's clock (eta small: T = 5 min)
+min_ago() { node -e 'console.log(new Date(Date.now()-Number(process.argv[1])*60000).toISOString())' "$1"; }
+# mark_dispatch_to <request-id> <to-role> <session> <to_addr>: a dispatch row that also records the address it was sent to
+mark_dispatch_to() { mark_dispatch "$1" "$2" "$3"; sed -i.bak '$ s|"to":|"to_addr":"'"$4"'","to":|' "$PENDING"; rm -f "$PENDING.bak"; }
+heard_ago() { printf '{"type":"heard","session_id":"%s","from":"%s","ts":"%s"}\n' "$1" "$2" "$(min_ago "$3")" >> "$PENDING"; }
+write_request "20260101-000000-n4aa" architect n4 "$OLD" small
+mark_dispatch_to "20260101-000000-n4aa" architect s-n4 "peer-n4"
+heard_ago s-n4 peer-n4 1
+liveness_hook s-n4
+check "N4: a peer heard from 1 minute ago is not asked for a check-in" 'is_empty'
+rm -f "$HIER_DIR"/msgs/20260101-000000-n4aa--*
+write_request "20260101-000000-n4bb" architect n4b "$OLD" small
+mark_dispatch_to "20260101-000000-n4bb" architect s-n4b "peer-n4b"
+heard_ago s-n4b someone-else 0
+heard_ago s-other peer-n4b 0
+liveness_hook s-n4b
+check "N4: fresh heard rows from another name, and from another session, are no proof of life for this dispatch" 'is_block'
+rm -f "$HIER_DIR"/msgs/20260101-000000-n4bb--*
+write_request "20260101-000000-n5aa" architect n5 "$OLD" small
+mark_dispatch_to "20260101-000000-n5aa" architect s-n5 "peer-n5"
+heard_ago s-n5 peer-n5 6
+liveness_hook s-n5
+check "N5: a peer last heard 6 minutes ago is asked" 'is_block'
+rm -f "$HIER_DIR"/msgs/20260101-000000-n5aa--*
+write_request "20260101-000000-n6aa" architect n6 "$OLD" small
+mark_dispatch_to "20260101-000000-n6aa" architect s-n6 "peer-n6"
+printf '{"type":"liveness-nudge","session_id":"s-n6","request_id":"20260101-000000-n6aa","ts":"%s"}\n' "$(min_ago 9)" >> "$GATES"
+heard_ago s-n6 peer-n6 8
+liveness_hook s-n6
+check "N6: a nudge from before the peer spoke does not count: asked again at the first step (T), not T/2 of an old nudge" 'is_block'
+n6_gates=$(grep -c '"request_id":"20260101-000000-n6aa"' "$GATES")
+liveness_hook s-n6
+check "N6: and that new nudge is counted: the very next stop is silent" 'is_empty && [ "$n6_gates" = "2" ]'
+node -e 'const fs=require("fs"),p=process.argv[1],L=fs.readFileSync(p,"utf8").trim().split("\n"),r=JSON.parse(L[L.length-1]);r.ts=new Date(Date.now()-3*60000).toISOString();L[L.length-1]=JSON.stringify(r);fs.writeFileSync(p,L.join("\n")+"\n")' "$GATES"
+liveness_hook s-n6
+check "N6: 3 minutes after that nudge it asks again at the half step (the pre-speech nudge is not counted)" 'is_block'
+rm -f "$HIER_DIR"/msgs/20260101-000000-n6aa--*
+
 echo "----"
 echo "SUMMARY: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]
