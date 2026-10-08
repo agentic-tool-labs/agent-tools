@@ -5,7 +5,7 @@ Reviewer: reviewer
 
 Target: **0.127.0** (0.126.0 merges first). Base: `main` a4c0607 (0.125.0). Branch `ah/0089-watcher-notes`.
 
-Status: **r1**.
+Status: **r2**. r2: the RESUME path writes `heard` keyed by the dispatch row's `to_addr` (§3.1); new case N7.
 
 ## 1. Goal
 
@@ -57,6 +57,14 @@ For every matching row, append one `heard` row:
 
 The idle notice (unwrapped) still writes nothing (:131-132).
 
+**The watcher's RESUME path (r2, in scope).**
+- Today the API-error RESUME path in `dispatch-watcher.mjs` (~:261-274) writes `heard{from: sub.name}`, but the clock matches `from === to_addr`. A resumed peer addressed by socket therefore never restarts its clock. This is the same defect as Gap 1, through a second writer.
+- After this change, the RESUME path writes one `heard` row per open dispatch row of this session that belongs to the resumed peer, with `from` set to that row's `to_addr`.
+- "Belongs to the peer" means rule 1 or rule 2 above, applied to the resumed peer's address and name.
+- When no dispatch row matches, nothing is written.
+
+Invariant for every writer of `heard`: `from` is always a dispatch row's `to_addr`.
+
 The parsing reuses `parseWrapper`, `stripRef` and `ID_RE`. No new regex for the wrapper.
 
 ### 3.2 One liveness clock for both the watcher and the Stop hook (Gap 2)
@@ -88,7 +96,7 @@ The exit code stays 0, because a non-zero exit would read as a failure to invest
 
 - `agent-hierarchy/hooks/userpromptsubmit-peer-tracking.mjs` (§3.1).
 - `agent-hierarchy/hooks/lib-liveness.mjs`: the shared base and nudge filter (§3.2).
-- `agent-hierarchy/hooks/dispatch-watcher.mjs`: use the shared function, and the new duplicate-start text (§3.2, §3.3).
+- `agent-hierarchy/hooks/dispatch-watcher.mjs`: use the shared function; the new duplicate-start text; and the RESUME `heard` key (§3.1, §3.2, §3.3).
 - `agent-hierarchy/hooks/stop-orchestrator-liveness.mjs` (§3.2).
 - Tests: `tests/test-dispatch-watcher.sh`, `tests/test-orchestrator-liveness.sh`, `tests/test-peer-progress.sh` (§6).
 - `.claude-plugin/plugin.json` and the root `.claude-plugin/marketplace.json` `ah` entry: both `0.127.0`.
@@ -132,6 +140,7 @@ Must not change:
 - **N2.** Neither address matches, but the body is `note <id>: …` for the open request: `heard` is written with `from` set to the row's `to_addr` and `request` set to `<id>`.
 - **N3.** `note <unknown id>:` with no address match: no `heard`.
 - **WA7 updated.** The new duplicate-start text, exit 0.
+- **N7 (r2).** The RESUME path, for a peer whose dispatch `to_addr` is its socket while `sub.name` is its name, writes `heard` with `from` set to the `to_addr`. The next CHECK-IN is due a full T after the resume. The existing recovery-watcher tests pass (`tests/test-recovery-watcher.sh`).
 
 `tests/test-orchestrator-liveness.sh`:
 - **N4.** An outstanding dispatch past T, with a `heard` row for its `to_addr` 1 minute old: no block.
