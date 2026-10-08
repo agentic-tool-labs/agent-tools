@@ -5,7 +5,9 @@ Reviewer: reviewer
 
 Target: **0.127.0** (0.126.0 merges first). Base: `main` a4c0607 (0.125.0). Branch `ah/0089-watcher-notes`.
 
-Status: **r2**. r2: the RESUME path writes `heard` keyed by the dispatch row's `to_addr` (§3.1); new case N7.
+Status: **r3**.
+- r3: RESUME matches a dispatch row by its request's `to_name === sub.name` (or by rule 2). With no match, nothing is written. New cases N7, N7b and N7c.
+- r2: the RESUME path writes `heard` keyed by the dispatch row's `to_addr` (§3.1); new case N7.
 
 ## 1. Goal
 
@@ -60,8 +62,13 @@ The idle notice (unwrapped) still writes nothing (:131-132).
 **The watcher's RESUME path (r2, in scope).**
 - Today the API-error RESUME path in `dispatch-watcher.mjs` (~:261-274) writes `heard{from: sub.name}`, but the clock matches `from === to_addr`. A resumed peer addressed by socket therefore never restarts its clock. This is the same defect as Gap 1, through a second writer.
 - After this change, the RESUME path writes one `heard` row per open dispatch row of this session that belongs to the resumed peer, with `from` set to that row's `to_addr`.
-- "Belongs to the peer" means rule 1 or rule 2 above, applied to the resumed peer's address and name.
-- When no dispatch row matches, nothing is written.
+- **Where "belongs to the peer" comes from (r3).** The resume subject has a name but no address: it is `{id, name, role}` from `describeMembers`, `dispatch-watcher.mjs:223`. So rule 1 cannot apply. A row belongs to the peer when either:
+  - the row's request file frontmatter has `to_name === sub.name`. This is the primary source. `evaluate()` already reads that frontmatter (about `:74-79`), so it costs no new read and needs no address;
+  - or the row's `to_addr === sub.name` (rule 2).
+- **Rejected sources:**
+  - deriving a socket from a roster pid: that path is owned by the harness, and the member record has no sourced pid;
+  - name-only matching: it misses every peer addressed by socket.
+- **No match** (for example a request created without `--to-name`, so `to_name` is `null`, and addressed by socket): nothing is written. The RESUME wake itself proceeds unchanged. That dispatch's clock simply runs on from its last `heard`, as in 0.125.0.
 
 Invariant for every writer of `heard`: `from` is always a dispatch row's `to_addr`.
 
@@ -140,7 +147,11 @@ Must not change:
 - **N2.** Neither address matches, but the body is `note <id>: …` for the open request: `heard` is written with `from` set to the row's `to_addr` and `request` set to `<id>`.
 - **N3.** `note <unknown id>:` with no address match: no `heard`.
 - **WA7 updated.** The new duplicate-start text, exit 0.
-- **N7 (r2).** The RESUME path, for a peer whose dispatch `to_addr` is its socket while `sub.name` is its name, writes `heard` with `from` set to the `to_addr`. The next CHECK-IN is due a full T after the resume. The existing recovery-watcher tests pass (`tests/test-recovery-watcher.sh`).
+- **N7 (r3).** Set up a dispatch row with `to_addr = uds:/tmp/cc-socks/1.sock`. Its request file's frontmatter has `to_name: peer-x`. A member `peer-x` has an API-error turn end that triggers RESUME.
+  - Then: one `heard` row with `from` set to `uds:/tmp/cc-socks/1.sock`, and no CHECK-IN before `resume + T`.
+- **N7b.** The same, but the frontmatter has `to_name: null`: no `heard` row. The RESUME wake is still emitted.
+- **N7c.** `to_addr = peer-x` (addressed by name) and `to_name: null`: `heard` is written, through rule 2.
+- The existing recovery-watcher tests pass (`tests/test-recovery-watcher.sh`).
 
 `tests/test-orchestrator-liveness.sh`:
 - **N4.** An outstanding dispatch past T, with a `heard` row for its `to_addr` 1 minute old: no block.
