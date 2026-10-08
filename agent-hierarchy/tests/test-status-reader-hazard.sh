@@ -5,4 +5,5 @@
 # Usage: bash tests/test-status-reader-hazard.sh   (exits 0 iff all cases pass)
 . "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
-exec node "$PLUGIN/tests/status-reader-hazard.mjs"
+# Not exec: the shell must survive to run the shared exit path in lib-hermetic.sh.
+node "$PLUGIN/tests/status-reader-hazard.mjs"

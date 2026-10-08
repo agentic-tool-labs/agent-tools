@@ -122,6 +122,48 @@ printf '#!/bin/bash\nSOCK="$TMUX_TMPDIR/z.sock"\ntmux %s "$SOCK" new-session\n' 
 OUT=$(lint_h4 "$SANDBOX/h4" | sort | tr '\n' ' ')
 check "H4: a literal /tmp socket path fails; a socket under TMUX_TMPDIR passes" '[ "$OUT" = "test-literal-assign.sh test-literal-flag.sh " ]'
 
+# H5: no suite ends its own shell with a top-level exec. exec replaces the shell, so the shared exit path in lib-hermetic.sh
+# (cleanup commands, the tmux-server sweep, removing TMUX_TMPDIR) never runs. Lines inside here-documents (fake scripts that
+# do exec) and indented lines (a subshell's exec) are not the suite's own shell.
+lint_h5() {
+  python3 -I - "$1" <<'PYEOF'
+import glob, os, re, sys
+
+heredoc = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "test-*.sh"))):
+    tag = None
+    dash = False
+    hit = False
+    for line in open(f, errors="replace").read().split("\n"):
+        if tag is not None:
+            if (line.lstrip("\t") if dash else line) == tag:
+                tag = None
+            continue
+        if re.match(r"exec\s", line):
+            hit = True
+        m = heredoc.search(line)
+        if m:
+            tag, dash = m.group(2), "<<-" in line
+    if hit:
+        print(os.path.basename(f))
+PYEOF
+}
+
+OUT=$(lint_h5 "$PLUGIN/tests")
+check "H5: no tests/test-*.sh ends its own shell with a top-level exec (it would skip the shared exit path)" '[ -z "$OUT" ]'
+
+mkdir -p "$SANDBOX/h5" "$SANDBOX/h5old"
+printf '#!/bin/bash\n. "$(dirname "$0")/lib-hermetic.sh"\nPLUGIN=x\nex%s node "$PLUGIN/tests/x.mjs"\n' ec > "$SANDBOX/h5/test-exec-last.sh"
+printf '#!/bin/bash\ncat > "$X/fake" <<%sEOF%s\nex%s real "$@"\nEOF\n( ex%s true )\n' "'" "'" ec ec > "$SANDBOX/h5/test-exec-in-heredoc.sh"
+printf '#!/bin/bash\nnode x.mjs\n' > "$SANDBOX/h5/test-plain.sh"
+OUT=$(lint_h5 "$SANDBOX/h5" | sort | tr '\n' ' ')
+check "H5: a suite whose last line is exec fails; exec inside a here-document or a subshell, and a plain command, pass" '[ "$OUT" = "test-exec-last.sh " ]'
+
+# the file this rule was found on, as it was before the fix: it ended with exec node
+printf '#!/bin/bash\n# header\n. "$(dirname "$0")/lib-hermetic.sh"\nPLUGIN="$(cd "$(dirname "$0")/.." && pwd)"\nex%s node "$PLUGIN/tests/status-reader-hazard.mjs"\n' ec > "$SANDBOX/h5old/test-status-reader-hazard.sh"
+OUT=$(lint_h5 "$SANDBOX/h5old")
+check "H5: the old test-status-reader-hazard.sh (ending exec node) fails the lint" '[ "$OUT" = "test-status-reader-hazard.sh" ]'
+
 # ---- G1-G7: the guard in hooks/lib-mux.mjs, against the real roster.mjs.
 G="$SANDBOX/g"
 H="$PLUGIN/hooks"
