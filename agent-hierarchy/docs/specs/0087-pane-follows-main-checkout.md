@@ -5,7 +5,8 @@ Reviewer: reviewer
 
 Target: **0.125.0** (0.124.0 merges first). Base: `main` 310c881 (0.123.0). Branch `ah/0087-pane-main-checkout`.
 
-Status: **r2**. Changes from r1: the Pane prefers the pool document when it lists the viewer (§2.2);
+Status: **r3**. r3: the Codex footer lines are recognised by shape (§2.3), so an unknown line under the
+prompt row, such as a queued message, is never taken for the composer. Changes from r1 in r2: the Pane prefers the pool document when it lists the viewer (§2.2);
 the main-checkout lookup mirrors `lib-config` including its no-`commondir` fallback (§2.2); new gap 3,
 Codex's idle composer as Codex 0.162 draws it (§2.3).
 
@@ -104,9 +105,18 @@ dropped, braille cells (U+2800–U+28FF) blanked on every line it inspects. The 
 
 - **The prompt row** is the last line on screen that is a composer glyph at column 0, one space, then a
   placeholder of the kind and only spaces (the existing row test, unchanged).
-- **Below it**, and nothing else: **at most one** blank padding row, then **one or two** non-blank
-  footer lines. The screen ends with the last footer line. Footer content is free, except that no footer
-  line may be an option row (`optionStart` shape) or match any of the kind's prompt `footer` patterns.
+- **Below it (r3: footer lines are recognised, not merely non-blank)**, and nothing else: at most one
+  blank padding row, then the **status line**, then optionally the **shortcuts line**; the screen ends
+  there. Any other line below the prompt row (a `queued: …` message, a context-left line, a prompt's
+  footer, an option row, a second blank) means not the composer.
+  - Status line: two spaces, then text with no ` · ` in it (the model and effort), then ` · `, then a
+    path starting with `~` or `/`; the rest is free (Codex truncates it with `…`).
+  - Shortcuts line: two spaces, then `? for shortcuts`; the rest is free.
+  - Both shapes are data in `KIND_HARNESS.codex.composer`, beside `glyphs` and `placeholders`;
+    `isComposer` stays kind-agnostic and reads them from there.
+  - Why: a line under the prompt row that the rule does not know is the case where typing is unsafe
+    (a queued message would be folded into the brief's turn). An unknown footer only costs a
+    `harness-prompt` report; a wrong "composer" costs a corrupted turn.
 - **Above it** nothing is required. The padding row above the prompt row is no longer checked (one live
   capture shows the prompt row with no padding row below, and blank rows may be lost in a read).
 - The prompt row must be within the last four lines, which the bullets above already imply; any screen
@@ -176,6 +186,11 @@ peers, gates; `writeTeamFile`; non-worktree checkouts behave exactly as today.
 | `approval-e8`, `trust-live`, `login-e8`, every `otherHeadings` screen | Not composer; recognised prompt or `harness-prompt` as today |
 | Placeholder row followed by three footer lines, or two blank rows, or a blank between footers | Not composer |
 | Placeholder row followed by an option row or a line matching a prompt `footer` | Not composer |
+| **r3** `composer-padding` (a `  queued: run the tests` line under the prompt row) | Not composer: `deliver` sends nothing |
+| **r3** `composer-2footer` (status line, then `  40% context left`) | Not composer (an unrecognised second line), as before r2 |
+| **r3** Status line then shortcuts line, with or without one blank above (both 0.162 captures) | Composer |
+| **r3** Shortcuts line alone, or shortcuts above status | Not composer |
+| **r3** Status line with no path after ` · ` | Not composer |
 | Composer screen while Herdr reports `working` or `blocked` | Not composer, as today |
 | Claude kinds (no `composer` in `KIND_HARNESS`) | `isComposer` false, as today |
 | `AGENT_HIERARCHY_DIR` set | Writers: pool only (`mainHierarchyDir` null). Mod: as today |
@@ -208,7 +223,10 @@ peers, gates; `writeTeamFile`; non-worktree checkouts behave exactly as today.
   - **0.162 composer**: `isComposer("codex", …)` true for both new fixtures, still true for the three
     older composer fixtures, false for `composer-typed`, `approval-e8`, `trust-live`, `login-e8`, and for
     each synthesized negative in §4 (three footers, two blanks, blank between footers, option row or
-    prompt footer under the placeholder row).
+    prompt footer under the placeholder row). **r3:** `composer-padding` and `composer-2footer` are
+    negatives again; derived negatives for shortcuts-only, swapped order, and a status line with no path.
+  - **r3 queued message blocks deliver**: a Codex member on `composer-padding`, Herdr idle → `deliver`
+    sends nothing (`blocked`, `harness-prompt` after the re-read). Fails on the r2 build.
   - **deliver sends to 0.162**: a Codex member whose screen is `composer-0162-spawn.txt` and whose Herdr
     status is idle → `deliver` types the brief (`sent: true`), records no block; same for the no-pad
     screen. Fails today with `blocked`/`harness-prompt`.
