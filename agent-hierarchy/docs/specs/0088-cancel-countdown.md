@@ -5,7 +5,12 @@ Reviewer: reviewer
 
 Target: **0.126.0**. Base: `main` a4c0607 (0.125.0). Branch `ah/0088-cancel-countdown`. Merges before 0089 (0.127.0) and 0090 (0.128.0).
 
-Status: **r1**.
+Status: **r2**.
+- r2 changes:
+  - The mask follows the phrase across soft-wrapped lines and border characters, bounded to 6 lines and to no blank line (§3, item 1).
+  - It matches `deny` only.
+  - Only the time token after the phrase is masked.
+  - New test cases V6-V8, plus new rows in §5.
 
 ## 1. Goal
 
@@ -40,14 +45,32 @@ Every place that uses the hash calls this one function through `readPromptCore` 
 
 Requirements:
 
-1. **What is masked.** On any line that contains the auto-deny phrase, match case-insensitively on `automatically deny` (and also `automatically reject` and `automatically approve`, so a reworded harness line keeps working). In that line, every time value is replaced by one fixed placeholder before hashing:
-   - clock form `\d+:\d{2}` (for example `1:39` and `0:05`);
-   - seconds form `\d+\s*s(ec(ond)?s?)?\b` (for example `45s` and `9 seconds`).
-2. **What stays.** Every other line is hashed exactly as today. That includes digits elsewhere on the countdown line that are not in these two forms. A time value on a line without the phrase is not masked (for example a command `sleep 1:30` or a log timestamp).
-3. **The pattern is one module-level constant** in `lib-roster.mjs`, next to `screenHash`, so a wording change is a one-line edit.
+1. **What is masked (r2: survives soft wraps).** Exactly one kind of token is masked: the time value that **immediately follows** the phrase `automatically deny this request in`. It is replaced by one fixed placeholder before hashing.
+   - **Time forms:**
+     - clock `\d+:\d{2}` (for example `1:39` and `0:05`);
+     - seconds `\d+\s*s(ec(ond)?s?)?\b` (for example `45s` and `9 seconds`).
+   - **Case-insensitive.** The match is on `deny` only. No real harness string uses reject or approve, so those are not matched.
+   - **The phrase and its time may span soft-wrapped lines.** A narrow pane wraps the line at word boundaries. Today's live screen:
+     ```
+     ⚠ Claude Code will
+     automatically deny
+     this request in 1:38,
+     to avoid blocking
+     ```
+     When matching, any run of whitespace, line breaks, and box-drawing border characters (U+2500–U+257F, for example `│`) between words counts as one separator. So the phrase may break between any two of its words, and the time may sit on a later line than `in`.
+   - **Bound.** A match may span at most **6 screen lines**, counted from the line holding `automatically`, and never crosses a blank line (empty after trimming). A phrase that would need more lines, or a blank line, is not matched, and nothing is masked.
+   - **Only the characters of the time token are replaced.** They are replaced in the line where the token sits. Every other character on every line of the span is hashed as it is.
+   - **Mid-word breaks are not handled.** That is, a word hard-split because it is longer than the pane is wide. The words of this phrase are at most 13 characters, and a pane narrower than that is not a working pane.
+2. **What stays.** Everything outside the masked token is hashed exactly as today, including:
+   - the rest of the countdown sentence (`to avoid blocking …`);
+   - every other number on the screen;
+   - any time value not preceded by the phrase (for example a command `sleep 1:30`, or a log timestamp).
+
+   If the harness rewords the phrase, nothing matches and the hash behaves as in 0.125.0, so `answer` fails safe with `screen-changed`.
+3. **The phrase and the time forms are module-level constants** in `lib-roster.mjs`, next to `screenHash`, so a wording change is a one-line edit.
 4. **The masking affects only the hash.** The `screen` text returned by `readPromptCore`, the excerpt (`excerptOf`), prompt recognition (`recognizeScreen`, `screenLines`) and the displayed screen are unchanged. The user still sees the real countdown.
 5. **The hash format does not change:** 64 lowercase hex characters, sha256.
-6. **Order:** trim trailing whitespace from each line, then mask, then drop trailing blank lines and hash. Masking a line never makes it blank.
+6. **Order:** trim trailing whitespace from each line, then mask, then drop trailing blank lines and hash. Masking a line never makes it blank. A blank line, for the 6-line bound, is one that is empty after this trim.
 
 Nothing else changes in `answer`: the check order (§6.3 of spec 0085), `not-blocked`, the single Esc, and `cancelled` / `still-blocked` all stay as they are. When the countdown runs out, the prompt leaves the screen, so the hash differs or the member is not blocked. Both are refused today and still are.
 
@@ -78,9 +101,17 @@ Must not change:
 | Countdown line present, and the prompt's command changes (`rm a` → `rm b`) | different hash → `screen-changed`, nothing sent |
 | Countdown line → the countdown expired and the prompt is gone | different hash, or `not-blocked`; nothing sent |
 | A line without the phrase holding a time: `sleep 1:30` → `sleep 1:31` | different hash (not masked) |
-| A countdown line where text other than the time changes (`deny` → `approve`) | different hash (the words are still hashed) |
+| A countdown line where text other than the time changes (`deny` → `approve`) | different hash (the words are still hashed; `approve` does not match, so its time is not masked either) |
 | A countdown line appears where there was none | different hash |
 | Uppercase or mixed case `Automatically Deny … in 1:39` | masked the same way |
+| A narrow pane, with the phrase wrapped as in the live screen (`automatically deny` / `this request in 1:38,`), ticking to `1:12` | same hash |
+| The phrase split between `automatically` and `deny`, and the time alone at the start of the next line (`in` / `1:38, to avoid`) | same hash |
+| A border `│` at the start or end of each wrapped line | same hash when the time ticks |
+| A wrapped countdown, and the prompt's command changes | different hash → `screen-changed` |
+| A blank line between `this request in` and the time | not masked → different hash when it ticks (bounded) |
+| A phrase needing more than 6 lines from `automatically` to the time | not masked |
+| The words `automatically deny this request` with no `in <time>` | nothing masked |
+| `sleep 1:30` on the line after a countdown block | not masked |
 | A screen with no countdown line | hash equals 0.125.0's hash |
 | Codex/Gemini member screens | unaffected unless they contain the phrase; if they do, the same masking applies (harmless) |
 
@@ -92,10 +123,21 @@ In `tests/test-blocked-watcher.sh`, using the existing fake `herdr` (`$HS/screen
 - **V2.** The same countdown screen, but the hash is taken and then the command line in the prompt is changed: `screen-changed`, and `$HS/keys` is empty.
 - **V3.** The watcher's second wake on the countdown screen, with the countdown changed between the wakes, carries the second-time line (mirror the existing "the second wake at the same screen carries the second-time line" case).
 - **V4.** Unit checks via `node -e` importing `screenHash`:
-  - (a) `1:39` and `0:05` on a phrase line hash equal;
-  - (b) `45s` and `9 seconds` on a phrase line hash equal;
+  - (a) `1:39` and `0:05` after the phrase hash equal;
+  - (b) `45s` and `9 seconds` after the phrase hash equal;
   - (c) `sleep 1:30` and `sleep 1:31` with no phrase hash differently;
   - (d) the default no-countdown screen's hash equals a literal 64-hex value computed from 0.125.0's `screenHash`. The Implementor computes that value on the base commit before editing and pastes it into the test.
+- **V6 (r2, two pane widths).** The same prompt rendered at two widths, each with the time ticking (`1:38` → `1:12`):
+  - **wide:** `⚠ Claude Code will automatically deny this request in 1:38, to avoid blocking progress on an unattended session` on one line;
+  - **narrow:** the live wrap, `⚠ Claude Code will` / `automatically deny` / `this request in 1:38,` / `to avoid blocking` / `progress on an` / `unattended session`.
+
+  At each width the two times hash equal. At each width, changing the command line in the prompt hashes differently.
+- **V7 (r2, split phrase).** `… will automatically` / `deny this request in` / `1:38, to avoid …` gives the same hash when the time ticks, and the same with a `│ ` prefix and ` │` suffix on every line.
+- **V8 (r2, bounds).** Each of the following hashes differently when the time ticks:
+  - a blank line inserted before the time;
+  - a span that needs 7 lines;
+  - the phrase with `approve` in place of `deny`.
+- **V1 and V2** use the narrow wrap as well as the one-line form.
 
 In `tests/test-chain-roles-other-harnesses.sh`:
 
@@ -105,7 +147,7 @@ The full suite passes (`run-suite.sh`).
 
 ## 7. Assumptions to confirm while building
 
-- **A1.** The countdown wording is `… will automatically deny this request in M:SS`. This is from one live observation. Under one minute, the form (`0:45` or `45s`) is unverified, so both are masked.
+- **A1.** The countdown wording is `⚠ Claude Code will automatically deny this request in M:SS, to avoid blocking progress on an unattended session`, from live screens at two widths. Under one minute, the form (`0:45` or `45s`) is unverified, so both are masked.
 - **A2.** `herdr agent read --source visible` returns plain text without ANSI (no stripping is done today and the hash works). If the countdown arrives with ANSI codes between the digits, report it rather than adding ANSI stripping to the hash.
 
 ## 8. Open questions (defaults taken)
