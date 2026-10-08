@@ -7,30 +7,13 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
 
 ## [0.129.0]
 
-### Fixed
-
-- The test suite can no longer open tabs in your real herdr or windows in your real tmux. Full test runs inside a herdr pane had been leaving idle `· sx` tabs behind, because some tests inherited the herdr environment and found the real `herdr` on the path. Every test now starts from one shared preamble that clears the herdr and tmux environment and gives tmux a private socket directory, and herdr and tmux are only ever run through one guarded call: in a test, a binary that is not one of the test's own fakes is not run, the attempt is recorded and the test file is stopped. The suite checks that every test file uses the preamble and declares its fake binaries.
-
-## [0.128.0]
-
 ### Added
-
-- A new `msg.mjs fill` verb writes a response body into an existing response file and keeps its frontmatter byte for byte. The Reviewer files its whole report with one `fill` call after `msg.mjs new --type response`, instead of editing the file. The body travels as one single-quoted JSON string (at most 64 KiB), and the plugin's CLI permission hook already lets such a call run without a prompt. `fill` can be repeated: each run replaces the body. The permission hook grants `fill` only to a session running as the role named in `--from`, and denies it for any other, so no session can replace another role's report. The Reviewer's hints in the write-gate denial, the SendMessage reminder and its session notice now point to `fill`.
-
-## [0.127.0]
+- `msg.mjs fill` writes a response body into an existing response file and keeps its frontmatter intact. It runs without a prompt only for a response from the caller's own ah role. The Reviewer now files its own report with it, instead of relying on a file write that a member session could not approve.
 
 ### Fixed
-
-- A peer's progress note, or any other message from it, now restarts its check-in clock, whether the Orchestrator addressed the peer by name or by socket address. A note that names the request also counts when the peer was re-spawned on a new socket. Before, a note from a peer addressed by socket was not recorded, so the dispatch watcher and the Stop hook kept calling a busy peer silent.
-- The Stop hook no longer asks for check-ins on a peer it has heard from within its eta. It shares the watcher's clock: after the peer speaks, it waits a full interval, and check-ins sent before that no longer count toward the next one.
-- Starting a second dispatch watcher for a session now says plainly that nothing was started and nothing landed, instead of a bare `already running` line that read like a finished watcher.
-
-## [0.126.0]
-
-### Fixed
-
-- An auto-deny countdown on a permission prompt no longer makes `answer --cancel` or `answer --choice` refuse with `screen-changed`, and the watcher's second-time line works on such prompts: the screen hash ignores the ticking time on a line that says the request will be automatically denied.
-
+- `roster.mjs answer --cancel` and `answer --choice` no longer refuse with `screen-changed` on a permission prompt that shows an auto-deny countdown. The screen hash now ignores the ticking time, including when the pane wraps the sentence across lines, and still changes for any other difference on screen. The watcher's "second time at this prompt" line works on such prompts too.
+- A peer's `note <request id>: …`, or any message from it, now restarts its check-in clock in both the dispatch watcher and the Stop hook, whether the peer was addressed by name or by socket. Busy peers that report progress are no longer flagged silent. The watcher's resume path counts too, and a second watcher start now says plainly that it did nothing.
+- The test suite can no longer open tabs in your real herdr or windows in your real tmux, or start a real agent session. Every test runs under a shared guard that refuses any herdr, tmux, claude or codex binary the test did not declare as a fake, and stops that test. Private tmux servers that tests start are always shut down, and a test that leaves one running fails.
 
 ## [0.125.0]
 
