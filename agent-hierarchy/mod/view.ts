@@ -161,7 +161,7 @@ export async function mainCheckoutRoot(root: string, io: { kind: (path: string) 
   } catch {
     return null
   }
-  const m = /^gitdir:\s*(.+)$/m.exec(raw)
+  const m = /^gitdir:\s*(.+)/m.exec(raw)
   if (m === null) return null
   const gitdir = resolveFrom(root, m[1].trim())
   if (baseName(dirName(gitdir)) !== 'worktrees') return null
