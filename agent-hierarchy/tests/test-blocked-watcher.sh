@@ -5,6 +5,7 @@
 # hierarchy dir, HOME and the poll period are redirected, so real state is untouched.
 # Usage: bash tests/test-blocked-watcher.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-blocked-watcher-test.XXXXXX")"
@@ -12,7 +13,7 @@ SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-blocked-watcher-test.XXXXXX")"
 SB="$(cd "$SB" && pwd -P)"
 sleep 300 & OTHER=$!
 trap 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"' EXIT
-unset AH_TEAM_FILE CLAUDE_PID HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX CLAUDE_CODE_SESSION_ID
+unset AH_TEAM_FILE CLAUDE_PID CLAUDE_CODE_SESSION_ID
 export CLAUDE_PID=$$  # the watcher's owner test reads it; the teams below are owned by this shell
 FAKEHOME="$SB/home"; PROJ="$SB/proj"; HS="$SB/hs"; BIN="$SB/bin"
 mkdir -p "$FAKEHOME/.claude" "$PROJ" "$HS" "$BIN"
@@ -36,6 +37,7 @@ esac
 exit 0
 EOF
 chmod +x "$BIN/herdr"
+export AH_TEST_FAKE_BIN="$BIN"
 export PATH="$BIN:$PATH" FAKE_HS="$HS" AH_HERDR_TIMEOUT_MS=3000
 
 # team <pid> <kind> <transport>: the default team, owned by <pid>, with one pane member.

@@ -4,15 +4,17 @@
 # HOME-redirected; real config never touched.
 # Usage: bash tests/test-custom-roles.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-custom-roles-test.XXXXXX")"
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
 trap 'rm -rf "$SANDBOX"' EXIT
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach the real herdr or tmux: stubs that fail every call sit first on PATH, and the
 # session's pane environment is dropped. The tmux transport case sets its own PATH to a fake.
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
-export PATH="$SANDBOX/nolaunch:$PATH"; unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE
+export PATH="$SANDBOX/nolaunch:$PATH"; unset AH_TEAM_FILE
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/repo"
@@ -133,7 +135,7 @@ for tr in herdr tmux terminal; do
   case $tr in
     herdr) OUT=$(HOME="$FAKEHOME" HERDR_ENV=1 node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1) ;;
     tmux) OUT=$(env -u HERDR_ENV HOME="$FAKEHOME" PATH="$SANDBOX/bin:$NODE_DIR" node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1) ;;
-    terminal) OUT=$(env -u HERDR_ENV HOME="$FAKEHOME" PATH="$NODE_DIR" node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1) ;;
+    terminal) OUT=$(env -u HERDR_ENV HOME="$FAKEHOME" PATH="$SANDBOX/nolaunch:$NODE_DIR" node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1) ;;
   esac
   check "T5 ($tr): custom member spawns --agent ui-implementor with no --model" '[[ "$OUT" == *"--agent ui-implementor --name repo-ui-implementor"* ]] && ! [[ "$OUT" =~ --name\ repo-ui-implementor\ --model ]]'
   check "T5 ($tr): --model opus reaches the second member" '[[ "$OUT" == *"--name repo-ui-implementor-2 --model opus"* ]]'

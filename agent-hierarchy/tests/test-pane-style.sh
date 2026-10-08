@@ -3,6 +3,7 @@
 # document carries a member's stream, cleaned and cut (G7). Every write lands in a sandbox pool.
 # Usage: bash tests/test-pane-style.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 

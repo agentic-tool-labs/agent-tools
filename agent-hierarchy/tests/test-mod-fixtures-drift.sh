@@ -5,6 +5,7 @@
 # Regenerate both: AH_UPDATE_FIXTURES=1 bash tests/test-status-fixtures.sh
 # Usage: bash tests/test-mod-fixtures-drift.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-mod-fixtures-drift-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }

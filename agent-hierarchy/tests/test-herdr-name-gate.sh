@@ -2,6 +2,7 @@
 # pretooluse-herdr-name-gate.mjs: a raw `herdr agent start <name>` with a name Herdr would reject
 # is denied before it runs; every other Bash call passes untouched. HOME-redirected.
 set -u
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it

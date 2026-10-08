@@ -4,6 +4,7 @@
 # HOME-redirected, hooks driven by stdin JSON; no real claude, config or state is touched.
 # Usage: bash tests/test-report-back.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE CLAUDE_PID
 H="$PLUGIN/hooks"

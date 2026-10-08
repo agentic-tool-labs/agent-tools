@@ -5,6 +5,7 @@
 # failed test, no test run, or the 300 s timeout each fail, and no process of the run outlives it.
 # Usage: bash tests/test-mod-plugin-test.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-mod-plugin-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }

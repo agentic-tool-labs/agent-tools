@@ -6,6 +6,7 @@
 # HOME-redirected; every repo lives in a throwaway sandbox.
 # Usage: bash tests/test-pipeline-merge.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 HOOK="$PLUGIN/hooks/pretooluse-push-guard.mjs"

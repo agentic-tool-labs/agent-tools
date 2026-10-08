@@ -7,6 +7,7 @@
 # reaches the real herdr, tmux, or ~/.claude.
 # Usage: bash tests/test-team-lifecycle-names.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 H="$PLUGIN/hooks"
@@ -14,10 +15,11 @@ GATE="$H/pretooluse-route-gate.mjs"
 UGATE="$H/pretooluse-ultra-gate.mjs"
 SKILL="$PLUGIN/skills/agent-team/SKILL.md"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-lifecycle-names-test.XXXXXX")"
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
 trap 'rm -rf "$SANDBOX"' EXIT
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/claude"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux" "$SANDBOX/nolaunch/claude"
-export PATH="$SANDBOX/nolaunch:$PATH"; unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
+export PATH="$SANDBOX/nolaunch:$PATH"; unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 FAKEHOME="$SANDBOX/home"
 NODE_DIR="$(dirname "$(command -v node)")"
 FAKE_STATE_DIR="$SANDBOX/state"

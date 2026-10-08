@@ -5,9 +5,11 @@
 # it, the route gate names it. SessionEnd's down row carries the pane so a closed peer reads dead.
 # Usage: bash tests/test-peer-pane-attribution.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-pane-attr-test.XXXXXX")"
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin"
 sleep 600 & LIVE_PID=$!
 sleep 0 & DEAD_PID=$!; wait "$DEAD_PID" 2>/dev/null
 trap 'kill "$LIVE_PID" 2>/dev/null; rm -rf "$SANDBOX"' EXIT
@@ -15,7 +17,7 @@ SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 # No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH, and
 # the session's pane environment is dropped. A wrapper that sets PATH to its own fakes still wins.
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
-export PATH="$SANDBOX/nolaunch:$PATH"; unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE
+export PATH="$SANDBOX/nolaunch:$PATH"; unset AH_TEAM_FILE
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/myrepo"

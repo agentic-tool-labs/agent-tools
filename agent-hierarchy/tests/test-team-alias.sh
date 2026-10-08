@@ -5,6 +5,7 @@
 # (`validateTeamAlias`) is unchanged.
 # Usage: bash tests/test-team-alias.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 NODE_BIN="$(command -v node)"
@@ -18,6 +19,7 @@ check() {
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-team-alias-test.XXXXXX")"
 trap 'rm -rf "$SANDBOX"' EXIT
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch"
 # No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH, and
 # the session's pane environment is dropped. A wrapper that sets PATH to its own fakes still wins.
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
@@ -208,6 +210,7 @@ seed_peer "old-implementor" "implementor" "up" "$$"
 HERDR_MARKER="$SANDBOX/herdr-invoked-12"
 HERDR_STUB_DIR="$SANDBOX/herdr-stub-bin-12"
 mkdir -p "$HERDR_STUB_DIR"
+export AH_TEST_FAKE_BIN="$AH_TEST_FAKE_BIN:$HERDR_STUB_DIR"
 cat > "$HERDR_STUB_DIR/herdr" <<STUBEOF
 #!/bin/sh
 echo "HERDR INVOKED: \$@" >> "$HERDR_MARKER"

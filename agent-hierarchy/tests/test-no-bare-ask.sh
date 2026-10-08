@@ -4,6 +4,7 @@
 # its own prompt would leave a member waiting at a prompt nobody watches. Comments are not code.
 # Usage: bash tests/test-no-bare-ask.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0; FAIL=0
 check() {

@@ -4,6 +4,7 @@
 # HOME-redirected; every repo lives in a throwaway sandbox and every setup push runs outside the hook.
 # Usage: bash tests/test-push-guard.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it

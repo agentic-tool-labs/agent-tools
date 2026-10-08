@@ -4,6 +4,7 @@
 # passes the msg gate from the worktree. HOME-redirected; real state untouched.
 # Usage: bash tests/test-msg-worktree-team.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-intent.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it

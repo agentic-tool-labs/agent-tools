@@ -5,10 +5,11 @@
 # HOME-redirected, throwaway repo; the real config and pool are never touched.
 # Usage: bash tests/test-self-care-gate.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK="${HOOK:-$PLUGIN/hooks/pretooluse-self-care-gate.mjs}"
 R="$PLUGIN/hooks/roster.mjs"; MG="$PLUGIN/hooks/msg.mjs"
-unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR HERDR_ENV HERDR_PANE_ID
+unset AH_TEAM_FILE CLAUDE_PID AGENT_HIERARCHY_DIR
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-self-care-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
 trap 'rm -rf "$SANDBOX"' EXIT

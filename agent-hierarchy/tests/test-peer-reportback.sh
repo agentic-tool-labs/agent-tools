@@ -4,6 +4,7 @@
 # injected directive/role-notice text. HOME-redirected; real state untouched.
 # Usage: bash tests/test-peer-reportback.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it

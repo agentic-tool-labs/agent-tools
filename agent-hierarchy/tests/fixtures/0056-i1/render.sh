@@ -21,6 +21,10 @@ cat > "$SANDBOX/bin/tmux" <<'EOF'
 exit 0
 EOF
 chmod +x "$SANDBOX/bin/tmux"
+# The terminal-transport plan needs a tmux that fails (a machine without a running one gives that); the guard in
+# tests/lib-hermetic.sh is told this and the fake tmux above are fakes.
+mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
+export AH_TEST_FAKE_BIN="${AH_TEST_FAKE_BIN:+$AH_TEST_FAKE_BIN:}$SANDBOX/bin:$SANDBOX/nolaunch"
 NODE_DIR="$(dirname "$(command -v node)")"
 
 norm() { sed -e "s#$SANDBOX#<SANDBOX>#g" -e "s#$PLUGIN#<PLUGIN>#g" -e 's#(v[0-9][0-9.]*)#(v<VER>)#g'; }
@@ -79,7 +83,7 @@ HOME="$FAKEHOME" node --input-type=module -e "
 # ---- spawn plans, all three transports, from the roster above
 HOME="$FAKEHOME" HERDR_ENV=1 node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1 | norm > "$OUTDIR/plan-herdr.json"
 env -u HERDR_ENV HOME="$FAKEHOME" PATH="$SANDBOX/bin:$NODE_DIR" node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1 | norm > "$OUTDIR/plan-tmux.json"
-env -u HERDR_ENV HOME="$FAKEHOME" PATH="$NODE_DIR" node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1 | norm > "$OUTDIR/plan-terminal.json"
+env -u HERDR_ENV HOME="$FAKEHOME" PATH="$SANDBOX/nolaunch:$NODE_DIR" node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1 | norm > "$OUTDIR/plan-terminal.json"
 # each role's model as ROLE_DEFAULTS has it: an ad hoc member with no model is refused, not launched.
 # task-runner gets none — spawn-ad-hoc refuses that role before it looks at a model.
 for role in ultra-advisor architect reviewer implementor task-runner; do

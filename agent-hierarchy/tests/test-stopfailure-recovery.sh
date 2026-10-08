@@ -5,6 +5,7 @@
 # HOME- and hierarchy-redirected; real state untouched.
 # Usage: bash tests/test-stopfailure-recovery.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-stopfailure-test.XXXXXX")"

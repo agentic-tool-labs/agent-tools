@@ -7,7 +7,7 @@
  * call); `readVisibleScreen` is the plain one for a process that has none.
  */
 
-import { execFileSync } from "node:child_process";
+import { muxExec } from "./lib-mux.mjs";
 
 import { resolveKind } from "./lib-config.mjs";
 import { KIND_HARNESS, recognizeScreen, screenHash } from "./lib-roster.mjs";
@@ -15,7 +15,7 @@ import { KIND_HARNESS, recognizeScreen, screenHash } from "./lib-roster.mjs";
 /** One `visible` read of an agent's screen — only what is on screen now, never scrollback. "" when it cannot be read. */
 export function readVisibleScreen(name) {
   try {
-    return execFileSync("herdr", ["agent", "read", name, "--source", "visible"], { encoding: "utf8", timeout: Number(process.env.AH_HERDR_TIMEOUT_MS || 10000), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+    return muxExec("herdr", ["agent", "read", name, "--source", "visible"], { encoding: "utf8", timeout: Number(process.env.AH_HERDR_TIMEOUT_MS || 10000), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
   } catch {
     return "";
   }
@@ -24,7 +24,7 @@ export function readVisibleScreen(name) {
 /** `herdr agent list` as `[{name, pane_id, agent_status}]`, or null when herdr cannot answer. */
 export function herdrAgentList() {
   try {
-    const out = execFileSync("herdr", ["agent", "list"], { encoding: "utf8", timeout: Number(process.env.AH_HERDR_TIMEOUT_MS || 10000), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+    const out = muxExec("herdr", ["agent", "list"], { encoding: "utf8", timeout: Number(process.env.AH_HERDR_TIMEOUT_MS || 10000), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
     const agents = JSON.parse(out)?.result?.agents;
     return Array.isArray(agents) ? agents.map((a) => ({ name: a.name || null, pane_id: a.pane_id, agent_status: a.agent_status || null })) : null;
   } catch {
