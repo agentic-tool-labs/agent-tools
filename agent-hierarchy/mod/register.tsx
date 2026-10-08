@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { anywayQuestion, bandButtons, bandLine, closeToast, DISMISS_BUTTON, dismissQuestion, failReason, inFlight, keepSeen, nullCause, ownedTeams, PANE_BUTTON, paneSections, parseDoc, readPlan, SIZE_CAP, scope, statusText, teamLabels, toastMs, viewModel, type Doc } from './view.ts'
+import { anywayQuestion, bandButtons, bandLine, closeToast, DISMISS_BUTTON, dismissQuestion, failReason, inFlight, keepSeen, mainCheckoutRoot, NO_OWNED_TEAM, nullCause, ownedTeams, PANE_BUTTON, paneSections, parseDoc, readPlan, SIZE_CAP, scope, statusText, teamLabels, toastMs, viewModel, type Doc } from './view.ts'
 
 // The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
 // any tone not named here draws dim.
@@ -132,21 +132,32 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     let cwd: string | undefined
-    let file: string | null = null
-    let seenMtime: number | undefined
+    let places: { pool: string; main: string | null } | null = null
+    // Each status file is held with its mtime and parse, and re-read only when the file changes. `lost` says why
+    // `doc` is null: `no file` or `unreadable`.
+    type Held = { seenMtime: number | undefined; doc: Doc | null; lost: string }
+    const poolHeld: Held = { seenMtime: undefined, doc: null, lost: 'no file' }
+    const mainHeld: Held = { seenMtime: undefined, doc: null, lost: 'no file' }
     let doc: Doc | null = null
-    // Why `doc` is null: `no file` or `unreadable`. Held with the doc, which is re-read only when the file changes.
     let lost = 'no file'
     // null until the first tick, so a fresh environment always sets the entry, clearing any left by the last one.
     let shown: string | undefined | null = null
 
-    // The status file of the git checkout holding `dir`: the first ancestor with a `.git` entry, the way
-    // ah's writer finds it. ponytail: AGENT_HIERARCHY_DIR and ah's non-git fallback dir are not followed.
-    const locate = async (dir: string): Promise<string | null> => {
+    // The status files of the git checkout holding `dir`: the first ancestor with a `.git` entry, the way
+    // ah's writer finds it, and, when that is a linked worktree, the main checkout's too. ponytail:
+    // AGENT_HIERARCHY_DIR and ah's non-git fallback dir are not followed.
+    const locate = async (dir: string): Promise<{ pool: string; main: string | null } | null> => {
       const sep = dir.includes('/') || !dir.includes('\\') ? '/' : '\\'
       const join = (a: string, b: string) => (a.endsWith(sep) ? a + b : a + sep + b)
+      const statusOf = (root: string) => join(join(join(root, '.claude'), 'hierarchy'), 'status.json')
       for (let d = dir; ; ) {
-        if (await $.fs.exists(join(d, '.git'))) return join(join(join(d, '.claude'), 'hierarchy'), 'status.json')
+        if (await $.fs.exists(join(d, '.git'))) {
+          const root = await mainCheckoutRoot(d, {
+            kind: async (p) => { try { return (await $.fs.stat(p)).kind } catch { return null } },
+            read: (p) => $.fs.read(p),
+          })
+          return { pool: statusOf(d), main: root === null ? null : statusOf(root) }
+        }
         const cut = d.lastIndexOf(sep)
         const parent = cut > 0 ? d.slice(0, cut) : cut === 0 && d.length > 1 ? sep : d
         if (parent === d) return null
@@ -154,28 +165,51 @@ export const register: Register = (on, options) => {
       }
     }
 
-    const tick = async () => {
+    // Brings `h` up to date with `file`: stat, then read only when the mtime moved.
+    const load = async (file: string, h: Held) => {
       try {
-        const where = await $.session.cwd()
-        if (where !== cwd) { cwd = where; file = await locate(where); seenMtime = undefined; doc = null }
-        if (file === null) { doc = null; lost = 'no file' }
-        else {
-          let st: any = null
-          try { st = await $.fs.stat(file) } catch { doc = null; seenMtime = undefined; lost = 'no file' }
-          if (st !== null) {
-            // ponytail: stat then read by path; a live local process could swap the path between the two calls. A committed file cannot race, and read's own cap bounds a swapped file. Close it if $.fs gains a handle or no-follow read.
-            if (st.isLink || st.kind !== 'file' || st.size === 0 || st.size > SIZE_CAP) { doc = null; seenMtime = undefined; lost = 'unreadable' }
-            else if (st.mtimeMs !== seenMtime) { seenMtime = st.mtimeMs; doc = parseDoc(await $.fs.read(file)); lost = 'unreadable' }
-          }
+        let st: any = null
+        try { st = await $.fs.stat(file) } catch { h.doc = null; h.seenMtime = undefined; h.lost = 'no file' }
+        if (st !== null) {
+          // ponytail: stat then read by path; a live local process could swap the path between the two calls. A committed file cannot race, and read's own cap bounds a swapped file. Close it if $.fs gains a handle or no-follow read.
+          if (st.isLink || st.kind !== 'file' || st.size === 0 || st.size > SIZE_CAP) { h.doc = null; h.seenMtime = undefined; h.lost = 'unreadable' }
+          else if (st.mtimeMs !== h.seenMtime) { h.seenMtime = st.mtimeMs; h.doc = parseDoc(await $.fs.read(file)); h.lost = 'unreadable' }
         }
       } catch {
-        doc = null
-        seenMtime = undefined
-        lost = 'unreadable'
+        h.doc = null
+        h.seenMtime = undefined
+        h.lost = 'unreadable'
       }
+    }
+
+    // Whether `d` is readable, current, and lists the viewer as a member or an owner.
+    const knows = (d: Doc | null, now: number, id: string) => d !== null && ![NO_OWNED_TEAM, 'unreadable', 'expired'].includes(nullCause(d, now, id))
+
+    const tick = async () => {
       // The id is read every tick: /clear keeps this environment but starts a new session.
       const now = await $.clock.now()
       const id = await $.session.id()
+      try {
+        const where = await $.session.cwd()
+        if (where !== cwd) {
+          cwd = where
+          places = await locate(where)
+          for (const h of [poolHeld, mainHeld]) { h.seenMtime = undefined; h.doc = null }
+        }
+        if (places === null) { poolHeld.doc = null; poolHeld.lost = 'no file' }
+        else {
+          // The document of the pool the session works in comes first: its exchanges and dispatches are the ones
+          // this session made. Only where it does not know the viewer is the main checkout's looked up.
+          await load(places.pool, poolHeld)
+          if (!knows(poolHeld.doc, now, id) && places.main !== null) await load(places.main, mainHeld)
+        }
+        const h = places !== null && !knows(poolHeld.doc, now, id) && places.main !== null && knows(mainHeld.doc, now, id) ? mainHeld : poolHeld
+        doc = h.doc
+        lost = h.lost
+      } catch {
+        doc = null
+        lost = 'unreadable'
+      }
       // Expiry and visibility do not matter here, only that a shape-valid doc lists this session.
       member = doc !== null && doc.memberSessions.includes(id)
       // Written only on change, since every write redraws the band and the Pane. Compared with the held value,

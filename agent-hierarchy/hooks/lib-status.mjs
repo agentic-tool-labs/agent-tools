@@ -390,15 +390,15 @@ export const sessionPidsPath = (dir) => join(dir, "session-pids.jsonl");
 
 /**
  * Record that `sessionId` runs in the Claude process `pid`. The one writer of `session-pids.jsonl`.
- * Writes nothing when `dir` does not exist, never creates it, skips a row that repeats the latest one,
- * and never throws.
+ * Writes nothing when `dir` does not exist, never creates it, skips a row when the newest row for this
+ * session already has this pid (so a prompt-time call does not grow the file), and never throws.
  */
 export function appendSessionPid(dir, sessionId, pid) {
   try {
     if (!dir || !existsSync(dir) || typeof sessionId !== "string" || !sessionId || !Number.isInteger(pid)) return;
     const rows = readJsonl(sessionPidsPath(dir));
-    const last = rows[rows.length - 1];
-    if (last && last.session_id === sessionId && last.pid === pid) return;
+    const last = rows.findLast((r) => r && r.session_id === sessionId);
+    if (last && last.pid === pid) return;
     appendJsonl(sessionPidsPath(dir), { ts: new Date().toISOString(), session_id: sessionId, pid });
   } catch {
     // a session record never fails the operation that triggered it

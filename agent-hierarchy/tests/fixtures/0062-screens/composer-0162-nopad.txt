@@ -1,0 +1,7 @@
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  ⣿⣿⡿⠛⠉⠉⠛⢿⣿⣿
+  ⣿⣿⣇⣀⣀⣀⣀⣸⣿⣿
+
+› Ask Codex to do anything
+  GPT-6.1-Sol high · ~/git/repos/agent-tools · h…
+  ? for shortcuts                       ⚠ 6 · f2

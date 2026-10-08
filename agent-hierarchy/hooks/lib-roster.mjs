@@ -357,9 +357,16 @@ export const KIND_HARNESS = {
       const modelRule = model ? "If the spawn is refused for that model, spawn once more without `model` and say so in your response." : "Do not set `model`: the child runs on your model.";
       return `The tested form: \`spawn_agent\` with \`task_name\`, \`message\` and \`fork_turns: "none"\`${m}; then \`wait_agent\`; \`followup_task\` with \`target\` sends that child a further order. If your spawn tool's names or fields differ, use their equivalents. Never fork your conversation history into a child: it starts from this file and your order alone. ${modelRule}`;
     },
-    // Idle and empty, the bottom band is padding, the prompt row, padding and a one-line footer; the
-    // placeholder is drawn only while the input is empty.
-    composer: { glyphs: ["›", "»"], placeholders: ["Ask Codex to do anything", "Ask a follow-up question"] },
+    // Idle and empty, the bottom band is the prompt row, then at most one blank row, then the status line
+    // (model and effort, ` · `, a path Codex may truncate with `…`) and optionally the shortcuts line. The
+    // placeholder is drawn only while the input is empty. Any other line under the prompt row, such as a
+    // queued message, is not the composer: typing there would fold the brief into that turn.
+    composer: {
+      glyphs: ["›", "»"],
+      placeholders: ["Ask Codex to do anything", "Ask a follow-up question"],
+      status: /^ {2}(?! )(?:(?! · ).)+ · [~/]/u,
+      shortcuts: /^ {2}\? for shortcuts/u,
+    },
     // Each prompt as Codex draws it: its footer is the last line on screen, and its option block sits
     // directly above it. `herdr` is the status Herdr reports while it is up. Approval's second label
     // has a free slot for the member's command prefix; its hotkeys come from the user's keymap.
@@ -447,20 +454,29 @@ function screenLines(screen) {
 }
 
 /**
- * Whether `screen` is the kind's idle, empty composer: its last four lines, once braille cells are
- * blanked, are a blank padding row, the prompt row (a composer glyph at column 0, a space, then a
- * placeholder and only spaces), a blank padding row and a one-line footer of any content. Codex's
- * sparkle animation draws braille only into blank cells of those rows.
+ * Whether `screen` is the kind's idle, empty composer. Once trailing blank lines are dropped and braille cells
+ * (Codex's sparkle animation draws them into blank cells) are blanked, the prompt row is the last of the final
+ * four lines that is a composer glyph at column 0, a space, then a placeholder and only spaces. Below it, and
+ * nothing else, come at most one blank padding row, the kind's status line and optionally its shortcuts line
+ * (shapes in `composer.status` and `composer.shortcuts`). Nothing above the prompt row is checked.
  */
 export function isComposer(kind, screen) {
-  const c = KIND_HARNESS[kind] && KIND_HARNESS[kind].composer;
+  const h = KIND_HARNESS[kind];
+  const c = h && h.composer;
   if (!c) return false;
   const lines = String(screen ?? "").split("\n");
   while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
-  if (lines.length < 4) return false;
-  const [padTop, row, padBottom, footer] = lines.slice(-4).map((l) => l.replace(/[\u2800-\u28FF]/g, " "));
-  const blank = (l) => l.trim() === "";
-  return blank(padTop) && blank(padBottom) && !blank(footer) && c.glyphs.includes(row[0]) && row[1] === " " && c.placeholders.includes(row.slice(2).replace(/ +$/, ""));
+  const tail = lines.slice(-4).map((l) => l.replace(/[\u2800-\u28FF]/g, " "));
+  const isRow = (row) => c.glyphs.includes(row[0]) && row[1] === " " && c.placeholders.includes(row.slice(2).replace(/ +$/, ""));
+  let at = -1;
+  tail.forEach((l, i) => {
+    if (isRow(l)) at = i;
+  });
+  if (at < 0) return false;
+  const below = tail.slice(at + 1).map((l) => l.replace(/\s+$/, ""));
+  if (below.length && below[0] === "") below.shift();
+  if (below.length < 1 || below.length > 2) return false;
+  return c.status.test(below[0]) && (below.length === 1 || c.shortcuts.test(below[1]));
 }
 
 /** `{n, marked, text}` when `line` starts an option: the marker or a space, a space, then `<n>. `. */

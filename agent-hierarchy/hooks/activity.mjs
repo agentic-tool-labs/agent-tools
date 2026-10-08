@@ -19,11 +19,11 @@
 // ponytail: PostToolUse runs async, so it and the sync Stop are two writers for one record and the last
 // rename wins. PostToolUse lands ~35 ms after its tool, long before the turn ends, so Stop lands last.
 
-import { hierarchyDir, isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
+import { hierarchyDir, isSubagent, logHookError, mainHierarchyDir, readHookInput } from "./lib-config.mjs";
 import { healFalseDown, SELF_STATE } from "./lib-hier.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 import { transcriptPathOk } from "./lib-recovery.mjs";
-import { readActivityRecord, recordActivity, statusChanged } from "./lib-status.mjs";
+import { appendSessionPid, readActivityRecord, recordActivity, statusChanged } from "./lib-status.mjs";
 
 try {
   const input = await readHookInput();
@@ -33,6 +33,16 @@ try {
     const dir = hierarchyDir(cwd);
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     let recorded = false;
+    // A prompt registers the session with its Claude process in the pool and in the main checkout, before the
+    // refresh below, so a session that never had a SessionStart row is already listed as an owner.
+    if (event === "UserPromptSubmit") {
+      appendSessionPid(dir, sessionId, process.ppid);
+      const mainDir = mainHierarchyDir(cwd);
+      if (mainDir && mainDir !== dir) {
+        appendSessionPid(mainDir, sessionId, process.ppid);
+        statusChanged(mainDir);
+      }
+    }
     // A role session, or any session the StopFailure hook has already recorded: its failed record must follow what it does next.
     const role = sessionId ? readSessionRole(sessionId) : null;
     if (sessionId && (role || readActivityRecord(dir, sessionId))) {
