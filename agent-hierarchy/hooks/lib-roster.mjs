@@ -357,9 +357,16 @@ export const KIND_HARNESS = {
       const modelRule = model ? "If the spawn is refused for that model, spawn once more without `model` and say so in your response." : "Do not set `model`: the child runs on your model.";
       return `The tested form: \`spawn_agent\` with \`task_name\`, \`message\` and \`fork_turns: "none"\`${m}; then \`wait_agent\`; \`followup_task\` with \`target\` sends that child a further order. If your spawn tool's names or fields differ, use their equivalents. Never fork your conversation history into a child: it starts from this file and your order alone. ${modelRule}`;
     },
-    // Idle and empty, the bottom band is the prompt row, then at most one blank row, then one or two footer
-    // lines; the placeholder is drawn only while the input is empty.
-    composer: { glyphs: ["›", "»"], placeholders: ["Ask Codex to do anything", "Ask a follow-up question"] },
+    // Idle and empty, the bottom band is the prompt row, then at most one blank row, then the status line
+    // (model and effort, ` · `, a path Codex may truncate with `…`) and optionally the shortcuts line. The
+    // placeholder is drawn only while the input is empty. Any other line under the prompt row, such as a
+    // queued message, is not the composer: typing there would fold the brief into that turn.
+    composer: {
+      glyphs: ["›", "»"],
+      placeholders: ["Ask Codex to do anything", "Ask a follow-up question"],
+      status: /^ {2}(?! )(?:(?! · ).)+ · [~/]/u,
+      shortcuts: /^ {2}\? for shortcuts/u,
+    },
     // Each prompt as Codex draws it: its footer is the last line on screen, and its option block sits
     // directly above it. `herdr` is the status Herdr reports while it is up. Approval's second label
     // has a free slot for the member's command prefix; its hotkeys come from the user's keymap.
@@ -450,8 +457,8 @@ function screenLines(screen) {
  * Whether `screen` is the kind's idle, empty composer. Once trailing blank lines are dropped and braille cells
  * (Codex's sparkle animation draws them into blank cells) are blanked, the prompt row is the last of the final
  * four lines that is a composer glyph at column 0, a space, then a placeholder and only spaces. Below it, and
- * nothing else, come at most one blank padding row and then one or two footer lines of free content: none may
- * look like an option row or match one of the kind's prompt footers. Nothing above the prompt row is checked.
+ * nothing else, come at most one blank padding row, the kind's status line and optionally its shortcuts line
+ * (shapes in `composer.status` and `composer.shortcuts`). Nothing above the prompt row is checked.
  */
 export function isComposer(kind, screen) {
   const h = KIND_HARNESS[kind];
@@ -466,11 +473,10 @@ export function isComposer(kind, screen) {
     if (isRow(l)) at = i;
   });
   if (at < 0) return false;
-  const below = tail.slice(at + 1);
-  if (below.length && below[0].trim() === "") below.shift();
+  const below = tail.slice(at + 1).map((l) => l.replace(/\s+$/, ""));
+  if (below.length && below[0] === "") below.shift();
   if (below.length < 1 || below.length > 2) return false;
-  const promptFooters = Object.values((h && h.prompts) || {}).map((p) => p.footer);
-  return below.every((l) => l.trim() !== "" && !/^(.) (\d+)\. /u.test(l) && !promptFooters.some((re) => re.test(l)));
+  return c.status.test(below[0]) && (below.length === 1 || c.shortcuts.test(below[1]));
 }
 
 /** `{n, marked, text}` when `line` starts an option: the marker or a space, a space, then `<n>. `. */

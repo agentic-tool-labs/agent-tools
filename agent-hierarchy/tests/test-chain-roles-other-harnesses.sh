@@ -126,6 +126,9 @@ derive composer-e12a composer-2footer 's.replace(/\n*$/,"\n  40% context left\n"
 derive composer-e12a composer-padding 's.replace(/(› Ask Codex to do anything[^\n]*\n)[^\n]*\n/,"$1  queued: run the tests\n")'
 # Layouts the idle-composer rule rejects: three footer lines, two blank rows, a blank between footers, an option
 # row or a prompt footer straight under the placeholder row.
+derive composer-0162-nopad composer-shortcuts-only 's.replace(/  GPT[^\n]*\n/,"")'
+derive composer-0162-nopad composer-swapped 's.replace(/(  GPT[^\n]*\n)(  \? for[^\n]*\n)/,(m,a,b)=>b+a)'
+derive composer-0162-nopad composer-nopath 's.replace(/ · ~[^\n]*/," · ")'
 derive composer-0162-spawn composer-3footer 's.replace(/\n*$/,"\n  third footer line\n")'
 derive composer-0162-spawn composer-2blank 's.replace("anything\n\n","anything\n\n\n")'
 derive composer-0162-spawn composer-footergap 's.replace("anything\n\n","anything\n  first\n\n")'
@@ -1144,14 +1147,14 @@ check "K17: the trust dialog from source at 52 columns under idle: trust-dialog,
 check "K17: the verbatim trust dialog captured live (codex-cli 0.154.0-alpha.6.2, an untrusted non-git cwd) under idle: trust-dialog, [trust, distrust]" 'is_seen trust-live idle "{\"composer\":false,\"prompt\":\"trust-dialog\",\"ids\":\"trust,distrust\"}"'
 check "K17: ...and under Herdr blocked, which the trust dialog never is: no match" 'is_seen trust-live blocked "$NOPE"'
 COMPOSER='{"composer":true,"prompt":null,"ids":""}'
-for f in composer-e12a composer-e12b composer-after-turn composer-plain composer-guillemet composer-followup composer-transcript composer composer-0162-spawn composer-0162-nopad composer-2footer composer-padding; do
+for f in composer-e12a composer-e12b composer-after-turn composer-plain composer-guillemet composer-followup composer-transcript composer composer-0162-spawn composer-0162-nopad; do
   check "K17: $f is the composer" 'is_seen $f idle "$COMPOSER"'
 done
 iscomp() { HOME="$FAKEHOME" node --input-type=module -e "const R=await import('$H/lib-roster.mjs');const fs=await import('node:fs');process.stdout.write(String(R.isComposer(process.argv[1],fs.readFileSync('$SCREENS/'+process.argv[2]+'.txt','utf8'))))" "$1" "$2"; }
 check "K17: isComposer is true for both Codex 0.162 captures and the three older ones" '[ "$(iscomp codex composer-0162-spawn)" = true ] && [ "$(iscomp codex composer-0162-nopad)" = true ] && [ "$(iscomp codex composer-e12a)" = true ] && [ "$(iscomp codex composer-e12b)" = true ] && [ "$(iscomp codex composer-after-turn)" = true ]'
 check "K17: isComposer is false for a prompt, typed input and a Claude kind" '[ "$(iscomp codex approval-e8)" = false ] && [ "$(iscomp codex trust-live)" = false ] && [ "$(iscomp codex login-e8)" = false ] && [ "$(iscomp codex composer-typed)" = false ] && [ "$(iscomp claude composer-0162-spawn)" = false ]'
 check "K17: the composer under Herdr working or blocked is not the composer"'is_seen composer-e12a working "$NOPE" && is_seen composer-e12a blocked "$NOPE"'
-for f in composer-typed composer-3footer composer-2blank composer-footergap composer-optionrow composer-promptfooter hooks-review update-prompt model-migration blank; do
+for f in composer-typed composer-2footer composer-padding composer-shortcuts-only composer-swapped composer-nopath composer-3footer composer-2blank composer-footergap composer-optionrow composer-promptfooter hooks-review update-prompt model-migration blank; do
   check "K17: $f matches nothing" 'is_seen $f idle "$NOPE"'
   setup_deliver
   hs "{agents:{\"myrepo-architect\":{gets:[$IDLE],visible:\"@$f\"}}}"
