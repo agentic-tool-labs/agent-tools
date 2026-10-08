@@ -59,7 +59,8 @@ check "F1: a valid fill exits 0 and prints {id, path, bytes} in that order" '[ $
 check "F1: the path is the response beside the request, and bytes is the size of the file written" '[ "$(printf %s "$OUT" | node -e "process.stdout.write(JSON.parse(require(\"fs\").readFileSync(0,\"utf8\")).path)")" = "$RESP" ] && [ "$(printf %s "$OUT" | node -e "process.stdout.write(String(JSON.parse(require(\"fs\").readFileSync(0,\"utf8\")).bytes))")" = "$(wc -c < "$RESP" | tr -d " ")" ]'
 fm_of "$RESP" > "$SANDBOX/fm.after"
 check "F1: the frontmatter bytes are identical before and after (cmp)" 'cmp -s "$SANDBOX/fm.before" "$SANDBOX/fm.after" && [ -s "$SANDBOX/fm.before" ]'
-check "F1: everything after the frontmatter is the body, and the skeleton's empty sections are gone" '[ "$(tail -n +$(( $(wc -l < "$SANDBOX/fm.after") + 1 )) "$RESP")" = "${BODY%$'"'"'\n'"'"'}" ] && ! grep -q "^## \[2\]" "$RESP"'
+check "F1 (r2): the line after the closing fence is empty when the body starts with ## [0], as new's skeleton has it" '[ -z "$(sed -n "$(( $(wc -l < "$SANDBOX/fm.after") + 1 ))p" "$RESP")" ] && [ "$(sed -n "$(( $(wc -l < "$SANDBOX/fm.after") + 2 ))p" "$RESP")" = "## [0] tldr" ]'
+check "F1: everything after that empty line is the body, and the skeleton's empty sections are gone" '[ "$(tail -n +$(( $(wc -l < "$SANDBOX/fm.after") + 2 )) "$RESP")" = "${BODY%$'"'"'\n'"'"'}" ] && ! grep -q "^## \[2\]" "$RESP"'
 check "F1: no temporary file is left in the msgs dir" '[ -z "$(ls -a "$MSGS" | grep "\.tmp$")" ]'
 
 # ---- F2: a repeat replaces the body.
@@ -152,6 +153,18 @@ mint w1
 fm_of "$RESP" > "$SANDBOX/w1.fm"
 mcli "$WT" fill --id "$ID" --from reviewer --req "$REQ" --body "$(jstr "$BODY")"
 check "W: with --cwd a worktree and the request in the main checkout, fill writes the response beside the request" '[ $RC = 0 ] && grep -q "status: PASS" "$RESP" && fm_of "$RESP" | cmp -s - "$SANDBOX/w1.fm" && [ -z "$(find "$WT" -name "*--response.md")" ]'
+
+# ---- r2: a body that already starts with an empty line gets no second one.
+mint b1
+fill $'\n## [0] tldr\n- ok\n'
+check "N (r2): a body that starts with an empty line is written as is: exactly one empty line after the closing fence" '[ $RC = 0 ] && [ -z "$(sed -n "$(( $(fm_of "$RESP" | wc -l) + 1 ))p" "$RESP")" ] && [ "$(sed -n "$(( $(fm_of "$RESP" | wc -l) + 2 ))p" "$RESP")" = "## [0] tldr" ]'
+
+# ---- r2: the hints that told the Reviewer to fill with Edit now name fill.
+check "H (r2): neither pretooluse-sendmessage-response.mjs nor pretooluse-reviewer-write-gate.mjs says 'with Edit' any more, and both build their hint with fillCommand" '! grep -q "with Edit" "$H/pretooluse-sendmessage-response.mjs" "$H/pretooluse-reviewer-write-gate.mjs" && grep -q "fillCommand" "$H/pretooluse-sendmessage-response.mjs" && grep -q "fillCommand" "$H/pretooluse-reviewer-write-gate.mjs"'
+OUT=$(node -e 'process.stdout.write(JSON.stringify({ session_id: "sh", cwd: process.argv[1], agent_type: "ah:reviewer", tool_name: "Write", tool_input: { file_path: "/tmp/not-a-response.txt", content: "x" } }))' "$MAIN" | HOME="$FAKEHOME" node "$H/pretooluse-reviewer-write-gate.mjs" 2>&1); RC=$?
+check "H (r2): the Reviewer write gate's denial text names msg.mjs fill and keeps Write and Edit as a fallback; the decision is still deny" '[ $RC = 0 ] && printf %s "$OUT" | grep -q "\"permissionDecision\":\"deny\"" && printf %s "$OUT" | grep -q "msg.mjs fill --id" && printf %s "$OUT" | grep -q "fallback"'
+OUT=$(HOME="$FAKEHOME" node --input-type=module -e "const C = await import('$H/lib-config.mjs'); process.stdout.write(JSON.stringify({ rev: C.buildRoleSessionNotice('reviewer', 'ah:reviewer').includes('msg.mjs fill'), impl: C.buildRoleSessionNotice('implementor', 'ah:implementor').includes('msg.mjs fill') }))" 2>&1)
+check "H (r2): the reviewer's role-session notice names msg.mjs fill, the implementor's does not" '[ "$OUT" = "{\"rev\":true,\"impl\":false}" ]'
 
 # ---- the verb is listed in the usage text
 mcli "$MAIN" --help

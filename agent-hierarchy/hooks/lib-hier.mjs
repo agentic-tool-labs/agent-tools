@@ -417,7 +417,8 @@ export const FILL_BODY_MAX = 64 * 1024;
 
 /**
  * Replace everything after the frontmatter of the response to `reqPath` with `body` (a JSON string literal holding the text),
- * keeping the frontmatter block byte for byte; a body without a trailing newline gets one. The response is the file `new --type
+ * keeping the frontmatter block byte for byte; a body without a trailing newline gets one, and one that does not begin with an
+ * empty line gets one between the closing fence and itself. The response is the file `new --type
  * response` made, found where `responsePlan` puts it; `fillResponse` never creates one. Every check is a thrown Error with nothing
  * written. The write is a temporary file in the same directory renamed over the target. Returns `{id, path, bytes}`, `bytes` being
  * the size of the file written.
@@ -454,7 +455,8 @@ export function fillResponse({ id, from, reqPath, body }) {
   if (text.split("\n").includes("---")) throw new Error("fill: --body has a line that is exactly --- , which would read as a frontmatter fence");
 
   const head = current.split("\n").slice(0, fm.end).join("\n") + "\n";
-  const content = head + (text.endsWith("\n") ? text : `${text}\n`);
+  // `new`'s skeleton leaves one empty line after the closing fence; a body that does not start with one gets it.
+  const content = head + (text.startsWith("\n") ? "" : "\n") + (text.endsWith("\n") ? text : `${text}\n`);
   const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
   try {
     writeFileSync(tmp, content, "utf8");

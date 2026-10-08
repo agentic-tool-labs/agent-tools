@@ -9,7 +9,7 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
 
 ### Added
 
-- A new `msg.mjs fill` verb writes a response body into an existing response file and keeps its frontmatter byte for byte. The Reviewer files its whole report with one `fill` call after `msg.mjs new --type response`, instead of editing the file. The body travels as one single-quoted JSON string (at most 64 KiB), and the plugin's CLI permission hook already lets such a call run without a prompt. `fill` can be repeated: each run replaces the body.
+- A new `msg.mjs fill` verb writes a response body into an existing response file and keeps its frontmatter byte for byte. The Reviewer files its whole report with one `fill` call after `msg.mjs new --type response`, instead of editing the file. The body travels as one single-quoted JSON string (at most 64 KiB), and the plugin's CLI permission hook already lets such a call run without a prompt. `fill` can be repeated: each run replaces the body. The permission hook grants `fill` only to a session running as the role named in `--from`, and denies it for any other, so no session can replace another role's report. The Reviewer's hints in the write-gate denial, the SendMessage reminder and its session notice now point to `fill`.
 
 ## [0.125.0]
 
