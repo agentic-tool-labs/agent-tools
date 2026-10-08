@@ -265,15 +265,19 @@ run_sh child-sh.sh G_PATH="$G/herdronly:$G/realbin:$NODE_DIR:/usr/bin:/bin" G_LI
 check "G11: a listed fake herdr with --kind claude and an unlisted claude: the launch runs, claude as an argument is not checked" \
   '[ -z "$GTRIP" ] && grep -q "^herdr agent start x --kind claude" "$G/real.log"'
 
-if [ -z "$AH_REAL_TMUX" ]; then
-  echo "SKIP: G12 leak detection needs a real tmux on PATH; none found"
+# The skip depends on a lookup that is independent of the variable under test: a lib-hermetic.sh that stopped finding tmux
+# must fail here, not switch the leak cases off.
+PROBE_TMUX=$(PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" command -v tmux 2>/dev/null)
+if [ -z "$PROBE_TMUX" ]; then
+  echo "SKIP: G12 leak detection needs a real tmux; none found on PATH or in the usual install directories"
 else
+  check "G12: lib-hermetic.sh found the real tmux: AH_REAL_TMUX is set and equals an independent lookup" '[ -n "$AH_REAL_TMUX" ] && [ "$AH_REAL_TMUX" = "$PROBE_TMUX" ]'
   run_sh child-leak.sh G_MODE=leak
   check "G12: a test that exits 0 with a live tmux server: exit 1, stderr names the socket, server and directory gone" \
-    '[ "$GRC" -eq 1 ] && printf "%s" "$GERR" | grep -q "leak.sock" && [ ! -e "$(cat "$G/leak-dir")" ] && ! "$AH_REAL_TMUX" -S "$(cat "$G/leak-dir")/leak.sock" list-sessions >/dev/null 2>&1'
+    '[ "$GRC" -eq 1 ] && printf "%s" "$GERR" | grep -q "leak.sock" && [ ! -e "$(cat "$G/leak-dir")" ] && ! "$PROBE_TMUX" -S "$(cat "$G/leak-dir")/leak.sock" list-sessions >/dev/null 2>&1'
   run_sh child-leak.sh G_MODE=term
   check "G12: the same when the test is sent SIGTERM mid-way: non-zero exit, the socket named, server and directory gone" \
-    '[ "$GRC" -ne 0 ] && printf "%s" "$GERR" | grep -q "leak.sock" && [ ! -e "$(cat "$G/leak-dir")" ] && ! "$AH_REAL_TMUX" -S "$(cat "$G/leak-dir")/leak.sock" list-sessions >/dev/null 2>&1'
+    '[ "$GRC" -ne 0 ] && printf "%s" "$GERR" | grep -q "leak.sock" && [ ! -e "$(cat "$G/leak-dir")" ] && ! "$PROBE_TMUX" -S "$(cat "$G/leak-dir")/leak.sock" list-sessions >/dev/null 2>&1'
   run_sh child-leak.sh G_MODE=tidy
   check "G12: a test that kills its own server: exit 0, no leak reported, directory gone" \
     '[ "$GRC" -eq 0 ] && ! printf "%s" "$GERR" | grep -q "left a tmux server" && [ ! -e "$(cat "$G/leak-dir")" ]'
