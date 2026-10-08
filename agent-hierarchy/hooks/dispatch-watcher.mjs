@@ -11,6 +11,10 @@
  * Besides the time a dispatch has taken, it watches the members of the teams this session owns for
  * one that sits at a prompt (a permission dialog, a question) which nobody is watching: seen
  * blocked on two polls in a row, the Orchestrator is woken once per episode with the prompt text.
+ *
+ * It also recovers sessions whose turn ended on an API error (activity `failed`, written by the
+ * StopFailure hook or read back from the transcript): its own session and the live Claude members of
+ * owned teams are resumed after a backoff, up to a cap, and escalated beyond it.
  */
 
 import { dirname, join } from "node:path";
@@ -18,8 +22,9 @@ import { dirname, join } from "node:path";
 import { hierarchyDir, logHookError, resolveKind, ROSTER_CLI } from "./lib-config.mjs";
 import { appendGate, listExchanges, readGates, readMsgFile, readRoster, responseLanded } from "./lib-hier.mjs";
 import { excerptOf, herdrAgentList, promptNoteLine, readPromptCore } from "./lib-blocked.mjs";
+import { delaySec, MAX_RESUMES, oneLine, RESUME_PARAGRAPH, RETRYABLE, streakFor, transcriptFailure } from "./lib-recovery.mjs";
 import { ownedTeams, readTeam } from "./lib-roster.mjs";
-import { describeMembers } from "./lib-status.mjs";
+import { describeMembers, readActivityRecord, recordActivity } from "./lib-status.mjs";
 import {
   appendPeerRecord,
   appendReportRecord,
@@ -203,6 +208,81 @@ function blockedEvents(now) {
   return events;
 }
 
+const transcriptSeen = new Map();
+const clock = (iso) => new Date(iso).toTimeString().slice(0, 8);
+const QUIET_FOR_MS = 45000;
+
+/**
+ * The RESUME and API-FAILED events due now. The subjects are this session and every live Claude member
+ * of a team it owns. A session the StopFailure hook missed is found here from its transcript: its
+ * record has been quiet for a while and its last conversation entry is the harness's API-error message.
+ */
+function recoveryEvents(now) {
+  const events = [];
+  const dir = hierarchyDir(cwd);
+  const gates = readGates(dir);
+  const peerRows = readPeerRecords();
+  const done = (type, subject, failedAt) => gates.some((g) => g.type === type && g.session_id === sessionId && g.subject === subject && g.failed_at === failedAt);
+  // A wake ends the watcher, so each wake tells the Orchestrator to start it again.
+  const restart = `Restart the watcher if anything is still open: ${watcherCall(sessionId, cwd)}.`;
+  const subjects = [{ id: sessionId, own: true }];
+  const pid = Number(process.env.CLAUDE_PID);
+  const roster = readRoster(dir);
+  for (const teamName of ownedTeams(dir, { pid: Number.isInteger(pid) ? pid : NaN, sessionId })) {
+    const team = readTeam(dir, teamName);
+    if (!team) continue;
+    for (const m of describeMembers(dir, team, roster)) {
+      const row = (Array.isArray(team.members) ? team.members : []).find((x) => x && x.name === m.name);
+      if (row && m.live !== false && m.session_id && resolveKind(row) === "claude" && m.session_id !== sessionId) subjects.push({ id: m.session_id, own: false, name: m.name, role: row.role });
+    }
+  }
+  for (const sub of subjects) {
+    let rec = readActivityRecord(dir, sub.id);
+    if (rec && (rec.activity === "working" || rec.activity === "idle") && typeof rec.transcript_path === "string" && now - Date.parse(rec.at) >= QUIET_FOR_MS) {
+      const found = transcriptFailure(rec.transcript_path, transcriptSeen);
+      if (found) {
+        recordActivity(dir, sub.id, { activity: "failed", extra: { error: found.error, error_details: null, error_code: null, source: "transcript", failed_at: found.failed_at, streak: streakFor(peerRows, sub.id, Date.parse(found.failed_at)) } });
+        rec = readActivityRecord(dir, sub.id);
+      }
+    }
+    if (!rec || rec.activity !== "failed" || typeof rec.failed_at !== "string" || !Number.isFinite(Date.parse(rec.failed_at))) continue;
+    const failedAt = rec.failed_at;
+    const error = typeof rec.error === "string" && rec.error ? rec.error : "unknown";
+    // The cap and the delay use the count of resumes already emitted, whatever the record says.
+    const streak = streakFor(peerRows, sub.id, Date.parse(failedAt));
+    const detail = oneLine(rec.error_details, 300);
+    if (!RETRYABLE.has(error) || streak > MAX_RESUMES) {
+      if (done("api-failed", sub.id, failedAt)) continue;
+      appendGate(dir, { type: "api-failed", session_id: sessionId, subject: sub.id, failed_at: failedAt });
+      const who = sub.own ? "this session" : `${sub.role} "${sub.name}"`;
+      const text = sub.own
+        ? `ah watcher: this session stopped on an API error (${error}${detail ? `: ${detail}` : ""})${streak > MAX_RESUMES ? `, after ${MAX_RESUMES} automatic resumes` : ""}. Not resuming.`
+        : `ah watcher: ${who} stopped on an API error (${error}${detail ? `: ${detail}` : ""})${streak > MAX_RESUMES ? `, after ${MAX_RESUMES} automatic resumes` : ""}. Not resuming. Tell the user in one line; resume it only when the user says so. ${restart}`;
+      // Waking a session whose API is failing only fails again: its own failure is a row, not a wake.
+      events.push({ request_id: null, kind: "API-FAILED", text, quiet: sub.own, extra: { subject: sub.id, error, streak } });
+      continue;
+    }
+    if (now < Date.parse(failedAt) + delaySec(error, streak) * 1000 || done("resume", sub.id, failedAt)) continue;
+    // The record may have moved on since the poll began: someone typed, or the session recovered.
+    const again = readActivityRecord(dir, sub.id);
+    if (!again || again.activity !== "failed" || again.failed_at !== failedAt) continue;
+    appendGate(dir, { type: "resume", session_id: sessionId, subject: sub.id, failed_at: failedAt, n: streak });
+    const head = `${sub.own ? "this session's" : "Your"} last turn ended on an API error (${error}) at ${clock(failedAt)}; automatic resume ${streak}/${MAX_RESUMES}.`;
+    if (sub.own) {
+      events.push({ request_id: null, kind: "RESUME", text: `ah watcher: ${head}\n${RESUME_PARAGRAPH}\n${restart}`, extra: { subject: sub.id, error, streak, failed_at: failedAt } });
+    } else {
+      appendPeerRecord({ type: "heard", session_id: sessionId, from: sub.name, ts: new Date().toISOString() });
+      events.push({
+        request_id: null,
+        kind: "RESUME",
+        text: `ah watcher: ${sub.role} "${sub.name}" ended a turn on an API error (${error}) at ${clock(failedAt)}; automatic resume ${streak}/${MAX_RESUMES}. SendMessage ${sub.name} exactly the text between the lines below, and nothing else: no re-brief, no ETA reset.\n---\n${head}\n${RESUME_PARAGRAPH}\n---\n${restart}`,
+        extra: { subject: sub.id, member: sub.name, role: sub.role, error, streak, failed_at: failedAt },
+      });
+    }
+  }
+  return events;
+}
+
 function main() {
   if (!sessionId) {
     console.error("dispatch-watcher: --session is required");
@@ -221,12 +301,13 @@ function main() {
       // ponytail: pid reuse could fake a live parent or watcher; acceptable because the Stop hook and the idle notice still cover a missed wake.
       if (process.ppid !== parent || process.ppid === 1) process.exit(0);
       if (Date.now() - started >= WATCH_MAX_MS) process.exit(0);
-      const events = [...evaluate(Date.now()), ...blockedEvents(Date.now())];
+      const events = [...evaluate(Date.now()), ...blockedEvents(Date.now()), ...recoveryEvents(Date.now())];
       if (events.length) {
         const ts = new Date().toISOString();
         for (const ev of events) appendPeerRecord({ type: "watch-event", session_id: sessionId, request_id: ev.request_id, kind: ev.kind, text: ev.text, ts, ...(ev.extra || {}) });
-        for (const ev of events) console.log(ev.text);
-        process.exit(3);
+        const wake = events.filter((ev) => !ev.quiet);
+        for (const ev of wake) console.log(ev.text);
+        if (wake.length) process.exit(3);
       }
     } catch (err) {
       logHookError("dispatch-watcher.mjs", err);

@@ -38,7 +38,7 @@ const NOTE_CAP = 80;
 // lib-hier, lib-roster and lib-decisions import this module back, so nothing at module top level may
 // read an imported binding: derived values are built on first use.
 let activities = null;
-const knownActivity = (a) => (activities ||= [...Object.values(SELF_STATE), "unknown"]).includes(a);
+const knownActivity = (a) => (activities ||= [...Object.values(SELF_STATE), "failed", "unknown"]).includes(a);
 const SEVERITY = { stalled: 0, blocked: 1, overdue: 2, working: 3, reported: 4, expired: 5 };
 
 // Escape sequences go whole (CSI and OSC), then any C0/C1 control character left.
@@ -103,6 +103,12 @@ function readActivity(dir, file) {
   }
 }
 
+/** A subject's activity record as written, or null. */
+export function readActivityRecord(dir, subject) {
+  const file = activityFile(subject);
+  return file ? readActivity(dir, file) : null;
+}
+
 /** An activity subject's file name: `<session id>.json` for a Claude member, `pane-<name>.json` for a pane member. */
 function activityFile(subject) {
   return typeof subject === "string" && subject && subject !== "." && subject !== ".." && !/[/\\]/.test(subject) ? `${subject}.json` : null;
@@ -115,26 +121,36 @@ function activityFile(subject) {
  * name, never its input) is written when the record has none or its own is TOOL_WRITE_INTERVAL_SEC old.
  * A write without a `tool` keeps the record's `tool` and `tool_at`. Writes nothing without the
  * hierarchy dir. Never throws; true when written.
+ *
+ * `extra` adds fields to the record (an API-error record's `error`, `failed_at`, `streak`, the
+ * session's `transcript_path`); a record that already holds all of them is left alone. A `streak`
+ * and a `transcript_path` already in the record are carried to the next one unless `resetStreak`
+ * drops the streak (a normal end of turn).
  */
-export function recordActivity(dir, subject, { activity, blocked_by = null, note = null, tool = null }) {
+export function recordActivity(dir, subject, { activity, blocked_by = null, note = null, tool = null, extra = null, resetStreak = false }) {
   const file = activityFile(subject);
   if (!file || !dir || !existsSync(dir)) return false;
   const current = readActivity(dir, file);
   const name = clean(tool, NAME_CAP) || null;
   const nowMs = Date.now();
   const toolStale = !current || !current.tool_at || !(nowMs - Date.parse(current.tool_at) < TOOL_WRITE_INTERVAL_SEC * 1000);
-  if (current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note && !(name && toolStale)) return false;
+  const fields = {};
+  if (current && !resetStreak && Number.isInteger(current.streak) && current.streak > 0) fields.streak = current.streak;
+  if (current && typeof current.transcript_path === "string") fields.transcript_path = current.transcript_path;
+  for (const [k, v] of Object.entries(extra || {})) if (v !== undefined && v !== null) fields[k] = v;
+  const sameFields = Boolean(current) && Object.keys(fields).every((k) => current[k] === fields[k]) && (!resetStreak || !(current.streak > 0));
+  if (current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note && sameFields && !(name && toolStale)) return false;
   const kept = !name && current ? { tool: current.tool ?? null, tool_at: current.tool_at ?? null } : null;
   try {
     if (lstatOrNull(join(dir, "activity")) === null) mkdirSync(join(dir, "activity"), { recursive: true });
     const activityDir = activityDirOf(dir);
     if (!activityDir) return false;
     const tmp = join(activityDir, `${file}.${process.pid}.tmp`);
-    const unchanged = current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note;
+    const unchanged = current && current.activity === activity && (current.blocked_by ?? null) === blocked_by && (current.note ?? null) === note && sameFields;
     const at = unchanged && typeof current.at === "string" ? current.at : new Date(nowMs).toISOString();
     const toolAt = new Date(nowMs).toISOString();
     const toolFields = name ? { tool: name, tool_at: toolAt } : kept || { tool: null, tool_at: null };
-    writeTempExclusive(tmp, JSON.stringify({ activity, at, blocked_by, note, ...toolFields }) + "\n");
+    writeTempExclusive(tmp, JSON.stringify({ activity, at, blocked_by, note, ...toolFields, ...fields }) + "\n");
     renameSync(tmp, join(activityDir, file));
   } catch {
     return false;

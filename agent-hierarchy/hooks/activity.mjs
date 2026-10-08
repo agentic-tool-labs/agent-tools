@@ -8,7 +8,11 @@
 // UserPromptSubmit and Stop also refresh status.json in sessions that record nothing: a Claude peer
 // files its report with the Write tool, which no ah hook sees, so its turn ending is what surfaces it.
 //
-// Role sessions only (the role sessionstart.mjs persisted for this session id), never a subagent.
+// A normal end of turn (Stop) clears the record's API-error streak; every other event carries it. The record also keeps
+// the session's transcript path, for the watcher's backup detection of an API-error end (lib-recovery.mjs).
+//
+// Role sessions (the role sessionstart.mjs persisted for this session id), and any other session that already has a
+// record (the StopFailure hook writes one for a plain session, which must then follow its next events), never a subagent.
 // UserPromptSubmit and Stop also re-register a session whose latest roster row is a false `down` (healFalseDown).
 // Never writes stdout, never blocks, always exits 0.
 //
@@ -18,7 +22,8 @@
 import { hierarchyDir, isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
 import { healFalseDown, SELF_STATE } from "./lib-hier.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
-import { recordActivity, statusChanged } from "./lib-status.mjs";
+import { transcriptPathOk } from "./lib-recovery.mjs";
+import { readActivityRecord, recordActivity, statusChanged } from "./lib-status.mjs";
 
 try {
   const input = await readHookInput();
@@ -28,12 +33,16 @@ try {
     const dir = hierarchyDir(cwd);
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     let recorded = false;
-    if (sessionId && readSessionRole(sessionId)) {
+    // A role session, or any session the StopFailure hook has already recorded: its failed record must follow what it does next.
+    const role = sessionId ? readSessionRole(sessionId) : null;
+    if (sessionId && (role || readActivityRecord(dir, sessionId))) {
       // PostToolUse means working again; recordActivity leaves a record already in that state alone.
       const activity = event === "PostToolUse" ? "working" : SELF_STATE[event];
       // A running member whose latest roster row is a false `down` re-registers at its next prompt or stop.
-      if (event === "UserPromptSubmit" || event === "Stop") healFalseDown(dir, sessionId, process.ppid);
-      if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null, tool: event === "PostToolUse" ? input.tool_name : null });
+      if (role && (event === "UserPromptSubmit" || event === "Stop")) healFalseDown(dir, sessionId, process.ppid);
+      // The transcript path lets the watcher read an API-error end the StopFailure hook missed; a normal end clears the failure streak.
+      const transcript = transcriptPathOk(input.transcript_path);
+      if (activity) recorded = recordActivity(dir, sessionId, { activity, blocked_by: event === "Notification" ? "permission" : null, tool: event === "PostToolUse" ? input.tool_name : null, extra: transcript ? { transcript_path: transcript } : null, resetStreak: event === "Stop" });
     }
     if (!recorded && (event === "UserPromptSubmit" || event === "Stop")) statusChanged(dir);
   }

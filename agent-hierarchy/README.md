@@ -249,6 +249,24 @@ The same mod shows the team in three more places, to every session that sees
 the status entry. A member session sees none of them (more on that
 [below](#who-sees-them)).
 
+### Recovery from API errors
+
+A turn that ends on an API error ("Connection lost mid-response", an overloaded
+server) leaves a session idle with no report. The StopFailure hook records it as
+the session's activity `failed`, with the error kind, and the dispatch watcher
+backs that up by reading the session's transcript when the hook did not fire.
+For a retryable error (`server_error`, `overloaded`, `rate_limit`, or an
+unnamed one) the watcher resumes the session with a "re-check state, then
+continue" prompt after 30 s, 2 min and 8 min (`rate_limit` waits 2, 8 and 20
+min), at most three times per failure streak: your own session is woken, a
+member is resumed by the Orchestrator through SendMessage. Any other error
+(authentication, billing, an invalid request, an unknown kind), or a fourth
+failure, is not resumed: the Orchestrator tells you for a member, and for the
+Orchestrator's own session you get a desktop notification, because waking a
+session whose API is failing only fails again. A user interrupt fires no hook
+and is never resumed. Non-Claude members are not covered, and the transcript
+backup raises no notification for the Orchestrator's own session.
+
 ### Members never wait at a prompt
 
 Nobody watches a member session, so none may wait at a prompt. A hook decision

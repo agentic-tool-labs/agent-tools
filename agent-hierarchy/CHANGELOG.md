@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.124.0]
+
+### Added
+
+- A turn that ends on an API error is recorded as the session's activity `failed` (new StopFailure hook, with a transcript read by the dispatch watcher as a backup) and recovered: the watcher resumes the session after 30 s, 2 min and 8 min (`rate_limit`: 2, 8 and 20 min), at most three times per failure streak, then escalates; non-retryable errors escalate at once. A member is resumed by the Orchestrator through SendMessage; the Orchestrator's own session is woken, or notified on the desktop when it will not be resumed. Documented in `docs/status-file.md`.
+
 ## [0.123.0]
 
 ### Changed
