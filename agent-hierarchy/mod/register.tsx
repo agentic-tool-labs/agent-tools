@@ -182,8 +182,8 @@ export const register: Register = (on, options) => {
       }
     }
 
-    // Whether the main checkout's document, already loaded, says anything about this viewer other than "owns no team".
-    const knowsViewer = (main: string | null, now: number, id: string) => main !== null && mainHeld.doc !== null && nullCause(mainHeld.doc, now, id) !== NO_OWNED_TEAM
+    // Whether `d` is readable, current, and lists the viewer as a member or an owner.
+    const knows = (d: Doc | null, now: number, id: string) => d !== null && ![NO_OWNED_TEAM, 'unreadable', 'expired'].includes(nullCause(d, now, id))
 
     const tick = async () => {
       // The id is read every tick: /clear keeps this environment but starts a new session.
@@ -198,12 +198,12 @@ export const register: Register = (on, options) => {
         }
         if (places === null) { poolHeld.doc = null; poolHeld.lost = 'no file' }
         else {
-          // In a linked worktree the main checkout's document comes first, when it knows this viewer; a viewer it
-          // does not know (a team recorded in the worktree's own dir) is looked up in the worktree's.
-          if (places.main !== null) await load(places.main, mainHeld)
-          if (!knowsViewer(places.main, now, id)) await load(places.pool, poolHeld)
+          // The document of the pool the session works in comes first: its exchanges and dispatches are the ones
+          // this session made. Only where it does not know the viewer is the main checkout's looked up.
+          await load(places.pool, poolHeld)
+          if (!knows(poolHeld.doc, now, id) && places.main !== null) await load(places.main, mainHeld)
         }
-        const h = places !== null && knowsViewer(places.main, now, id) ? mainHeld : poolHeld
+        const h = places !== null && !knows(poolHeld.doc, now, id) && places.main !== null && knows(mainHeld.doc, now, id) ? mainHeld : poolHeld
         doc = h.doc
         lost = h.lost
       } catch {

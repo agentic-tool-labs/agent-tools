@@ -187,12 +187,32 @@ for (const surface of ['terminal', 'desktop'] as const) {
     return w
   }
 
-  test(`${surface}: a worktree cwd shows the main checkout's teams, not its own document`, { options: { status_entry: true } }, async ($, on) => {
+  test(`${surface}: a worktree document that lists the viewer is shown, not the main checkout's`, { options: { status_entry: true } }, async ($, on) => {
     const w = linked(fixtures.work, fixtures.idle)
     stage(on, w)
     mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(w.shown).toEqual(['1 live · 1 out'])
+    expect(w.shown).toEqual(['2 live · 0 out'])
+  })
+
+  // The worktree's own document can be absent, not list the viewer, be expired or be unreadable; the main checkout's is then shown.
+  const expiredIdle = fixtures.idle.replace(/"expires_at":\s*"[^"]+"/, '"expires_at": "2020-01-01T00:00:00.000Z"')
+  for (const [why, own] of [['is absent', null], ['does not list the viewer', fixtures.foreign], ['is expired', expiredIdle], ['is unreadable', 'not json']] as const) {
+    test(`${surface}: the main checkout's document is shown when the worktree's ${why}`, { options: { status_entry: true } }, async ($, on) => {
+      const w = linked(fixtures.work, own)
+      stage(on, w)
+      mock.clock(on, { now: NOW })
+      await start($, w, surface)
+      expect(w.shown).toEqual(['1 live · 1 out'])
+    })
+  }
+
+  test(`${surface}: a viewer neither document lists gets the worktree document's cause`, async ($, on) => {
+    const w = linked(fixtures.foreign, fixtures.foreign)
+    stage(on, w)
+    mock.clock(on, { now: NOW })
+    await start($, w, surface)
+    expect(writesOf(w, 'why')).toEqual(['no team owned by this session'])
   })
 
   test(`${surface}: the same teams show as the cwd moves main to worktree and back`, { options: { status_entry: true } }, async ($, on) => {
@@ -224,21 +244,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 
   test(`${surface}: a submodule's .git file is the nearest checkout, whatever the main document says`, { options: { status_entry: true } }, async ($, on) => {
-    const w = linked(fixtures.work, fixtures.idle)
+    const w = linked(fixtures.work, null)
     w.files[WT + '/.git'] = { text: 'gitdir: /work/repo/.git/modules/wt\n', mtimeMs: 1 }
     stage(on, w)
     mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(w.shown).toEqual(['2 live · 0 out'])
+    expect(w.shown.filter(Boolean)).toEqual([])
+    expect(w.readPaths).not.toContain(FILE)
   })
 
   test(`${surface}: a malformed .git file is the nearest checkout`, { options: { status_entry: true } }, async ($, on) => {
-    const w = linked(fixtures.work, fixtures.idle)
+    const w = linked(fixtures.work, null)
     w.files[WT + '/.git'] = { text: 'not a pointer\n', mtimeMs: 1 }
     stage(on, w)
     mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(w.shown).toEqual(['2 live · 0 out'])
+    expect(w.shown.filter(Boolean)).toEqual([])
+    expect(w.readPaths).not.toContain(FILE)
   })
 
   test(`${surface}: a normal checkout never looks beyond its own document`, { options: { status_entry: true } }, async ($, on) => {
@@ -249,13 +271,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(w.shown).toEqual(['2 live · 0 out'])
   })
 
-  test(`${surface}: when the main document owns the viewer, the worktree's own file is not read`, { options: { status_entry: true } }, async ($, on) => {
+  test(`${surface}: when the worktree document lists the viewer, the main checkout's status file is not read`, { options: { status_entry: true } }, async ($, on) => {
     const w = linked(fixtures.work, fixtures.idle)
     stage(on, w)
     mock.clock(on, { now: NOW })
     await start($, w, surface)
-    expect(w.readPaths).not.toContain(WT_FILE)
-    expect(w.readPaths).toContain(FILE)
+    expect(w.readPaths).toContain(WT_FILE)
+    expect(w.readPaths).not.toContain(FILE)
   })
 
   test(`${surface}: a member session sets nothing`, async ($, on) => {

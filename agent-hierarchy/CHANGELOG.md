@@ -9,7 +9,8 @@ detail lives in the README and in [docs/](./docs/); design reasoning in
 
 ### Fixed
 
-- The Pane finds the viewer's own teams in two cases it used to miss. A session registers itself (session id and Claude pid) at every prompt, not only at SessionStart, so a session started under an older release, or after `/reload-plugins`, is listed as the owner of its team; the file does not grow, because a row is skipped when the session's newest row already has the pid. In a linked worktree the session is recorded in the main checkout's hierarchy dir as well and that dir's `status.json` is refreshed, and the Pane reads the main checkout's document first, falling back to the worktree's own for a team recorded there by an older release.
+- The Pane finds the viewer's own teams in two cases it used to miss. A session registers itself (session id and Claude pid) at every prompt, not only at SessionStart, so a session started under an older release, or after `/reload-plugins`, is listed as the owner of its team; the file does not grow, because a row is skipped when the session's newest row already has the pid. In a linked worktree the session is recorded in the main checkout's hierarchy dir as well and that dir's `status.json` is refreshed. The Pane shows the document of the pool the session works in, and falls back to the main checkout's only when the pool's does not list the viewer.
+- A Codex 0.162 member receives its briefs. Its idle composer, drawn with one or two footer lines and sometimes no padding row below the prompt, is recognised, so `deliver` types the brief instead of reporting `harness-prompt` and raising a false BLOCKED wake.
 
 ## [0.124.0]
 

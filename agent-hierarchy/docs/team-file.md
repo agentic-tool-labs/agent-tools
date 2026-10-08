@@ -21,9 +21,9 @@ status stay per pool.
 
 `session-pids.jsonl` is written to the pool **and**, from a linked worktree, to the main checkout's dir: a session
 records its row at SessionStart and again at every prompt (skipped when the session's newest row already has the
-same pid), and the main checkout's `status.json` is refreshed too. The Pane reads the main checkout's `status.json`
-first and falls back to the worktree's own only when the main one does not list the viewer as owning a team (a
-legacy team recorded in the worktree's own dir).
+same pid), and the main checkout's `status.json` is refreshed too. The Pane reads the `status.json` of the pool the
+session works in first, since its exchanges and dispatches are that pool's, and looks at the main checkout's only
+when the pool's document is absent, expired, unreadable or does not list the viewer as a member or an owner.
 
 A team recorded in a worktree's own dir by an older release is **legacy**: it is read and
 updated where it is (never moved), and teardown and `teams` also read it when a team has

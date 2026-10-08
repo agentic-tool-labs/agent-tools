@@ -124,6 +124,13 @@ derive composer-e12a composer-followup 's.replace("Ask Codex to do anything","As
 derive composer-e12a composer-transcript 's.replace("  Tip: Try","  Sign in with ChatGPT\n  Do you trust the contents of this directory?\n› Ask Codex to do anything\n\n  Tip: Try")'
 derive composer-e12a composer-2footer 's.replace(/\n*$/,"\n  40% context left\n")'
 derive composer-e12a composer-padding 's.replace(/(› Ask Codex to do anything[^\n]*\n)[^\n]*\n/,"$1  queued: run the tests\n")'
+# Layouts the idle-composer rule rejects: three footer lines, two blank rows, a blank between footers, an option
+# row or a prompt footer straight under the placeholder row.
+derive composer-0162-spawn composer-3footer 's.replace(/\n*$/,"\n  third footer line\n")'
+derive composer-0162-spawn composer-2blank 's.replace("anything\n\n","anything\n\n\n")'
+derive composer-0162-spawn composer-footergap 's.replace("anything\n\n","anything\n  first\n\n")'
+derive composer-0162-nopad composer-optionrow 's.replace("anything\n","anything\n  1. Yes, proceed\n")'
+derive composer-0162-nopad composer-promptfooter 's.replace(/(anything\n)[^\n]*\n/,"$1  Press enter to continue\n")'
 : > "$SCREENS/blank.txt"
 # From Codex's source at the same tag: the update prompt and model migration
 cat > "$SCREENS/update-prompt.txt" <<'EOF'
@@ -1137,16 +1144,25 @@ check "K17: the trust dialog from source at 52 columns under idle: trust-dialog,
 check "K17: the verbatim trust dialog captured live (codex-cli 0.154.0-alpha.6.2, an untrusted non-git cwd) under idle: trust-dialog, [trust, distrust]" 'is_seen trust-live idle "{\"composer\":false,\"prompt\":\"trust-dialog\",\"ids\":\"trust,distrust\"}"'
 check "K17: ...and under Herdr blocked, which the trust dialog never is: no match" 'is_seen trust-live blocked "$NOPE"'
 COMPOSER='{"composer":true,"prompt":null,"ids":""}'
-for f in composer-e12a composer-e12b composer-after-turn composer-plain composer-guillemet composer-followup composer-transcript composer; do
+for f in composer-e12a composer-e12b composer-after-turn composer-plain composer-guillemet composer-followup composer-transcript composer composer-0162-spawn composer-0162-nopad composer-2footer composer-padding; do
   check "K17: $f is the composer" 'is_seen $f idle "$COMPOSER"'
 done
-check "K17: the composer under Herdr working or blocked is not the composer" 'is_seen composer-e12a working "$NOPE" && is_seen composer-e12a blocked "$NOPE"'
-for f in composer-typed composer-2footer composer-padding hooks-review update-prompt model-migration blank; do
+iscomp() { HOME="$FAKEHOME" node --input-type=module -e "const R=await import('$H/lib-roster.mjs');const fs=await import('node:fs');process.stdout.write(String(R.isComposer(process.argv[1],fs.readFileSync('$SCREENS/'+process.argv[2]+'.txt','utf8'))))" "$1" "$2"; }
+check "K17: isComposer is true for both Codex 0.162 captures and the three older ones" '[ "$(iscomp codex composer-0162-spawn)" = true ] && [ "$(iscomp codex composer-0162-nopad)" = true ] && [ "$(iscomp codex composer-e12a)" = true ] && [ "$(iscomp codex composer-e12b)" = true ] && [ "$(iscomp codex composer-after-turn)" = true ]'
+check "K17: isComposer is false for a prompt, typed input and a Claude kind" '[ "$(iscomp codex approval-e8)" = false ] && [ "$(iscomp codex trust-live)" = false ] && [ "$(iscomp codex login-e8)" = false ] && [ "$(iscomp codex composer-typed)" = false ] && [ "$(iscomp claude composer-0162-spawn)" = false ]'
+check "K17: the composer under Herdr working or blocked is not the composer"'is_seen composer-e12a working "$NOPE" && is_seen composer-e12a blocked "$NOPE"'
+for f in composer-typed composer-3footer composer-2blank composer-footergap composer-optionrow composer-promptfooter hooks-review update-prompt model-migration blank; do
   check "K17: $f matches nothing" 'is_seen $f idle "$NOPE"'
   setup_deliver
   hs "{agents:{\"myrepo-architect\":{gets:[$IDLE],visible:\"@$f\"}}}"
   r "" deliver myrepo-architect --req "$REQ"
   check "K17: ...so deliver sends nothing: blocked, harness-prompt, options [], sent false, after a second read" '[ "$(jo o.status)" = blocked ] && [ "$(jo o.blocked_by)" = harness-prompt ] && [ "$(jo "o.options.length")" = 0 ] && [ "$(jo o.sent)" = false ] && [ "$(calls prompt)" -eq 0 ] && [ "$(calls read)" -eq 2 ] && [ ! -f "$RESP" ]'
+done
+for f in composer-0162-spawn composer-0162-nopad; do
+  setup_deliver
+  hs "{agents:{\"myrepo-architect\":{gets:[$IDLE],visible:\"@$f\"}}}"
+  r "" deliver myrepo-architect --req "$REQ" --timeout 1
+  check "K17: Codex 0.162 ($f), idle and ready: deliver types the brief, sent true, no block recorded" '[ "$(calls prompt)" -eq 1 ] && [ "$(jo o.sent)" = true ] && [ "$(jo o.status)" != blocked ] && ! grep -rqs "harness-prompt" "$HIER/activity" "$HIER/gates.jsonl" 2>/dev/null'
 done
 setup_deliver
 hs "{agents:{\"myrepo-architect\":{gets:[$IDLE],visible:\"@composer-transcript\"}}}"

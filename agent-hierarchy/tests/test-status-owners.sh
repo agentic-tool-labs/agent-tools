@@ -174,6 +174,22 @@ WT_MAIN="$(cd "$WT_MAIN" && pwd -P)"; WT="$(cd "$WT" && pwd -P)"
 phook HOME="$SANDBOX/wthome" HOOK="$H/activity.mjs" DRV_TEAM="$WT_MAIN/.claude/hierarchy/team.json" -- "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"sess-wt\",\"cwd\":\"$WT\"}" >/dev/null
 check "a prompt from a linked worktree writes a row in both pools" '[ "$(rows_of "$WT/.claude/hierarchy/session-pids.jsonl")" = 1 ] && [ "$(rows_of "$WT_MAIN/.claude/hierarchy/session-pids.jsonl")" = 1 ]'
 check "...and the main checkout's status.json lists the session as owner" '[ "$(owners_of "$WT_MAIN/.claude/hierarchy/status.json")" = "sess-wt|" ]'
+check "the worktree's own status.json lists the team homed in main, with the viewer as owner" '[ "$(owners_of "$WT/.claude/hierarchy/status.json")" = "sess-wt|" ]'
+
+# A session working in a worktree sees its own pool's exchange: the worktree document counts the dispatch, main's does not.
+WTH="$WT/.claude/hierarchy"; MAINH="$WT_MAIN/.claude/hierarchy"
+rm -rf "$MAINH" "$WTH"; mkdir -p "$MAINH/msgs" "$MAINH/activity" "$WTH/msgs" "$WTH/activity"
+REF="$(node -e 'process.stdout.write(new Date(Date.now() - 1000).toISOString())')"
+FAKEHOME="$SANDBOX/wthome"; PENDING="$FAKEHOME/.claude/agent-hierarchy.peer-pending.jsonl"; PROJ="$WT"
+HD="$MAINH"; owned - $$ null "[$ARCH]"; row sess-ex $$
+HD="$WTH"; row sess-ex $$
+request 20260101-115800-w001 architect build-step "$(at -120000)" small demo-architect
+dispatch 20260101-115800-w001 architect "$(at -60000)" sess-ex; stub 20260101-115800-w001
+wstatus() { HOME="$SANDBOX/wthome" node --input-type=module -e "import { statusChanged } from '$H/lib-status.mjs'; statusChanged(process.argv[1])" "$1"; }
+unset AGENT_HIERARCHY_DIR
+wstatus "$WTH"; wstatus "$MAINH"
+outs() { node -e 'const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(o.owners.map((x) => x.timeline[0].out).join())' "$1"; }
+check "the worktree document counts the exchange in the worktree's pool; main's does not" '[ "$(outs "$WTH/status.json")" = 1 ] && [ "$(outs "$MAINH/status.json")" = 0 ]'
 rm -f "$WT_MAIN/.claude/hierarchy/session-pids.jsonl" "$WT/.claude/hierarchy/session-pids.jsonl"
 phook HOME="$SANDBOX/wthome" HOOK="$H/sessionstart.mjs" DRV_TEAM="$WT_MAIN/.claude/hierarchy/team.json" -- "{\"session_id\":\"sess-wt2\",\"source\":\"startup\",\"cwd\":\"$WT\"}" >/dev/null
 check "SessionStart in a linked worktree writes a row in both pools, and the main status.json lists the session" '[ "$(rows_of "$WT/.claude/hierarchy/session-pids.jsonl")" = 1 ] && [ "$(rows_of "$WT_MAIN/.claude/hierarchy/session-pids.jsonl")" = 1 ] && [ "$(owners_of "$WT_MAIN/.claude/hierarchy/status.json")" = "sess-wt2|" ]'
