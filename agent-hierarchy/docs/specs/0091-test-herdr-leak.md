@@ -5,7 +5,10 @@ Reviewer: reviewer
 
 Target: **0.129.0** (0.126.0-0.128.0 merge first). Base: `main` a4c0607 (0.125.0). Branch `ah/0091-test-herdr-leak`.
 
-Status: **r1**.
+Status: **r2**.
+- r2 changes:
+  - Member launch through `runShell` is guarded on command-position words, using one shared list: herdr, tmux, claude, codex (§3.2a).
+  - Test-owned tmux servers: the hermetic layer owns the EXIT, TERM, INT and HUP path; sweeps, kills and reports any live server under `$TMUX_TMPDIR`; and removes the directory. `test-roster-spawn-cwd.sh` sockets move off `/tmp`. New lints H3 and H4 (§3.5). New cases G8-G12.
 
 ## 1. Goal
 
@@ -72,12 +75,71 @@ Why kill the test: herdr and tmux failures are tolerated on purpose in several p
 
 The `herdrOnPath()` PATH scan (`lib-roster.mjs:140`) is unchanged. It executes nothing.
 
+### 3.2a Member launch through the shell is guarded too (r2)
+
+**The gap.**
+- Member launch runs a command *string* through `runShell` (`roster.mjs:3638-3643`, `execFile("/bin/sh", ["-c", cmd])`), at `:3917-3919`, with the retry at `:3926`.
+- The strings come from these templates:
+  - `herdr agent start … --pane <TARGET> …` (`:2714-2715`);
+  - `tmux send-keys -t <TARGET> "<claude …>" Enter` (`:2731`);
+  - `<claude …> --bg` (`:2742`);
+  - or a team's custom `spawn` template.
+- None of this goes through `muxExec`, so in a test a launch can still reach a real herdr or tmux, or start a **real Claude session**.
+
+**The rule.**
+- **One list of guarded binaries:** `herdr`, `tmux`, `claude` and `codex`. It is a single constant in `hooks/lib-mux.mjs`, used by both `muxExec` and `runShell`.
+- **When `AH_TEST_HERMETIC=1`,** `runShell` checks the command string before it executes it:
+  - Split the string into simple commands at `;`, `&&`, `||`, `|` and newlines.
+  - For each, take its **command-position word**: the first word after any leading `VAR=value` assignments and an optional `exec`, `env` or `command`.
+  - When that word's basename is in the list, apply the **same** `guard()` as `muxExec`:
+    - resolved on PATH (or taken as given when it contains a `/`);
+    - realpath inside `AH_TEST_FAKE_BIN` → allowed;
+    - not found → today's failure;
+    - otherwise → tripwire.
+- **Argument words are never checked.** For example, `claude` in `--kind claude` is ignored.
+- **Words in other positions** inside `$(…)` or backticks are not parsed. ah's templates contain none. A custom template that hides a guarded binary there is outside this guard, as the H4 lint covers test fixtures (§3.5).
+- **Outside hermetic mode, `runShell` is byte-identical.**
+
+`muxExec`'s guard covers `claude` and `codex` as well, through the shared list.
+
+### 3.5 Test-owned tmux servers never outlive their test (r2)
+
+**The leak.** `tests/test-roster-spawn-cwd.sh` starts real private tmux servers on purpose:
+- `TMUX_SOCK="/tmp/ah-w1t5-$$.sock"` (:127), then `"$REAL_TMUX" -S "$TMUX_SOCK" new-session -d -s w1t5` (:135);
+- `GUARD_TMUX_SOCK="/tmp/ah-w1guard-$$.sock"` (:223), then `new-session -d -s w1guard` (:229).
+
+It kills them only on straight-line code (:144-145 and :231-232). Its only trap is `trap 'rm -rf "$SANDBOX"' EXIT` (:17), and the sockets live in `/tmp`, outside `$SANDBOX`.
+
+So any exit between start and kill leaves the server running with ppid 1 and a stale `/tmp/ah-w1t5-*.sock`. That includes a failed command under `set -e`, a timeout, Ctrl-C, or the 0091 tripwire's SIGTERM. Two such servers were found after the 0091 loops. Inferred, not verified: the 0091 tripwire's SIGTERM in that window is the likely trigger.
+
+**The fix, in three parts.**
+
+1. **`lib-hermetic.sh` owns the exit path.** When sourced, it:
+   - records `AH_REAL_TMUX`: the first `tmux` on PATH **at source time**, before any test prepends fakes, or empty if there is none;
+   - installs `trap … EXIT`, plus `trap 'exit 143' TERM`, `trap 'exit 130' INT` and `trap 'exit 129' HUP`, so a signal still runs the EXIT path. (A plain `SIGTERM` to bash skips EXIT traps.)
+   - provides **`hermetic_on_exit '<command>'`**, which appends a command to a list the EXIT handler runs in order. Tests no longer set their own traps.
+
+   The EXIT handler:
+   1. runs the registered commands;
+   2. **sweeps `$TMUX_TMPDIR`**: for every socket file under it (`find "$TMUX_TMPDIR" -type s`, which covers `-S` sockets placed there and `-L`/default sockets in `tmux-<uid>/`), when `AH_REAL_TMUX` is set, runs `"$AH_REAL_TMUX" -S <sock> kill-server`;
+   3. **if any kill-server succeeds,** a server was still alive, so this is a leak. It prints `ah: test hermeticity: <test file> left a tmux server running on <sock>; it was killed` to stderr and sets the exit status to 1, even if the test otherwise passed;
+   4. removes `$TMUX_TMPDIR`, so `/tmp/ahtt.*` no longer accumulates;
+   5. exits with the test's own status, unless step 3 forced 1.
+2. **Sockets live under the test's `TMUX_TMPDIR`.**
+   - `test-roster-spawn-cwd.sh` uses `"$TMUX_TMPDIR/w1t5.sock"` and `"$TMUX_TMPDIR/w1guard.sock"`, which are short enough for the macOS socket-path limit.
+   - It registers `hermetic_on_exit` commands that kill-server both sockets and remove `$SANDBOX`, in place of its `trap … EXIT`.
+   - The straight-line kills at :144 and :231 stay; the exit sweep is the backstop.
+3. **Lint, in `test-suite-hermeticity.sh`:**
+   - **H3.** No `tests/test-*.sh` sets `trap` on `EXIT`, `TERM`, `INT` or `HUP`. They use `hermetic_on_exit`.
+   - **H4.** No `tests/test-*.sh` passes `tmux -S` a path that does not start with `"$TMUX_TMPDIR`. A literal `/tmp/` socket path fails.
+   - Probe scripts (`probe-*.sh`) are outside H1-H4, as before.
+
 ### 3.3 Enforcing it suite-wide: `tests/test-suite-hermeticity.sh`
 
 Add to the existing lint:
 
 - **H1.** Every `tests/test-*.sh` sources `lib-hermetic.sh` before any `node`, `herdr` or `tmux` invocation. The check is textual: the first line that is not blank, a comment or a `set` line must be the source line.
-- **H2.** Every file that writes an executable named `herdr` or `tmux` into a directory also exports `AH_TEST_FAKE_BIN` containing that directory.
+- **H2.** Every file that writes an executable named `herdr`, `tmux`, `claude` or `codex` into a directory also exports `AH_TEST_FAKE_BIN` containing that directory. The `claude` and `codex` names were added in r2, with the shared list.
 
 ### 3.4 Migrating the existing tests
 
@@ -93,7 +155,13 @@ Add to the existing lint:
 - `agent-hierarchy/hooks/lib-blocked.mjs` (:18, :27), routed through the shared helper.
 - `agent-hierarchy/hooks/lib-roster.mjs`: only if the shared helper lives there.
 - `agent-hierarchy/tests/test-*.sh`: all files (§3.4).
-- `agent-hierarchy/tests/test-suite-hermeticity.sh`: H1, H2, and the cases in §6.
+- `agent-hierarchy/tests/test-suite-hermeticity.sh`: H1, H2, and the cases in §6. r2 adds H3, H4, G8-G12.
+- r2:
+  - `agent-hierarchy/hooks/lib-mux.mjs`: the shared guarded-binary list, used by `runShell`;
+  - `hooks/roster.mjs`: `runShell` (§3.2a);
+  - `tests/lib-hermetic.sh`: the exit path, `hermetic_on_exit`, the sweep, and removing the directory (§3.5);
+  - `tests/test-roster-spawn-cwd.sh`: sockets under `$TMUX_TMPDIR`, and `hermetic_on_exit` in place of its trap;
+  - every `tests/test-*.sh` that sets `trap … EXIT`: converted to `hermetic_on_exit` (H3 lists them).
 - `.claude-plugin/plugin.json` and the root `.claude-plugin/marketplace.json` `ah` entry: both `0.129.0`.
 - `CHANGELOG.md`: `## [0.129.0]` with `### Fixed`, in plain prose: the test suite can no longer open tabs in your real herdr or windows in your real tmux; every test runs under a shared guard that fails a test which reaches either.
 
@@ -117,6 +185,16 @@ Must not change:
 | `AH_TEST_HERMETIC` unset (a user session) | unchanged; the real herdr runs |
 | `AH_TEST_PID` unset or dead | no kill; the tripwire line and the throw still happen |
 | Probe scripts (`tests/probe-*.sh`, not `test-*`) | not covered by H1; they keep their own sandbox and the shim that forbids herdr |
+| r2: member launch, herdr template, herdr not listed | tripwire before `/bin/sh` runs; nothing launched |
+| r2: member launch, `tmux send-keys …` template, tmux not listed | tripwire |
+| r2: member launch, terminal transport `claude … --bg`, real claude on PATH | tripwire; no real Claude session starts |
+| r2: `herdr agent start x --kind claude …` with a listed fake herdr and no fake claude | runs (`claude` is an argument, not checked) |
+| r2: `runShell` with `AH_TEST_HERMETIC` unset | byte-identical |
+| r2: a test killed by the tripwire while it owns a private tmux server | the EXIT path runs (TERM trap); the server is killed; the leak is reported; the exit is non-zero |
+| r2: a test that kills its own server normally | the sweep finds only stale or no sockets; no leak reported; the exit status is unchanged |
+| r2: no real tmux on PATH at source time | the sweep only removes the directory; nothing to kill |
+| r2: a test that sets `trap … EXIT` | fails H3 |
+| r2: `tmux -S /tmp/x.sock` in a test | fails H4 |
 
 ## 6. Verification (each new case fails on 0.125.0)
 
@@ -138,7 +216,22 @@ In `tests/test-suite-hermeticity.sh`:
 - **G5 (symlink).** A listed directory holding a symlink to `$T/realbin/herdr` gives the tripwire.
 - **H1 and H2 lint cases.** A synthetic test file without the source line fails H1. A synthetic file that writes `bin/herdr` without exporting `AH_TEST_FAKE_BIN` fails H2. Both run against a temporary copy and never against the real tree.
 
-Then the full suite passes with every file migrated, and running it leaves no tripwire file with content.
+r2 cases, also in `test-suite-hermeticity.sh`, each in a child `bash` that sources the lib:
+
+- **G8.** Member launch via the herdr template, with an unlisted logging herdr: killed, no log, a tripwire line naming `herdr agent start`.
+- **G9.** The same through the tmux `send-keys` template.
+- **G10.** Terminal transport `claude … --bg`, with an unlisted logging `claude`: tripwire, and the claude log is empty.
+- **G11.** A listed fake herdr with `--kind claude` and no fake claude: the launch runs; claude is not checked as an argument.
+- **G12 (leak detection; the negative test for B).** The child starts a real private server, `"$AH_REAL_TMUX" -S "$TMUX_TMPDIR/leak.sock" new-session -d -s leak`, and exits 0 without killing it. Assert all of:
+  - the child's exit is 1;
+  - stderr names `leak.sock`;
+  - afterwards `"$AH_REAL_TMUX" -S <that sock> list-sessions` fails (the server is gone);
+  - the directory is removed.
+
+  A variant sends the child SIGTERM mid-way, with the same result. Skipped, with the skip printed, when the machine has no real tmux.
+- **H3 and H4 lint cases** run on synthetic files.
+
+Then the full suite passes with every file migrated, and running it leaves no tripwire file with content, no `/tmp/ahtt.*` directory, no `/tmp/ah-*.sock`, and no tmux server whose socket is under a test directory.
 
 ## 7. Assumptions to confirm while building
 
