@@ -20,7 +20,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 import { homedir } from "node:os";
 
 import { checkoutRoot, CLASSES, declaredTier, isTeamAliasShape, isValidTeamAlias, KIND_DEFAULT, KIND_RE, mainHierarchyDir, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
-import { statusChanged } from "./lib-status.mjs";
+import { appendSessionPid, statusChanged } from "./lib-status.mjs";
 
 // Spec 0043 §1.1/§1.5: `kind`/`route`-shape helpers are DEFINED in lib-config.mjs (the leaf) and
 // re-exported here so the member schema still reads as one module. Defining them here instead
@@ -845,6 +845,12 @@ export function writeTeam(dir, teamData, team = null) {
 /** `writeTeam` to an explicit team file path; `dir` is the pool whose status document it changes. */
 export function writeTeamFile(path, teamData, dir) {
   atomicWriteJson(path, teamData);
+  // The orchestrator that writes its own team binds this session to its process, so a session that
+  // started before session records existed is still found by the status filter. A team written for
+  // another pid binds nothing.
+  const sid = process.env.CLAUDE_CODE_SESSION_ID;
+  const orchPid = teamData && teamData.orchestrator && teamData.orchestrator.pid;
+  if (typeof sid === "string" && sid && Number.isInteger(orchPid) && orchPid === Number(process.env.CLAUDE_PID)) appendSessionPid(dir, sid, orchPid);
   statusChanged(dir);
 }
 

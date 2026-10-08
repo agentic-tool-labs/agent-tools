@@ -3,20 +3,18 @@
   "written_at": "2026-01-01T12:00:00.000Z",
   "expires_at": "2026-01-02T12:00:00.000Z",
   "enabled": true,
-  "member_sessions": [
-    "sess-demo-reviewer"
-  ],
+  "member_sessions": [],
   "teams": [
     {
       "team": null,
       "members": [
         {
-          "name": "demo-reviewer",
-          "role": "reviewer",
-          "label": "reviewer",
-          "kind": "claude",
-          "route": "peer",
-          "session_id": "sess-demo-reviewer",
+          "name": "demo-architect",
+          "role": "architect",
+          "label": "architect",
+          "kind": "codex",
+          "route": "pane",
+          "session_id": null,
           "live": true,
           "activity": "working",
           "activity_at": "2026-01-01T11:59:00.000Z",
@@ -30,12 +28,12 @@
       ],
       "dispatches": [
         {
-          "id": "20260101-115800-m001",
-          "slug": "review-step",
-          "to": "reviewer",
-          "to_name": "demo-reviewer",
-          "member": "demo-reviewer",
-          "label": "reviewer",
+          "id": "20260101-115800-w001",
+          "slug": "build-step",
+          "to": "architect",
+          "to_name": "demo-architect",
+          "member": "demo-architect",
+          "label": "architect",
           "eta": "small",
           "eta_ms": 300000,
           "created": "2026-01-01T11:58:00.000Z",
@@ -103,9 +101,7 @@
   ],
   "owners": [
     {
-      "sessions": [
-        "sess-orch"
-      ],
+      "sessions": [],
       "teams": [
         null
       ],

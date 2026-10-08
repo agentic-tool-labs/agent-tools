@@ -24,6 +24,11 @@ team() {
   node -e 'const [p, members, pid] = process.argv.slice(1); require("fs").writeFileSync(p, JSON.stringify({ team_id: "t-demo", created: new Date().toISOString(), orchestrator: { session_id: null, pid: Number(pid) }, members: JSON.parse(members) }) + "\n")' "$path" "$2" "$$"
 }
 
+# <session id>: the session record binding that session to this test shell's pid, the owner of every team `team` writes.
+session() {
+  node --input-type=module -e "import { appendSessionPid } from '$H/lib-status.mjs'; appendSessionPid(process.argv[1], process.argv[2], Number(process.argv[3]));" "$HD" "$1" "$$"
+}
+
 # <member name> <role> <session id> <pane id>: that member's live `up` row, attributed by pane.
 up() {
   node --input-type=module -e "import { appendRosterRecord } from '$H/lib-hier.mjs'; appendRosterRecord(process.argv[1], { status: 'up', session_id: process.argv[2], pid: Number(process.argv[3]), role: process.argv[4], pane_id: process.argv[5] });" "$HD" "$3" "$$" "$2" "$4"

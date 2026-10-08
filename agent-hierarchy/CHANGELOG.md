@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.121.0]
+
+### Changed
+
+- The Pane, the band, the status bar entry and the toasts show only the viewing orchestrator's own teams. In a checkout shared by several orchestrators, another orchestrator's teams no longer appear, count or toast. `status.json` gains an `owners` key (one entry per owning process: its session ids, its team names and its own timeline); every existing key is unchanged and a status file without `owners` still shows pool-wide. Each session start, and each team-writing command run by the owning session, appends a row to the new pool file `session-pids.jsonl`, which maps a Claude process to its session ids.
+
 ## [0.120.0]
 
 ### Changed

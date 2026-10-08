@@ -342,7 +342,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 
   const hiddenCases = [
-    ['an invisible entry', 'sess-orch', (d: any) => { d.timeline[0].visible = false }],
+    ['an invisible entry', 'sess-orch', (d: any) => { d.timeline[0].visible = false; for (const o of d.owners) o.timeline[0].visible = false }],
     ['a member session', 'sess-member', (d: any) => { d.member_sessions = [...d.member_sessions, 'sess-member'] }],
   ] as const
   for (const [label, id, edit] of hiddenCases) test(`${surface}: the band draws no button when there is no band (${label})`, async ($, on) => {
@@ -748,7 +748,7 @@ function beneath(on: any) {
 }
 const VIEWPORT = { columns: 125, rows: 40 }
 // The vectors whose view is null, and the cause the empty Pane's line names for each.
-const NULL_CAUSE: Record<string, string> = { hidden: 'hierarchy off', 'member-session': 'member session' }
+const NULL_CAUSE: Record<string, string> = { hidden: 'hierarchy off', 'member-session': 'member session', foreign: 'no team owned by this session' }
 const bandProps = (over: Record<string, unknown> = {}): any =>
   ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {}, ...over })
 const paneProps = (): any => ({ title: 'Hierarchy', isFocused: false, bodyColumns: 120, placement: 'inline', scroll: { offset: 0, bodyRows: 20 }, view: {} })

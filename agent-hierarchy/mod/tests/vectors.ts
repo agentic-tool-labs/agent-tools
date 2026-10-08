@@ -33,6 +33,7 @@ export const vectors: Readonly<Record<string, Vector>> = {
       { key: 'stalled:20260101-115400-b001', text: 'architect stalled · build-step · no report after 7m' },
     ],
   },
+  foreign: { now: '2026-01-01T12:00:30.000Z', sessionId: 'sess-orch', columns: 120, statusText: undefined, ...NO_VIEW },
   hidden: { now: '2026-01-01T12:05:00.000Z', sessionId: 'sess-orch', columns: 120, statusText: undefined, ...NO_VIEW },
   idle: {
     now: '2026-01-01T12:00:00.000Z', sessionId: 'sess-orch', columns: 120, statusText: '2 live · 0 out',
