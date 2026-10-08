@@ -92,6 +92,7 @@ ARCH "node $R/ status"; check "D5: refuses a trailing slash" 'denied'
 ARCH "node /other/plugin/hooks/roster.mjs status"; check "D5: refuses another version's path" 'denied'
 for v in create spawn dismiss disband deliver role teams stream "role set"; do ARCH "node $R $v"; check "D6: refuses roster $v" 'denied'; done
 for v in sweep route "decision add"; do ARCH "node $MG $v"; check "D6: refuses msg $v" 'denied'; done
+ARCH "node $MG fill --id x --from architect --req $MSGS/x--request.md --body x"; check "D6 (spec 0090): refuses msg fill, a form with no quote in it, so only the unlisted verb can be the reason" 'denied'
 ARCH "node $R checkin --orchestrator-pid 1"; check "D7: refuses --orchestrator-pid" 'denied'
 ARCH "node $R checkin --team other --cwd $PROJ"; check "D8: refuses checkin --team of another team" 'denied'
 gate s9 ah:architect - "node $R checkin --team t1"

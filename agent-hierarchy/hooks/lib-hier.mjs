@@ -18,7 +18,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -410,6 +410,65 @@ export function responsePlan(reqPath) {
     team_guide: rf.team_file ? TEAM_GUIDE : null,
   };
   return { path: join(dirname(reqPath), msgFilename(fields)), fields };
+}
+
+/** The largest body `fillResponse` accepts, in UTF-8 bytes. */
+export const FILL_BODY_MAX = 64 * 1024;
+
+/**
+ * Replace everything after the frontmatter of the response to `reqPath` with `body` (a JSON string literal holding the text),
+ * keeping the frontmatter block byte for byte; a body without a trailing newline gets one. The response is the file `new --type
+ * response` made, found where `responsePlan` puts it; `fillResponse` never creates one. Every check is a thrown Error with nothing
+ * written. The write is a temporary file in the same directory renamed over the target. Returns `{id, path, bytes}`, `bytes` being
+ * the size of the file written.
+ */
+export function fillResponse({ id, from, reqPath, body }) {
+  if (typeof id !== "string" || !ID_RE.test(id)) throw new Error(`fill: --id must be a message id, got ${JSON.stringify(id)}`);
+  if (typeof from !== "string" || !from) throw new Error("fill: --from is required");
+  if (typeof reqPath !== "string" || !reqPath) throw new Error("fill: --req needs the request file's absolute path");
+  if (!isAbsolute(reqPath)) throw new Error(`fill: --req must be an absolute path, got ${JSON.stringify(reqPath)} — use the brief's [hierarchy-msg <path>] value verbatim`);
+  if (!existsSync(reqPath)) throw new Error(`fill: --req: no such file ${reqPath}`);
+  const meta = parseMsgFilename(reqPath);
+  if (!meta || meta.type !== "request") throw new Error(`fill: --req: ${reqPath} is not a request file`);
+  if (meta.id !== id) throw new Error(`fill: --req: request id ${JSON.stringify(meta.id)} does not match --id ${JSON.stringify(id)}`);
+
+  const path = responsePlan(reqPath).path;
+  if (!existsSync(path)) throw new Error(`fill: no response file at ${path} — run new first (msg.mjs new --type response …); fill never creates one`);
+  const current = readFileSync(path, "utf8");
+  const fm = parseFrontmatter(current);
+  if (!fm) throw new Error(`fill: ${path} has no frontmatter`);
+  if (fm.fields.type !== "response") throw new Error(`fill: ${path} is not a response (type ${JSON.stringify(fm.fields.type)})`);
+  if (fm.fields.id !== id) throw new Error(`fill: ${path} has id ${JSON.stringify(fm.fields.id)}, not ${JSON.stringify(id)}`);
+  if (fm.fields.from !== from) throw new Error(`fill: ${path} is from ${JSON.stringify(fm.fields.from)}, not ${JSON.stringify(from)}`);
+
+  if (typeof body !== "string") throw new Error("fill: --body is required: the report as one JSON string");
+  let text;
+  try {
+    text = JSON.parse(body);
+  } catch (err) {
+    throw new Error(`fill: --body must be a JSON string (${err.message})`);
+  }
+  if (typeof text !== "string") throw new Error("fill: --body must be a JSON string, not another JSON value");
+  if (!text.trim()) throw new Error("fill: --body is empty");
+  if (Buffer.byteLength(text) > FILL_BODY_MAX) throw new Error(`fill: --body is over ${FILL_BODY_MAX} bytes`);
+  if (text.split("\n").includes("---")) throw new Error("fill: --body has a line that is exactly --- , which would read as a frontmatter fence");
+
+  const head = current.split("\n").slice(0, fm.end).join("\n") + "\n";
+  const content = head + (text.endsWith("\n") ? text : `${text}\n`);
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(tmp, content, "utf8");
+    renameSync(tmp, path);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // no temporary file was left
+    }
+    throw err;
+  }
+  statusChanged(dirname(dirname(path)));
+  return { id, path, bytes: Buffer.byteLength(content) };
 }
 
 /** The frontmatter block a hand-written response needs, `created` filled at call time. */

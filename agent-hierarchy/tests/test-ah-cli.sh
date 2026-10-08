@@ -59,6 +59,19 @@ ok(`node ${M} list --open --to implementor --cwd /repo`, { script: "msg", verb: 
 ok(`node ${M} index /repo/.claude/hierarchy/msgs/x--request.md`, { script: "msg", verb: "index", positional: ["/repo/.claude/hierarchy/msgs/x--request.md"] });
 ok(`node "${R}" show --cwd /repo`, { script: "roster", verb: "show" });            // wholly double-quoted path
 ok(`node \x27${R}\x27 show --cwd "/re po"`, { script: "roster", flags: {"cwd": "/re po"} }); // quoted arg with a space
+// spec 0090: msg.mjs fill carries its report as one single-quoted JSON string. Everything but a single quote may sit inside
+// the quotes (a newline is the two characters backslash-n, a single quote is backslash-u0027), and none of it is expanded.
+const BS = String.fromCharCode(92);
+const FILL_BODY = "\"line one " + BS + "n semi; hash # dollar $x tick" + BS + "u0027s pipe | amp & lt < gt > paren ( ) brace { } star * q ? tilde ~ \"";
+const FILL_REQ = "/repo/.claude/hierarchy/msgs/20261008-000000-aaaa--reviewer--s--request.md";
+const FILL_HEAD = `node ${M} fill --id 20261008-000000-aaaa --from reviewer --req ${FILL_REQ} --body `;
+ok(FILL_HEAD + "\x27" + FILL_BODY + "\x27 --cwd /repo", { script: "msg", verb: "fill", flags: {"id": "20261008-000000-aaaa", "from": "reviewer", "req": FILL_REQ, "body": FILL_BODY, "cwd": "/repo"} });
+no(FILL_HEAD + "\x27\"a\"\x27 | tee /tmp/x --cwd /repo");          // a pipe outside the quotes
+no(FILL_HEAD + "\x27\"a\"\x27 > /tmp/x --cwd /repo");              // a redirection outside the quotes
+no(FILL_HEAD + "$(id) --cwd /repo");                              // a substitution outside the quotes
+no(FILL_HEAD + "\x27\"a\"\x27 ; id");                              // a second command
+no(FILL_HEAD + "\x27\"a\nb\"\x27 --cwd /repo");                    // a literal newline inside the quotes: the command is one line
+no(FILL_HEAD + "\"a\"; id --cwd /repo");                          // the body unquoted, with a metacharacter
 
 // rejections — every one must fail closed
 no(`cd /x && node ${R} show --cwd /repo`);
@@ -146,6 +159,22 @@ allow_hook "node $INST/A/hooks/roster.mjs whoami --team alpha --cwd /repo"
 check "T2: whoami is allowed" '[ "$RC" -eq 0 ] && is_allow'
 allow_hook "node $INST/A/hooks/msg.mjs list --open --cwd /repo"
 check "T2: msg.mjs is allowed too" '[ "$RC" -eq 0 ] && is_allow'
+BS=$(printf '\134')
+FILL_REQ="/repo/.claude/hierarchy/msgs/20261008-000000-aaaa--reviewer--s--request.md"
+FILL_CMD="node $INST/A/hooks/msg.mjs fill --id 20261008-000000-aaaa --from reviewer --req $FILL_REQ --body"
+allow_hook "$FILL_CMD '\"line one${BS}nline two${BS}u0027s; \$x | y # z\"' --cwd /repo"
+check "T2 (spec 0090): msg.mjs fill with a single-quoted JSON body → allow" '[ "$RC" -eq 0 ] && is_allow'
+BIGBODY=$(node -e 'process.stdout.write("\"" + "a".repeat(65536) + "\"")')
+allow_hook "$FILL_CMD '$BIGBODY' --cwd /repo"
+check "T2 (spec 0090): ...a 64 KiB body is allowed too: the hook has no length cap" '[ "$RC" -eq 0 ] && is_allow'
+allow_hook "$FILL_CMD '\"a\"' | tee /tmp/ah-test-out"
+check "T2 (spec 0090): fill with a pipe outside the quotes → no output" '[ -z "$OUT" ]'
+allow_hook "$FILL_CMD '\"a\"' > /tmp/ah-test-out"
+check "T2 (spec 0090): fill with a redirection outside the quotes → no output" '[ -z "$OUT" ]'
+allow_hook "$FILL_CMD \$(id) --cwd /repo"
+check "T2 (spec 0090): fill with a command substitution outside the quotes → no output" '[ -z "$OUT" ]'
+allow_hook "node $SANDBOX/outside/hooks/msg.mjs fill --id 20261008-000000-aaaa --from reviewer --req $FILL_REQ --body '\"a\"' --cwd /repo"
+check "T2 (spec 0090): fill from a copy outside the root → no output (normal prompt)" '[ -z "$OUT" ]'
 allow_hook "node $SANDBOX/outside/hooks/roster.mjs show --cwd /repo"
 check "T2: a copy outside the root and its siblings → no output (normal prompt)" '[ -z "$OUT" ]'
 allow_hook "node $INST/A/hooks/roster.mjs dismiss bob --close --confirm --plan-token t --cwd /repo"
