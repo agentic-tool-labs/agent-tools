@@ -132,6 +132,15 @@ mcli "$WT" new --type response --id "$ID" --to orchestrator --from implementor -
 mcli "$WT" new --type response --id "$ID" --to orchestrator --from implementor --req "$REQ"
 check "DUP: second --req response for the same id exits non-zero and says already exists" '[ "$RC" -ne 0 ] && echo "$OUT" | grep -q "already exists"'
 
+# ---- Spec 0090: fill from a worktree against a main-checkout request lands the body in the response beside the request. ----
+mint_request fill
+mcli "$WT" new --type response --id "$ID" --to orchestrator --from implementor --req "$REQ"
+FILL_RESP="$MAIN_MSGS/$ID--orchestrator--fill--response.md"
+FILL_FM_BEFORE=$(awk 'NR==1 {print; next} {print} $0=="---" {exit}' "$FILL_RESP")
+mcli "$WT" fill --id "$ID" --from implementor --req "$REQ" --body '"## [0] tldr\n- [1] status: done\n"'
+check "FILL: a worktree --cwd with a main-checkout request exits 0 and fills the response beside the request" '[ "$RC" -eq 0 ] && grep -q "status: done" "$FILL_RESP"'
+check "FILL: the frontmatter is untouched and the worktree pool holds no response" 'grep -q "status: done" "$FILL_RESP" && [ "$(awk "NR==1 {print; next} {print} \$0==\"---\" {exit}" "$FILL_RESP")" = "$FILL_FM_BEFORE" ] && [ "$(responses_under "$(pool_of "$WT")")" = "0" ]'
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

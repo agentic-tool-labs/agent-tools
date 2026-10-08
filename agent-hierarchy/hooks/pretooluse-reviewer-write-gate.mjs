@@ -16,7 +16,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 
-import { logHookError, readHookInput, resolveHierarchyRole, responseCommand } from "./lib-config.mjs";
+import { fillCommand, logHookError, readHookInput, resolveHierarchyRole, responseCommand } from "./lib-config.mjs";
 import { hierarchyDir } from "./lib-hier.mjs";
 import { msgsDirsOf } from "./lib-roster.mjs";
 
@@ -32,7 +32,7 @@ function decide(decision, reason) {
 const deny = (why) =>
   decide(
     "deny",
-    `ah: the Reviewer may write only its own response file${why ? ` (${why})` : ""}. Create it first with \`${responseCommand()}\`, then fill the sections below the frontmatter with Edit.`
+    `ah: the Reviewer may write only its own response file${why ? ` (${why})` : ""}. Create it first with \`${responseCommand()}\`, then file the report with one \`${fillCommand()}\`; Write and Edit on that file work as a fallback while its frontmatter stays as written.`
   );
 
 /** The leading `---` frontmatter block of `text`, closing line included, else null. */

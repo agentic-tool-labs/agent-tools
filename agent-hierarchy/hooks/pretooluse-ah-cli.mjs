@@ -18,6 +18,9 @@
  * `create --commit`, `remove`) are bookkeeping on ah's own files and were auto-allowed as MCP
  * calls too; the roster skill gate's `deny` still outranks this `allow`.
  *
+ * `msg.mjs fill` is the one verb whose grant depends on who asks: it is allowed only for a session whose own role (resolved from the
+ * payload, positively) equals its `--from`, and denied otherwise.
+ *
  * Path rule and the sibling-directory arm: see `scriptUnderRoot` in lib-ah-cli.mjs. A copy of the
  * script anywhere else — /tmp, a user checkout while the installed root is the plugin cache — is
  * not recognised and prompts normally.
@@ -26,7 +29,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
+import { isSubagent, logHookError, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
 import { isCloseCommand, isTrustCommit, parseAhCommand, scriptUnderRoot } from "./lib-ah-cli.mjs";
 
 const OWN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -58,6 +61,20 @@ try {
   // A role-pack trust commit gets the roster skill gate's `ask` (or `deny`) alone.
   if (isTrustCommit(parsed)) process.exit(0);
   if (!scriptUnderRoot(parsed.scriptPath, OWN_ROOT)) process.exit(0);
+
+  // `msg.mjs fill` writes a response body without a prompt, and msg.mjs cannot know who runs it, so the grant is bound here to the
+  // caller's own role from the payload: a role the payload itself names (`direct`) that equals `--from`. Anything else is a final deny.
+  if (parsed.script === "msg" && parsed.verb === "fill") {
+    const { role, direct } = resolveHierarchyRole(input);
+    const from = typeof parsed.flags.from === "string" ? parsed.flags.from : null;
+    let why = null;
+    if (!role || !direct) why = "ah: msg.mjs fill needs a known ah role session";
+    else if (from !== role) why = `ah: msg.mjs fill may only write a response from your own role (${role}); --from names ${from === null ? "nothing" : from}`;
+    if (why) {
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } }));
+      process.exit(0);
+    }
+  }
 
   try {
     await recordDeliver(input, parsed);
