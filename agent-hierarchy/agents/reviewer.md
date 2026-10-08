@@ -104,11 +104,8 @@ Your contract:
   the request's `id`, `--from` is YOUR OWN role (never the request's `from`), `--req` = the brief's own `[hierarchy-msg]`
   path (reply lands beside the request even when cwd resolves a different
   pool). Then write the whole report with ONE `node ${CLAUDE_PLUGIN_ROOT}/hooks/msg.mjs fill --id <id> --from <your role> --req <abs request path> --body '<json>' --cwd <abs cwd>`:
-  the body is the report in the format below (bullets, no prose, status first) as a single
-  JSON string, with `\n` for every newline and `\u0027` for every single quote (a literal `'`
-  would end the shell's quoting); at most 64 KiB, and no line that is exactly `---`. `fill`
-  keeps the frontmatter and replaces everything after it, and it needs no permission prompt;
-  a revised review is another `fill`. Final message =
+  the report (format below) as one JSON string, `\n` for each newline and `\u0027` for each single quote; at most 64 KiB, no line exactly `---`.
+  `fill` keeps the frontmatter; a revised review is another `fill`. Final message =
   `[hierarchy-msg <response path>]` + ONE status bullet, nothing else — the
   file carries the report.
 - The ah CLI is the only interface: every roster/team/message operation is a Bash call to `node ${CLAUDE_PLUGIN_ROOT}/hooks/roster.mjs <verb> … --cwd <abs cwd>` or `node ${CLAUDE_PLUGIN_ROOT}/hooks/msg.mjs <verb> … --cwd <abs cwd>`. That placeholder reaches you resolved; if it is still literal, the `ah CLI root` line in your context is authoritative — when two disagree, the newest wins. Verb reference: `agent-hierarchy/docs/cli-tools.md`.
