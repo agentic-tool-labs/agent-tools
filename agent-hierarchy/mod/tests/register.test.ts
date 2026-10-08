@@ -2,6 +2,7 @@ import { test, expect, mock } from 'claude-code/testing'
 import { fixtures } from './fixtures.ts'
 import { sectionsFor, vectors } from './vectors.ts'
 import { utf8Bytes } from '../view.ts'
+import { dismissTeam } from '../register.tsx'
 
 const NOW = Date.parse('2026-01-01T12:00:00.000Z')
 const REPO = '/work/repo'
@@ -241,7 +242,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     mock.clock(on, { now: NOW })
     await start($, w, surface)
     const ui = await $.ui.mount({ plugin: 'ah', surface, component: 'AbovePrompt', props: bandProps(), viewport: VIEWPORT })
-    expect(buttons(await ui.drawn()).length).toBe(1)
+    expect(buttons(await ui.drawn()).length).toBe(2)
     const before = w.opens.length
     w.order.length = 0
     await ui.press({ key: 'ah-pane' })
@@ -1027,4 +1028,354 @@ test('R3 the pinned helper is unchanged: its two toasts keep the engine default 
   const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'Pane', requestId: 'ah-status', props: paneProps(), viewport: VIEWPORT })
   await ui.press({ key: 'ah-name-A' })
   expect(w.toastCalls).toEqual([{ text: 'Could not focus that member.' }])
+})
+
+// ---- Dismiss: the band's second button, its dialogs and the two roster calls it makes.
+const DNOW = Date.parse(vectors.work.now)
+const DID = vectors.work.sessionId
+const doc = (edit: (d: any) => void = () => {}): string => { const d = JSON.parse(fixtures.work); edit(d); return JSON.stringify(d) }
+// Every member idle and every dispatch reported: nothing in flight.
+const idleEdit = (d: any) => { d.teams[0].members[0].activity = 'idle'; d.teams[0].dispatches[0].states = [{ at: '2026-01-01T11:59:00.000Z', state: 'reported' }] }
+const TOKEN = '0123456789abcdef'
+const planOf = (over: Record<string, unknown> = {}) => ({ close: [{ role: 'architect', name: 'demo-architect' }], close_token: TOKEN, next: 'x', expected: 1, strays: [], not_closable: [], team_files: ['/x/team.json'], warnings: [], sources: {}, ...over })
+const out = (o: unknown, exitCode = 0, stderr = '') => ({ value: { exitCode, stdout: typeof o === 'string' ? o : JSON.stringify(o), stderr } })
+const PLAN_OK = () => out(planOf())
+const CLOSE_OK = () => out({ closed: true, still_live: [], results: [] })
+// A press of Dismiss with scripted dialogs: an answer string, or null for a dialog that is dismissed. `runs` answer process.run in order.
+const dismissRig = async ($: any, on: any, text: string, asks: (string | null)[], runs: ((e: any) => any)[] = [PLAN_OK, CLOSE_OK], over: { options?: any; columns?: number; id?: string } = {}) => {
+  const w = world({ id: over.id ?? DID, files: { [FILE]: { text, mtimeMs: 1 } } })
+  const asked: { question: string; options: string[] }[] = []
+  const ran: any[] = []
+  stage(on, w)
+  beneath(on)
+  mock.clock(on, { now: DNOW })
+  on('tool.call', (_$: any, e: any, next: any) => {
+    if (e.tool !== 'AskUserQuestion') return next(e)
+    const q = e.questions[0]
+    asked.push({ question: q.question, options: q.options.map((o: any) => o.label) })
+    const a = asks[asked.length - 1]
+    return a === null || a === undefined ? { deny: 'dismissed' } : { result: { questions: e.questions, answers: { [q.question]: a } } }
+  })
+  on('process.run', (_$: any, e: any) => { ran.push(e); return (runs[ran.length - 1] ?? (() => out('', 1, 'unscripted')))(e) })
+  await start($, w, 'terminal')
+  const ui = await $.ui.mount({ plugin: 'ah', surface: 'terminal', component: 'AbovePrompt', props: bandProps({ bodyColumns: over.columns ?? 120 }), viewport: VIEWPORT })
+  return { w, asked, ran, ui, press: () => ui.press({ key: 'ah-dismiss' }) }
+}
+const keysOf = (n: any): string[] => buttons(n).map((b: any) => b.props?.key ?? b.key)
+const CWD = '/work/repo/sub'
+const roster = (over: string[]) => ['node', expect.stringMatching(/\/hooks\/roster\.mjs$/), 'disband', ...over]
+const planArgv = (team: string) => roster(['--plan', '--team', team, '--cwd', CWD])
+const closeArgv = (team: string) => roster(['--close', '--confirm', '--plan-token', TOKEN, '--team', team, '--cwd', CWD])
+
+for (const [columns, keys] of [[125, ['ah-pane', 'ah-dismiss']], [52, ['ah-pane', 'ah-dismiss']], [51, ['ah-pane']], [40, ['ah-pane']]] as [number, string[]][]) {
+  test(`D1 an owned view at ${columns} columns draws ${keys.join(' + ')}`, async ($, on) => {
+    const { ui } = await dismissRig($, on, doc(), [], [], { columns })
+    expect(keysOf(await ui.drawn())).toEqual(keys)
+  })
+}
+
+test('D1b below the Pane button width neither button is drawn', async ($, on) => {
+  const { ui } = await dismissRig($, on, doc(), [], [], { columns: 39 })
+  expect(keysOf(await ui.drawn())).toEqual([])
+})
+
+test('D2 a legacy document (no owners) draws Pane and no Dismiss', async ($, on) => {
+  const { ui } = await dismissRig($, on, doc((d) => { delete d.owners }), [], [])
+  expect(keysOf(await ui.drawn())).toEqual(['ah-pane'])
+})
+
+test('D2b a viewer who owns nothing draws no band and no Dismiss; a member session neither', async ($, on) => {
+  const a = await dismissRig($, on, doc(), [], [], { id: 'someone-else' })
+  expect(keysOf(await a.ui.drawn())).toEqual([])
+})
+
+test('D2c a member session draws no Dismiss', async ($, on) => {
+  const { ui } = await dismissRig($, on, doc((d) => { d.member_sessions = [DID] }), [], [])
+  expect(keysOf(await ui.drawn())).toEqual([])
+})
+
+test('D2d an owned view with no team (pipeline only) draws no Dismiss', async ($, on) => {
+  const { ui } = await dismissRig($, on, doc((d) => { d.teams = []; d.owners[0].teams = [] }), [], [])
+  expect(keysOf(await ui.drawn()).includes('ah-dismiss')).toBe(false)
+})
+
+for (const [label, answer] of [['Cancel', 'Cancel'], ['Other free text', 'sure, go'], ['a dismissed dialog', null]] as [string, string | null][]) {
+  test(`D3 ${label} on the confirm: the plan ran, nothing closed, no toast`, async ($, on) => {
+    const { w, asked, ran, press } = await dismissRig($, on, doc(idleEdit), [answer])
+    await press()
+    expect(ran.length).toBe(1)
+    expect(ran[0].argv).toEqual(planArgv('@default'))
+    expect(asked.length).toBe(1)
+    expect(asked[0].options[0]).toBe('Cancel')
+    expect(w.toasts).toEqual([])
+  })
+}
+
+test('D4 an idle team: one dialog, then the close with the plan token, then the toast', async ($, on) => {
+  const { w, asked, ran, press } = await dismissRig($, on, doc(idleEdit), ['Dismiss default'])
+  await press()
+  expect(asked.length).toBe(1)
+  expect(asked[0].options).toEqual(['Cancel', 'Dismiss default'])
+  expect(asked[0].question).toContain('Dismiss team default? This closes 1 member session: demo-architect.')
+  expect(asked[0].question).toContain('No member is busy.')
+  expect(asked[0].question).toContain('No open dispatches.')
+  expect(asked[0].question).not.toContain('in-flight')
+  expect(ran.map((r) => r.argv)).toEqual([planArgv('@default'), closeArgv('@default')])
+  expect(ran.map((r) => r.init)).toEqual([{ timeoutMs: 15000 }, { timeoutMs: 30000 }])
+  expect(w.toasts).toEqual(['Dismissed default.'])
+})
+
+test('D5 a busy member with an open dispatch: both named in the question, then a second dialog, then the close', async ($, on) => {
+  const { w, asked, ran, press } = await dismissRig($, on, doc((d) => { d.teams[0].dispatches[0].states = [{ at: '2026-01-01T11:59:00.000Z', state: 'overdue' }] }), ['Dismiss default', 'Dismiss anyway'])
+  await press()
+  expect(asked.length).toBe(2)
+  expect(asked[0].question).toContain('BUSY now: demo-architect.')
+  expect(asked[0].question).toContain('Open dispatches: 1 (demo-architect overdue).')
+  expect(asked[0].question).toContain('Their in-flight work will be lost.')
+  expect(asked[1].options).toEqual(['Cancel', 'Dismiss anyway'])
+  expect(asked[1].question).toBe('default has work in flight: demo-architect busy; 1 open dispatch. Close it anyway and lose that work?')
+  expect(ran.length).toBe(2)
+  expect(w.toasts).toEqual(['Dismissed default.'])
+})
+
+for (const [label, answer] of [['Cancel', 'Cancel'], ['Other free text', 'yes please'], ['a dismissed dialog', null]] as [string, string | null][]) {
+  test(`D6 ${label} on the second dialog: no close, no toast`, async ($, on) => {
+    const { w, asked, ran, press } = await dismissRig($, on, doc(), ['Dismiss default', answer])
+    await press()
+    expect(asked.length).toBe(2)
+    expect(ran.length).toBe(1)
+    expect(w.toasts).toEqual([])
+  })
+}
+
+test('D7 an open dispatch with nobody working still asks twice', async ($, on) => {
+  const { asked, ran, press } = await dismissRig($, on, doc((d) => { d.teams[0].members[0].activity = 'idle' }), ['Dismiss default', 'Dismiss anyway'])
+  await press()
+  expect(asked.length).toBe(2)
+  expect(asked[0].question).toContain('No member is busy.')
+  expect(asked[1].question).toBe('default has work in flight: 1 open dispatch. Close it anyway and lose that work?')
+  expect(ran.length).toBe(2)
+})
+
+test('D7b a busy member with no open dispatch asks twice and names no dispatch count', async ($, on) => {
+  const { asked, press } = await dismissRig($, on, doc((d) => { d.teams[0].dispatches[0].states = [{ at: '2026-01-01T11:59:00.000Z', state: 'reported' }] }), ['Dismiss default', 'Cancel'])
+  await press()
+  expect(asked[1].question).toBe('default has work in flight: demo-architect busy. Close it anyway and lose that work?')
+})
+
+test('D8 a blocked member is not busy: one dialog, with a Blocked line', async ($, on) => {
+  const { asked, ran, press } = await dismissRig($, on, doc((d) => { idleEdit(d); d.teams[0].members[0].activity = 'blocked' }), ['Dismiss default'])
+  await press()
+  expect(asked.length).toBe(1)
+  expect(asked[0].question).toContain('No member is busy.')
+  expect(asked[0].question).toContain('Blocked: demo-architect.')
+  expect(ran.length).toBe(2)
+})
+
+test('D8b reported and expired dispatches are not open', async ($, on) => {
+  const { asked, press } = await dismissRig($, on, doc((d) => { idleEdit(d); d.teams[0].dispatches.push({ ...d.teams[0].dispatches[0], id: 'x2', states: [{ at: '2026-01-01T11:59:00.000Z', state: 'expired' }] }) }), ['Cancel'])
+  await press()
+  expect(asked[0].question).toContain('No open dispatches.')
+})
+
+test('D8c stalled and overdue dispatches are open', async ($, on) => {
+  const { asked, press } = await dismissRig($, on, doc((d) => { idleEdit(d); d.teams[0].dispatches[0].states = [{ at: '2026-01-01T11:59:00.000Z', state: 'stalled' }] }), ['Cancel'])
+  await press()
+  expect(asked[0].question).toContain('Open dispatches: 1 (demo-architect stalled).')
+})
+
+test('D9 the default team is addressed as @default and a team named default as default', async ($, on) => {
+  const named = await dismissRig($, on, doc((d) => { d.teams[0].team = 'default'; d.owners[0].teams = ['default'] }), ['Cancel'])
+  await named.press()
+  expect(named.ran[0].argv).toEqual(planArgv('default'))
+})
+
+test('D9b both owned: the picker labels them @default and default, each answer keeps its own argv', async ($, on) => {
+  const two = (d: any) => { d.teams.push({ ...JSON.parse(JSON.stringify(d.teams[0])), team: 'default' }); d.owners[0].teams = [null, 'default'] }
+  const a = await dismissRig($, on, doc(two), ['@default', 'Cancel'])
+  await a.press()
+  expect(a.asked[0].options).toEqual(['Cancel', '@default', 'default'])
+  expect(a.ran[0].argv).toEqual(planArgv('@default'))
+  expect(a.asked[1].options).toEqual(['Cancel', 'Dismiss @default'])
+})
+
+test('D9c the picker answer default reaches the named team', async ($, on) => {
+  const two = (d: any) => { d.teams.push({ ...JSON.parse(JSON.stringify(d.teams[0])), team: 'default' }); d.owners[0].teams = [null, 'default'] }
+  const a = await dismissRig($, on, doc(two), ['default', 'Cancel'])
+  await a.press()
+  expect(a.ran[0].argv).toEqual(planArgv('default'))
+})
+
+for (const [label, answer] of [['Cancel', 'Cancel'], ['Other free text', 'beta please'], ['a dismissed dialog', null]] as [string, string | null][]) {
+  test(`D10 ${label} on the team picker: nothing runs at all`, async ($, on) => {
+    const { w, asked, ran, press } = await dismissRig($, on, doc((d) => { d.teams.push({ ...JSON.parse(JSON.stringify(d.teams[0])), team: 'beta' }); d.owners[0].teams = [null, 'beta'] }), [answer])
+    await press()
+    expect(asked.length).toBe(1)
+    expect(asked[0].options).toEqual(['Cancel', 'default', 'beta'])
+    expect(ran).toEqual([])
+    expect(w.toasts).toEqual([])
+  })
+}
+
+test('D10b the picked team alone is planned, asked about and closed', async ($, on) => {
+  const { w, asked, ran, press } = await dismissRig($, on, doc((d) => { idleEdit(d); d.teams.push({ ...JSON.parse(JSON.stringify(d.teams[0])), team: 'beta' }); d.owners[0].teams = [null, 'beta'] }), ['beta', 'Dismiss beta'])
+  await press()
+  expect(asked[1].options).toEqual(['Cancel', 'Dismiss beta'])
+  expect(ran.map((r) => r.argv)).toEqual([planArgv('beta'), closeArgv('beta')])
+  expect(w.toasts).toEqual(['Dismissed beta.'])
+})
+
+test('D11 four owned teams: a pointer to the skill, no dialog, no process', async ($, on) => {
+  const { w, asked, ran, press } = await dismissRig($, on, doc((d) => { d.teams = ['a', 'b', 'c', 'd'].map((t) => ({ ...JSON.parse(JSON.stringify(d.teams[0])), team: t })); d.owners[0].teams = ['a', 'b', 'c', 'd'] }), [])
+  await press()
+  expect(asked).toEqual([])
+  expect(ran).toEqual([])
+  expect(w.toasts).toEqual(['Too many teams to choose here; use the agent-team skill to disband.'])
+})
+
+test('D12 a team another session owns is never offered and never in an argv', async ($, on) => {
+  const { asked, ran, press } = await dismissRig($, on, doc((d) => { d.teams.push({ ...JSON.parse(JSON.stringify(d.teams[0])), team: 'foreign-team' }); d.owners.push({ ...d.owners[0], sessions: ['someone-else'], teams: ['foreign-team'] }) }), ['Cancel'])
+  await press()
+  expect(JSON.stringify(asked)).not.toContain('foreign-team')
+  expect(JSON.stringify(ran)).not.toContain('foreign-team')
+  expect(ran[0].argv).toEqual(planArgv('@default'))
+})
+
+const BAD_NAMES = ['a b', '-x', 'a'.repeat(33), 'a;rm', '../t', 'a_b', 'a.b', '$(x)', 'x`y`']
+for (const name of BAD_NAMES) {
+  test(`D13 the team name ${JSON.stringify(name)} fails the name shape: no process, the generic toast`, async ($, on) => {
+    const { w, asked, ran, press } = await dismissRig($, on, doc((d) => { d.teams[0].team = name; d.owners[0].teams = [name] }), [])
+    await press()
+    expect(ran).toEqual([])
+    expect(asked).toEqual([])
+    expect(w.toasts).toEqual(['Could not dismiss that team.'])
+  })
+}
+for (const name of ['a', 'Beta-2', '9lives', 'a'.repeat(32)]) {
+  test(`D13b the team name ${JSON.stringify(name)} is at the shape's edge and runs`, async ($, on) => {
+    const { ran, press } = await dismissRig($, on, doc((d) => { d.teams[0].team = name; d.owners[0].teams = [name] }), ['Cancel'])
+    await press()
+    expect(ran[0].argv).toEqual(planArgv(name))
+  })
+}
+
+const PLAN_FAILS: [string, (e: any) => any, string][] = [
+  ['exit 2 with stderr', () => out('', 2, 'roster.mjs: team file is unreadable\nmore'), 'Could not dismiss default: team file is unreadable'],
+  ['a refusal', () => ({ deny: 'boom' }), 'Could not dismiss default: plan failed'],
+  ['a throw', () => { throw new Error('timed out') }, 'Could not dismiss default: plan failed'],
+  ['non-JSON output', () => out('not json'), 'Could not dismiss default: plan failed'],
+  ['no token', () => out(planOf({ close_token: undefined })), 'Could not dismiss default: plan failed'],
+  ['a token of the wrong shape', () => out(planOf({ close_token: '--confirm' })), 'Could not dismiss default: plan failed'],
+  ['nothing to dismiss', () => out({ disbanded: false, reason: 'no active team and no live peers' }), 'Nothing to dismiss: no active team and no live peers'],
+  ['a plan over live peers (the team file is gone)', () => out(planOf({ source: 'peers', team_files: [] })), 'Could not dismiss default: no team file'],
+  ['a plan that names no team file', () => out(planOf({ team_files: [] })), 'Could not dismiss default: no team file'],
+  ['a source key whatever its value', () => out(planOf({ source: 'team' })), 'Could not dismiss default: no team file'],
+]
+for (const [label, run, toast] of PLAN_FAILS) {
+  test(`D14 plan: ${label} shows its toast, opens no dialog and runs no close`, async ($, on) => {
+    const { w, asked, ran, press } = await dismissRig($, on, doc(), ['Dismiss default', 'Dismiss anyway'], [run, CLOSE_OK])
+    await press()
+    expect(asked).toEqual([])
+    expect(ran.length).toBe(1)
+    expect(w.toasts).toEqual([toast])
+  })
+}
+
+const CLOSE_FAILS: [string, (e: any) => any, string][] = [
+  ['a stale token', () => out('', 2, 'roster.mjs: disband --close: --plan-token does not match the current close plan (the topology may have changed)'), 'default changed since the check; press Dismiss again.'],
+  ['closed false with still_live', () => out({ closed: false, still_live: ['demo-architect'] }), 'default: not all sessions closed (demo-architect).'],
+  ['closed false with kept rows', () => out({ closed: false, still_live: [], kept: [{ name: 'k1', why: 'live' }] }), 'default: not all sessions closed (k1).'],
+  ['closed true with a still_live name', () => out({ closed: true, still_live: ['x'] }), 'default: not all sessions closed (x).'],
+  ['exit 1 with stderr', () => out('', 1, 'roster.mjs: bad thing'), 'Could not dismiss default: bad thing'],
+  ['a refusal', () => ({ deny: 'boom' }), 'Could not dismiss default: close failed'],
+  ['a throw', () => { throw new Error('timed out') }, 'Could not dismiss default: close failed'],
+  ['non-JSON output', () => out('oops'), 'Could not dismiss default: close failed'],
+]
+for (const [label, run, toast] of CLOSE_FAILS) {
+  test(`D15 close: ${label} shows its toast and never "Dismissed"`, async ($, on) => {
+    const { w, ran, press } = await dismissRig($, on, doc(idleEdit), ['Dismiss default'], [PLAN_OK, run])
+    await press()
+    expect(ran.length).toBe(2)
+    expect(w.toasts).toEqual([toast])
+  })
+}
+
+test('D16 with toast_seconds 0 the outcome toast still shows, with no duration of its own', { options: { toast_seconds: 0 } }, async ($, on) => {
+  const { w, press } = await dismissRig($, on, doc(idleEdit), ['Dismiss default'])
+  await press()
+  expect(w.toastCalls).toEqual([{ text: 'Dismissed default.' }])
+})
+
+// A stand-in `$` for the helper alone: what the engine's own harness would not let a test vary (the plugin directory, the cwd).
+const stub = (over: { root?: unknown; cwd?: unknown; view?: unknown; ask?: (q: string, o: any) => Promise<string>; run?: (a: string[], i: any) => Promise<any> } = {}) => {
+  const state: Record<string, unknown> = { view: over.view }
+  const log = { toasts: [] as string[], runs: [] as string[][], asks: [] as string[] }
+  const $ = {
+    state: { get: async (k: any) => ({ value: state[k.key] }), set: async (k: any, v: unknown) => { state[k.key] = v } },
+    ui: { ask: async (q: string, o: any) => { log.asks.push(q); return (over.ask ?? (async () => 'Cancel'))(q, o) }, toast: async (t: string) => { log.toasts.push(t) } },
+    process: { run: async (a: string[], i: any) => { log.runs.push(a); return (over.run ?? (async () => ({ exitCode: 0, stdout: JSON.stringify(planOf()), stderr: '' })))(a, i) } },
+    session: { cwd: async () => ('cwd' in over ? over.cwd : CWD) },
+    plugin: { root: 'root' in over ? over.root : '/opt/ah' },
+  }
+  return { $, log, state }
+}
+const ownedView = (): any => ({ owned: true, teams: [{ name: 'default', isDefault: true, summary: { members: 1, busy: [], blocked: [], open: [] } }] })
+
+test('D17 the script path is the plugin directory plus /hooks/roster.mjs', async () => {
+  const s = stub({ view: ownedView() })
+  await dismissTeam(s.$)
+  expect(s.log.runs[0]).toEqual(['node', '/opt/ah/hooks/roster.mjs', 'disband', '--plan', '--team', '@default', '--cwd', CWD])
+})
+
+for (const root of [undefined, '', 'relative/dir', './x', 42, null]) {
+  test(`D17b the plugin directory ${JSON.stringify(root) ?? 'absent'} is not absolute: no process, a toast`, async () => {
+    const s = stub({ view: ownedView(), root })
+    await dismissTeam(s.$)
+    expect(s.log.runs).toEqual([])
+    expect(s.log.toasts).toEqual(['Could not dismiss default: plugin path unavailable'])
+  })
+}
+
+for (const cwd of [undefined, '', 'rel/dir', 7]) {
+  test(`D17c the working directory ${JSON.stringify(cwd) ?? 'absent'} is not absolute: no process, a toast`, async () => {
+    const s = stub({ view: ownedView(), cwd })
+    await dismissTeam(s.$)
+    expect(s.log.runs).toEqual([])
+    expect(s.log.toasts).toEqual(['Could not dismiss default: working directory unavailable'])
+  })
+}
+
+test('D18 a press while a dismiss is in flight does nothing; the flag clears afterwards', async () => {
+  let release: (a: string) => void = () => {}
+  let calls = 0
+  const s = stub({ view: ownedView(), ask: () => (calls++ === 0 ? new Promise<string>((r) => { release = r }) : Promise.resolve('Cancel')) })
+  const first = dismissTeam(s.$)
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+  await dismissTeam(s.$)
+  await dismissTeam(s.$)
+  expect(s.log.asks.length).toBe(1)
+  expect(s.log.runs.length).toBe(1)
+  release('Cancel')
+  await first
+  expect(s.state.dismissing).toBe(false)
+  await dismissTeam(s.$)
+  expect(s.log.asks.length).toBe(2)
+})
+
+test('D18b the flag clears when a dialog is dismissed or a call throws', async () => {
+  const s = stub({ view: ownedView(), ask: async () => { throw new Error('dismissed') } })
+  await dismissTeam(s.$)
+  expect(s.state.dismissing).toBe(false)
+  const t = stub({ view: ownedView(), run: async () => { throw new Error('boom') } })
+  await dismissTeam(t.$)
+  expect(t.state.dismissing).toBe(false)
+})
+
+test('D19 a held view that is not owned, or not a view, runs nothing', async () => {
+  for (const view of [undefined, null, {}, { owned: false, teams: ownedView().teams }, { owned: true, teams: 'x' }, { owned: true, teams: [{ name: 'a' }] }]) {
+    const s = stub({ view })
+    await dismissTeam(s.$)
+    expect(s.log.runs).toEqual([])
+    expect(s.log.asks).toEqual([])
+  }
 })

@@ -262,6 +262,20 @@ button is only there while the band is, and not on a very narrow terminal.
 The band, the Pane, the status bar entry and the toasts show only the teams this
 session's orchestrator owns, not other orchestrators' teams in a shared checkout.
 
+A `[ Dismiss ]` button sits right of `[ Pane ]`. It is there only when the band
+shows a team this session's orchestrator owns, and the terminal is at least 52
+columns wide (`[ Pane ]` alone needs 40). Pressing it plans the same `disband`
+the `agent-team` skill runs, then opens a dialog naming the team, how many member
+sessions will close, which members are busy and which dispatches are open. Answer
+`Dismiss <team>` to go on; anything else cancels. When a member is busy or a
+dispatch is open, a second dialog asks `Dismiss anyway`, since closing loses that
+work. With two or three owned teams a first dialog asks which one; with four or
+more it points you to the skill. The close is the skill's own `disband --close`:
+it closes member panes and the team record, and leaves worktrees, branches and
+messages as they are. Members with no pane (peer sessions) are listed and not
+closed. A dialog that cannot be shown, or is dismissed, cancels: nothing is
+closed. The result comes as a toast, which shows whatever `toast_seconds` says.
+
 ```
 architect is waiting on a prompt · answer it through the Orchestrator
 ```

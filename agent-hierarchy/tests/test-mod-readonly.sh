@@ -7,9 +7,13 @@
 # beyond the lists. Planted cases in a scratch copy show each forbidden form caught by the lexer alone,
 # and each allowed form passed.
 #
-# THE INVARIANT: the mod runs nothing without a user press. Exactly one process may run: the pinned focus helper
-# (HELPER below, matched whole in mod/register.tsx and the only place the word `process` may appear in mod/). A
-# second exec site, or any change to the pinned argv or init, needs a new security ruling, not a guard edit.
+# THE INVARIANT: the mod runs nothing without a user press. Exactly two helpers may run a process, each pinned whole
+# (HELPER and HELPER2 below, matched in mod/register.tsx and the only places the word `process` may appear in mod/):
+#   - the focus helper: a click on a member's name in the Pane focuses its terminal pane;
+#   - the dismiss helper: the band's [ Dismiss ] button disbands one of the viewer's own teams through the roster CLI.
+#     The user approved this site: a dialog naming what will close, plus a second one when work is in flight, stands in
+#     for the chat confirmation and the harness prompt that guard the Orchestrator's own `disband --close`.
+# A third exec site, or any change to a pinned argv, init or dialog, needs a new security ruling, not a guard edit.
 # Usage: bash tests/test-mod-readonly.sh   (exits 0 iff all cases pass)
 
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
@@ -44,9 +48,10 @@ PROTO_TOKENS="prototype __proto__ getPrototypeOf setPrototypeOf defineProperty d
 # both always show in one diff. Matched once in mod/register.tsx on the comment-blanked source (strings kept), then cut out
 # by offset before the rest of the lexer reads the file; `process.run` is deliberately not in ALLOWED_CALLS.
 PINNED_NAME="focusMember"
-# What validate prints for the pinned helper once a hook calls it. Only the validate net accepts it, and only in exactly this form;
-# the lexer allows the exec by the pinned text alone (process.run is not in ALLOWED_CALLS).
-NET_EXTRA_CALL="process.run (via focusMember)"
+PINNED_NAME2="dismissTeam"
+# What validate prints for the pinned helpers once a hook calls them, `|`-separated. Only the validate net accepts them, and only in exactly
+# these forms; the lexer allows the exec by the pinned text alone (process.run, ui.ask and plugin.root are not in ALLOWED_CALLS).
+NET_EXTRA_CALLS="process.run (via dismissTeam, focusMember)|ui.ask (via dismissTeam)"
 read -r -d '' HELPER <<'HELPER_END'
 export const focusMember = async ($: any, name: unknown): Promise<boolean> => {
   if (typeof name !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
@@ -62,13 +67,95 @@ export const focusMember = async ($: any, name: unknown): Promise<boolean> => {
   return false
 }
 HELPER_END
+# The dismiss helper, held whole. Its dialogs are asked and its two processes run only from here.
+read -r -d '' HELPER2 <<'HELPER2_END'
+export const dismissTeam = async ($: any): Promise<void> => {
+  const flag = { plugin: 'ah', key: 'dismissing' }
+  if ((await $.state.get(flag)).value === true) return
+  await $.state.set(flag, true)
+  try {
+    const teams = ownedTeams((await $.state.get({ plugin: 'ah', key: 'view' })).value)
+    if (teams.length === 0) return
+    if (teams.length > 3) {
+      await $.ui.toast('Too many teams to choose here; use the agent-team skill to disband.')
+      return
+    }
+    const labels = teamLabels(teams)
+    let pick = 0
+    if (teams.length > 1) {
+      const chosen = await $.ui.ask('Dismiss which team?', { header: 'Dismiss', options: ['Cancel', ...labels] })
+      if (chosen === 'Cancel' || !labels.includes(chosen)) return
+      pick = labels.indexOf(chosen)
+    }
+    const team = teams[pick]
+    const label = labels[pick]
+    if (!team.isDefault && !/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(team.name)) {
+      await $.ui.toast('Could not dismiss that team.')
+      return
+    }
+    const root = $.plugin.root
+    const cwd = await $.session.cwd()
+    if (typeof root !== 'string' || !/^(\/|[A-Za-z]:[\\/])/.test(root)) {
+      await $.ui.toast(`Could not dismiss ${label}: plugin path unavailable`)
+      return
+    }
+    if (typeof cwd !== 'string' || !/^(\/|[A-Za-z]:[\\/])/.test(cwd)) {
+      await $.ui.toast(`Could not dismiss ${label}: working directory unavailable`)
+      return
+    }
+    const roster = ['node', root + '/hooks/roster.mjs', 'disband']
+    const target = ['--team', team.isDefault ? '@default' : team.name, '--cwd', cwd]
+    let run
+    try {
+      run = await $.process.run([...roster, '--plan', ...target], { timeoutMs: 15000 })
+    } catch {
+      await $.ui.toast(`Could not dismiss ${label}: plan failed`)
+      return
+    }
+    if (run.exitCode !== 0) {
+      await $.ui.toast(`Could not dismiss ${label}: ${failReason(run.stderr, 'plan failed')}`)
+      return
+    }
+    const read = readPlan(run.stdout)
+    if (read.kind === 'nothing') {
+      await $.ui.toast(`Nothing to dismiss: ${read.reason}`)
+      return
+    }
+    if (read.kind === 'failed') {
+      await $.ui.toast(`Could not dismiss ${label}: ${read.reason}`)
+      return
+    }
+    if (!/^[0-9a-f]{16}$/.test(read.plan.token)) {
+      await $.ui.toast(`Could not dismiss ${label}: plan failed`)
+      return
+    }
+    const yes = `Dismiss ${label}`
+    const answer = await $.ui.ask(dismissQuestion(label, team.summary, read.plan), { header: 'Dismiss', options: ['Cancel', yes] })
+    if (answer !== yes) return
+    if (inFlight(team.summary)) {
+      const sure = await $.ui.ask(anywayQuestion(label, team.summary), { header: 'Dismiss', options: ['Cancel', 'Dismiss anyway'] })
+      if (sure !== 'Dismiss anyway') return
+    }
+    try {
+      run = await $.process.run([...roster, '--close', '--confirm', '--plan-token', read.plan.token, ...target], { timeoutMs: 30000 })
+    } catch {
+      await $.ui.toast(`Could not dismiss ${label}: close failed`)
+      return
+    }
+    await $.ui.toast(closeToast(label, run.exitCode, run.stdout, run.stderr))
+  } catch {
+  } finally {
+    await $.state.set(flag, false)
+  }
+}
+HELPER2_END
 
 # <mod dir>: every lexer violation in the module source under it, as file:line: reason; empty when clean.
 violations() {
   local out rc
-  out=$(node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" "$BAND_DRAWABLE" "$PINNED_NAME" "$HELPER" "$PROTO_TOKENS" 2>&1 <<'JS'
+  out=$(node - "$1" "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$RENDER_ELEMENTS" "$DRAWABLE" "$RETURN_KEYS" "$BANNED_TOKENS" "$BAND_DRAWABLE" "$PINNED_NAME" "$HELPER" "$PROTO_TOKENS" "$PINNED_NAME2" "$HELPER2" 2>&1 <<'JS'
 const fs = require("fs"), path = require("path");
-const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg, bandDrawableArg, pinnedName, helperText, protoArg] = process.argv.slice(2);
+const [dir, callsArg, eventsArg, matchersArg, elementsArg, drawableArg, keysArg, tokensArg, bandDrawableArg, pinnedName, helperText, protoArg, pinnedName2, helperText2] = process.argv.slice(2);
 const set = (s) => new Set(s.split(" "));
 const CALLS = set(callsArg), EVENTS = set(eventsArg), TOKENS = set(tokensArg), DRAWABLE = set(drawableArg), BAND_DRAWABLE = set(bandDrawableArg);
 const BAND_MATCHER = "component=AbovePrompt", PANE_MATCHER = "component=Pane,requestId=ah-status";
@@ -175,22 +262,24 @@ for (const f of files) {
   // The pinned focus helper: found whole in the comment-blanked source, counted only where it is live code (not inside a
   // string), then cut out by offset so nothing else in this file is read as part of it. A copy elsewhere than register.tsx,
   // or a count other than one there, is a violation.
-  let pinnedLive = false;
-  const legitRefs = new Set();
+  let pinnedLive = false, pinned2Live = false;
+  const legitRefs = new Set(), legitRefs2 = new Set();
   {
-    const pinned = new RegExp(helperText.split("\n").map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[ \\t]*\\r?\\n"), "g");
-    const hits = [...kept.matchAll(pinned)].filter((h) => code.slice(h.index, h.index + 24) === kept.slice(h.index, h.index + 24));
-    if (rel === "register.tsx") {
-      if (hits.length !== 1) at(0, hits.length ? "the pinned focus helper appears more than once" : "the pinned focus helper text is missing or altered");
-    } else if (hits.length) at(hits[0].index, "the pinned focus helper outside register.tsx");
-    if (rel === "register.tsx" && hits.length === 1) {
-      const s0 = hits[0].index, e0 = s0 + hits[0][0].length, blank = (t) => t.replace(/[^\n]/g, " ");
-      code = code.slice(0, s0) + blank(code.slice(s0, e0)) + code.slice(e0);
-      kept = kept.slice(0, s0) + blank(kept.slice(s0, e0)) + kept.slice(e0);
-      for (const k of [...strings.keys()]) if (k >= s0 && k < e0) strings.delete(k);
-      pinnedLive = true;
+    for (const [ptext, label] of [[helperText, "focus"], [helperText2, "dismiss"]]) {
+      const pinned = new RegExp(ptext.split("\n").map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[ \\t]*\\r?\\n"), "g");
+      const hits = [...kept.matchAll(pinned)].filter((h) => code.slice(h.index, h.index + 24) === kept.slice(h.index, h.index + 24));
+      if (rel === "register.tsx") {
+        if (hits.length !== 1) at(0, hits.length ? `the pinned ${label} helper appears more than once` : `the pinned ${label} helper text is missing or altered`);
+      } else if (hits.length) at(hits[0].index, `the pinned ${label} helper outside register.tsx`);
+      if (rel === "register.tsx" && hits.length === 1) {
+        const s0 = hits[0].index, e0 = s0 + hits[0][0].length, blank = (t) => t.replace(/[^\n]/g, " ");
+        code = code.slice(0, s0) + blank(code.slice(s0, e0)) + code.slice(e0);
+        kept = kept.slice(0, s0) + blank(kept.slice(s0, e0)) + kept.slice(e0);
+        for (const k of [...strings.keys()]) if (k >= s0 && k < e0) strings.delete(k);
+        if (label === "focus") pinnedLive = true; else pinned2Live = true;
+      }
     }
-    for (const m of kept.matchAll(/(?<![\w$])process(?![\w$])/g)) at(m.index, "the word process outside the pinned focus helper");
+    for (const m of kept.matchAll(/(?<![\w$])process(?![\w$])/g)) at(m.index, "the word process outside the pinned helpers");
     for (const tok of protoArg.split(" ")) for (const m of kept.matchAll(new RegExp(`(?<![\\w$])${tok}(?![\\w$])`, "g"))) at(m.index, `banned token ${tok}`);
   }
   // The value of the string literal that is the whole argument span, else null.
@@ -289,6 +378,16 @@ for (const f of files) {
     }
     return false;
   };
+  // `t` with each completed onPress={…} value blanked: an earlier Button's handler is not a function literal around the next tag.
+  const settled = (t) => {
+    let out = t;
+    for (const m of [...t.matchAll(/(?<![\w$.])onPress\s*=\s*\{/g)]) {
+      let d = 0, e = -1;
+      for (let k = m.index + m[0].length - 1; k < t.length; k++) { if (t[k] === "{") d++; else if (t[k] === "}" && --d === 0) { e = k; break; } }
+      if (e >= 0) out = out.slice(0, m.index) + out.slice(m.index, e + 1).replace(/[^\n]/g, " ") + out.slice(e + 1);
+    }
+    return out;
+  };
   for (const [hs, he, isPane] of [...bandSpans.map((x) => [...x, false]), ...paneSpans.map((x) => [...x, true])]) {
     const { bs, block } = hookBody(hs);
     const fnRegions = [];
@@ -344,7 +443,7 @@ for (const f of files) {
             }
           }
         }
-        if (tag[1] !== "/" && !isPane && /=>|\bfunction\b/.test(seg)) why = "tag sits inside a function literal";
+        if (tag[1] !== "/" && !isPane && /=>|\bfunction\b/.test(settled(seg))) why = "tag sits inside a function literal";
         else if (fnWhy) why = fnWhy;
         else if (open.some((k) => { if (mapParens.has(k)) return false; const pre = seg.slice(0, k).replace(/\s+$/, ""), w = /([\w$]+)$/.exec(pre); return w ? !GROUP.has(w[1]) : /[)\]]$/.test(pre) || /\?\.$/.test(pre) || /[\w$>]>$/.test(pre); })) why = "tag sits inside a call's arguments";
         else if ((seg.match(/`/g) || []).length % 2) why = "tag sits inside a template literal";
@@ -370,6 +469,22 @@ for (const f of files) {
         else if (pressText === null || !call.test(pressText)) at(i, `a Pane Button onPress that is not exactly one ${pinnedName}($, <label>) call`);
         else if (!(innermost !== null && new RegExp(`^\\(\\s*\\{[^}]*(?<![\\w$])${esc(id)}(?![\\w$])[^}]*\\}\\s*\\)$`).test(innermost.replace(/\s+/g, " ")))) at(i, "a Pane Button label the innermost map callback does not destructure");
       }
+      else if (!isPane && tag[1] !== "/") {
+        // The band's Dismiss Button (key "ah-dismiss"): not plain, and its onPress is exactly one call of the dismiss helper.
+        let end = -1, d = 0;
+        for (let k = i + 6; k < code.length; k++) { const ch = code[k]; if (ch === "{") d++; else if (ch === "}") d--; else if (d === 0 && ch === ">" && code[k - 1] !== "=") { end = k; break; } }
+        const attrs = end < 0 ? "" : code.slice(i + 6, end).replace(/\/\s*$/, ""), keptAttrs = end < 0 ? "" : kept.slice(i + 6, end);
+        let flat = attrs; for (let g = 0; g < 8; g++) flat = flat.replace(/\{[^{}]*\}/g, "{}");
+        if (/(?:^|\s)key\s*=\s*(['"])ah-dismiss\1/.test(keptAttrs.replace(/\{[^{}]*\}/g, "{}"))) {
+          const press = /(?:^|\s)onPress\s*=\s*\{/.exec(attrs);
+          let pressText = null;
+          if (press) { let dd = 0; for (let k = press.index + press[0].length - 1; k < attrs.length; k++) { if (attrs[k] === "{") dd++; else if (attrs[k] === "}" && --dd === 0) { pressText = attrs.slice(press.index + press[0].length, k); break; } } }
+          const call = new RegExp(`^\\s*(?:async\\s*)?\\(\\s*\\)\\s*=>\\s*(?:\\{\\s*(?:try\\s*\\{\\s*)?(?:await\\s+)?${pinnedName2}\\(\\s*\\$\\s*\\)\\s*;?\\s*(?:\\}\\s*catch\\s*(?:\\(\\s*[\\w$]*\\s*\\))?\\s*\\{\\s*\\}\\s*)?\\}|(?:await\\s+)?${pinnedName2}\\(\\s*\\$\\s*\\))\\s*$`);
+          if (pressText !== null && call.test(pressText)) legitRefs2.add(i + 6 + press.index + press[0].length + pressText.search(new RegExp(`(?<![\\w$])${pinnedName2}(?![\\w$])`)));
+          if (/(?:^|\s)plain(?=\s|=|$)/.test(flat)) at(i, "a Dismiss Button with plain");
+          else if (pressText === null || !call.test(pressText)) at(i, `a Dismiss Button onPress that is not exactly one ${pinnedName2}($) call`);
+        }
+      }
     }
   }
 
@@ -379,6 +494,10 @@ for (const f of files) {
   for (const h of code.matchAll(new RegExp(`(?<![\\w$])${pinnedName}(?![\\w$])`, "g"))) if (!legitRefs.has(h.index)) at(h.index, "the focus helper is referenced outside the one Pane onPress call");
   if (rel === "register.tsx" && pinnedLive && legitRefs.size === 0) at(0, "the pinned focus helper is never called by the Pane (an unused exec site)");
   if (legitRefs.size > 1) at([...legitRefs][1], "the focus helper is called from more than one Pane onPress");
+  // The dismiss helper the same way: referenced exactly once outside its pinned text, as the callee of the band's Dismiss Button onPress.
+  for (const h of code.matchAll(new RegExp(`(?<![\\w$])${pinnedName2}(?![\\w$])`, "g"))) if (!legitRefs2.has(h.index)) at(h.index, "the dismiss helper is referenced outside the one band Dismiss onPress call");
+  if (rel === "register.tsx" && pinned2Live && legitRefs2.size === 0) at(0, "the pinned dismiss helper is never called by the band (an unused exec site)");
+  if (legitRefs2.size > 1) at([...legitRefs2][1], "the dismiss helper is called from more than one band onPress");
 
   // A Button's onPress is an inline arrow whose parameter, if any, is not named $; its body is lexed like any other code.
   for (const m of code.matchAll(/(?<![\w$.])onPress\s*(?:=\s*\{|:)\s*/g)) {
@@ -406,16 +525,18 @@ for (const f of files) {
       } else other++;
     }
     if (name === pinnedName) return pinnedLive && decls === 0 && other === 0;
+    if (name === pinnedName2) return pinned2Live && decls === 0 && other === 0;
     return decls === 1 && other === 0;
   };
-  // The pinned helper's name is bound once, inside the cut-out text: any other binding of it is a violation, call or no call.
-  if (pinnedLive) {
-    const pn = pinnedName.replace(/\$/g, "\\$");
+  // A pinned helper's name is bound once, inside the cut-out text: any other binding of it is a violation, call or no call.
+  for (const [pinName, live, label] of [[pinnedName, pinnedLive, "focus"], [pinnedName2, pinned2Live, "dismiss"]]) {
+    if (!live) continue;
+    const pn = pinName.replace(/\$/g, "\\$");
     for (const h of code.matchAll(new RegExp(`(?<![\\w$])${pn}(?![\\w$])`, "g"))) {
-      const before = code.slice(0, h.index), after = code.slice(h.index + pinnedName.length);
+      const before = code.slice(0, h.index), after = code.slice(h.index + pinName.length);
       if (isMember(before)) continue;
-      const binds = /(?<![\w$.])(?:const|let|var|function\*?|class)\s+$/.test(before) || /^\s*(?::[^=;]+)?=(?!=)/.test(after) || /^\s*\(/.test(after) && (() => { const a = callArgs(code, h.index + pinnedName.length + /^\s*/.exec(after)[0].length); return !a || /^\s*(?::[^;{}=]*)?\{/.test(code.slice(a.close + 1)); })();
-      if (binds) at(h.index, "the pinned focus helper's name is bound again");
+      const binds = /(?<![\w$.])(?:const|let|var|function\*?|class)\s+$/.test(before) || /^\s*(?::[^=;]+)?=(?!=)/.test(after) || /^\s*\(/.test(after) && (() => { const a = callArgs(code, h.index + pinName.length + /^\s*/.exec(after)[0].length); return !a || /^\s*(?::[^;{}=]*)?\{/.test(code.slice(a.close + 1)); })();
+      if (binds) at(h.index, `the pinned ${label} helper's name is bound again`);
     }
   }
 
@@ -492,7 +613,7 @@ valnet() {
   if [ "$rc" != 0 ]; then echo "validate failed (exit $rc): ${out:0:300}"; return; fi
   printf '%s\n' "$out" | node -e '
     const [calls, events, matchers] = process.argv.slice(1, 4).map((s) => s.split(" "));
-    const net = [process.argv[4]];
+    const net = process.argv[4].split("|");
     const M = {};
     for (const m of matchers) { const [ev, canon] = m.split(/:(.*)/s); (M[ev] = M[ev] || []).push(canon); }
     const lines = require("fs").readFileSync(0, "utf8").split("\n");
@@ -513,11 +634,17 @@ valnet() {
           if (!(M[ev] || []).includes(canon)) bad.push(`hook ${item}: matcher is not one of ${(M[ev] || ["(none)"]).join(" | ")}`);
         }
       }
-      if (c && c[1].trim() !== "nothing on $") for (const x of c[1].split(",").map((s) => s.trim().replace(/^\$\./, "")).filter(Boolean)) if (!calls.includes(x.replace(/ \(via [\w$]+\)$/, "")) && !net.includes(x)) bad.push(`call ${x}: not an allowed call`);
+      if (c && c[1].trim() !== "nothing on $") {
+        // Items are comma-separated, but a `(via a, b)` note holds commas of its own.
+        const items = []; let pd = 0, cur = "";
+        for (const ch of c[1]) { if (ch === "(") pd++; if (ch === ")") pd--; if (ch === "," && pd === 0) { items.push(cur); cur = ""; } else cur += ch; }
+        items.push(cur);
+        for (const x of items.map((s) => s.trim().replace(/^\$\./, "")).filter(Boolean)) if (!calls.includes(x.replace(/ \(via [\w$, ]+\)$/, "")) && !net.includes(x)) bad.push(`call ${x}: not an allowed call`);
+      }
     }
     if (!hooks) bad.push("validate printed no hooks");
     process.stdout.write(bad.join("\n"));
-  ' "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$NET_EXTRA_CALL"
+  ' "$ALLOWED_CALLS" "$ALLOWED_EVENTS" "$MATCHERS" "$NET_EXTRA_CALLS"
 }
 
 check "the mod's hooks module exists, so the guard has source to read" '[ -f "$PLUGIN/mod/register.tsx" ]'
@@ -528,10 +655,12 @@ check "validate passes, and every hook and call it reports is on the lists, matc
 
 # The one Pane Button call the real register.tsx makes, as a scratch hook.
 PANE_OK="on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box>{e.props.rows.map(({ name }) => <Box key={name}><Button plain label={name} onPress={() => focusMember(\$, name)} /></Box>)}</Box>) })"
-# <line>...: the lexer's verdict on a scratch module holding only those lines (in register) and the pinned helper.
+# The one Dismiss Button call the real register.tsx makes, as a scratch band hook.
+DISMISS_OK="on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box><Button key=\"ah-dismiss\" label=\"Dismiss\" onPress={() => dismissTeam(\$)} /></Box>) })"
+# <line>...: the lexer's verdict on a scratch module holding only those lines (in register) and the pinned helpers.
 paneonly() {
   copy_mod
-  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@"; echo "}"; printf '%s\n' "$HELPER"; } > "$SANDBOX/mod/register.tsx"
+  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@" "$DISMISS_OK"; echo "}"; printf '%s\n' "$HELPER" "$HELPER2"; } > "$SANDBOX/mod/register.tsx"
   violations "$SANDBOX/mod"
 }
 # <line>...: the lexer's verdict on a scratch copy of mod/ with those lines appended to register.tsx.
@@ -811,7 +940,7 @@ check "lexer passes the allowed forms: \$.fs.read(p), \$.ui.status(t), (\$, e, n
 # A module with every P3 matcher passes the lexer and the validate net; one without its matcher fails the net.
 p3() {
   rm -rf "${SANDBOX:?}/p3"; mkdir -p "$SANDBOX/p3"; cp -R "$PLUGIN/.claude-plugin" "$SANDBOX/p3/"; copy_mod; cp -R "$SANDBOX/mod" "$SANDBOX/p3/mod"
-  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@"; echo "}"; printf '%s\n' "$HELPER"; } > "$SANDBOX/p3/mod/register.tsx"
+  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$@" "$DISMISS_OK"; echo "}"; printf '%s\n' "$HELPER" "$HELPER2"; } > "$SANDBOX/p3/mod/register.tsx"
 }
 p3 "on('session.start', (\$, e, next) => next(e))" \
    "on('command.run', { command: 'hierarchy-pane' }, (\$, e, next) => ({ text: 'ok' }))" \
@@ -832,6 +961,133 @@ check "lexer ignores anything under tests/" '[ -z "$OUT" ]'
 printf '%s\n' 'export const pure = (s: string) => `${s}`' 'const x = $' > "$SANDBOX/mod/view.ts"
 OUT=$(violations "$SANDBOX/mod")
 check "view.ts may hold no \$ at all" '[ -n "$OUT" ] && printf "%s" "$OUT" | grep -q "^view.ts:"'
+
+
+# ---- The dismiss helper (the second pinned exec site). The same forms that fail for the focus helper fail for it.
+# <line>...: the lexer's verdict on a scratch module holding the Pane focus call, those lines, and both pinned helpers (no Dismiss Button unless a line draws one).
+dismissonly() {
+  copy_mod
+  { echo "import type { Register } from 'claude-code'"; echo "export const register: Register = (on, options) => {"; printf '  %s\n' "$PANE_OK" "$@"; echo "}"; printf '%s\n' "$HELPER" "$HELPER2"; } > "$SANDBOX/mod/register.tsx"
+  violations "$SANDBOX/mod"
+}
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches: $line  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
+done <<'EOF'
+await $.ui.ask('x', ['a', 'b'])
+$.ui.ask('x')
+const r = $.plugin.root
+const { root } = $.plugin
+$.plugin
+const q = $['plugin']
+EOF
+
+# The dismiss helper is referenced exactly once outside its pinned text, as the callee of the band's Dismiss Button onPress.
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches a second reference to the dismiss helper: $line  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "referenced outside the one band Dismiss onPress call\|more than one band"'
+done <<'EOF'
+await dismissTeam($)
+on('session.start', async ($, e, next) => { await dismissTeam($); return next(e) })
+on('command.run', { command: 'hierarchy-pane' }, async ($, e, next) => { await dismissTeam($); return ({ text: 'ok' }) })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { await dismissTeam($); return next(e) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { await dismissTeam($); return next(e) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="other" label="x" onPress={() => dismissTeam($)} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={() => dismissTeam($)} /></Box>) })
+$.clock.every(1000, () => dismissTeam($))
+const f = dismissTeam
+const g = { run: dismissTeam }
+export { dismissTeam as run }
+const callIt = (fn) => fn; callIt(dismissTeam)
+const k = [dismissTeam]
+const m = dismissTeam.bind(null, $)
+EOF
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(planted "$line")
+  check "lexer alone catches a rebinding of the dismiss helper: $line  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
+done <<'EOF'
+const dismissTeam = ($) => 0
+function dismissTeam(x) { return x }
+let dismissTeam = 1
+dismissTeam = null
+EOF
+
+# Each Dismiss Button that is not exactly the one allowed form fails the lexer on its own.
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  OUT=$(dismissonly "$line")
+  check "lexer alone catches: $line  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
+done <<'EOF'
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={() => { dismissTeam($); other() }} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={() => dismissTeam($, 1)} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={() => $.ui.toast('x')} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={() => x.dismissTeam($)} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" plain label="Dismiss" onPress={() => dismissTeam($)} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={dismissTeam} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={() => dismissTeam(e)} /></Box>) })
+on('ui.render', { component: 'Pane', requestId: 'ah-status' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box><Button key="ah-dismiss" label="Dismiss" onPress={() => dismissTeam($)} /></Box>) })
+on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Box, Button } = $.ui.resolve(e); return (<Box>{[1, 2].map((n) => <Button key="ah-dismiss" label="Dismiss" onPress={() => dismissTeam($)} />)}</Box>) })
+EOF
+OUT=$(dismissonly "$DISMISS_OK")
+check "lexer passes the one Dismiss Button call" '[ -z "$OUT" ]'
+OUT=$(dismissonly "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box><Button key=\"ah-dismiss\" label=\"Dismiss\" onPress={async () => { try { await dismissTeam(\$) } catch {} }} /></Box>) })")
+check "lexer passes a Dismiss Button whose onPress awaits the helper inside a try with an empty catch" '[ -z "$OUT" ]'
+OUT=$(dismissonly "on('ui.render', { component: 'AbovePrompt' }, async (\$, e, next) => { const { Box, Button } = \$.ui.resolve(e); return (<Box><Button key=\"ah-pane\" label=\"Pane\" onPress={async () => { try { await \$.ui.panes() } catch {} }} />{e.props.ok ? (<Box><Button key=\"ah-dismiss\" label=\"Dismiss\" onPress={() => dismissTeam(\$)} /></Box>) : null}</Box>) })")
+check "lexer passes a Dismiss Button after the Pane Button, inside a conditional" '[ -z "$OUT" ]'
+OUT=$(dismissonly)
+check "lexer alone catches: a pinned dismiss helper that the band never calls  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "never called by the band"'
+OUT=$(paneonly "$PANE_OK")
+check "the standard scratch module (Pane call plus Dismiss call) passes" '[ -z "$OUT" ]'
+
+# <from> <to> [line...]: the lexer's verdict on a scratch copy whose pinned dismiss helper has <from> replaced by <to>.
+altered2() {
+  copy_mod
+  node -e 'const fs = require("fs"), p = process.argv[1], [from, to] = [process.argv[2], process.argv[3]]; const t = fs.readFileSync(p, "utf8"); const i = t.indexOf("export const dismissTeam"); if (i < 0 || !t.slice(i).includes(from)) { console.error("no such text in the helper"); process.exit(2); } fs.writeFileSync(p, t.slice(0, i) + t.slice(i).replace(from, () => to));' "$SANDBOX/mod/register.tsx" "$1" "$2" || { echo "scratch edit failed"; return; }
+  shift 2; [ $# -gt 0 ] && printf '%s\n' "$@" >> "$SANDBOX/mod/register.tsx"
+  violations "$SANDBOX/mod"
+}
+altcase2() { # <label> <from> <to> [line...]
+  local label=$1; shift
+  OUT=$(altered2 "$@")
+  check "lexer alone catches a changed dismiss helper: $label  [${OUT%%$'\n'*}]" '[ -n "$OUT" ] && [ "$OUT" != "scratch edit failed" ]'
+}
+altcase2 "plan flag changed" "'--plan'" "'--list'"
+altcase2 "close flag changed" "'--close'" "'--list'"
+altcase2 "confirm removed" "'--confirm', " ""
+altcase2 "token from elsewhere" "read.plan.token" "'0123456789abcdef'"
+altcase2 "team taken from the display name" "team.isDefault ? '@default' : team.name" "label"
+altcase2 "executable changed" "'node'" "'sh'"
+altcase2 "script path from elsewhere" "root + '/hooks/roster.mjs'" "'/tmp/x.mjs'"
+altcase2 "plugin root removed" "\$.plugin.root" "'/opt/ah'"
+altcase2 "name shape widened" "{0,31}\$/.test(team.name)" "{0,310}\$/.test(team.name)"
+altcase2 "plan timeout changed" "15000" "600000"
+altcase2 "close timeout changed" "30000" "600000"
+altcase2 "confirm answer loosened" "if (answer !== yes) return" "if (answer === 'Cancel') return"
+altcase2 "second dialog removed" "if (inFlight(team.summary)) {" "if (false) {"
+altcase2 "second dialog answer loosened" "if (sure !== 'Dismiss anyway') return" "if (sure === 'Cancel') return"
+altcase2 "Cancel not first" "options: ['Cancel', yes]" "options: [yes, 'Cancel']"
+altcase2 "picker accepts Cancel" "if (chosen === 'Cancel' || !labels.includes(chosen)) return" "if (!labels.includes(chosen)) return"
+altcase2 "re-entrancy flag dropped" "if ((await \$.state.get(flag)).value === true) return" ""
+altcase2 "token shape re-check dropped" "if (!/^[0-9a-f]{16}\$/.test(read.plan.token)) {" "if (false) {"
+altcase2 "stale view" "ownedTeams((await \$.state.get({ plugin: 'ah', key: 'view' })).value)" "[]"
+altcase2 "a third process" "await \$.ui.toast(closeToast(label, run.exitCode, run.stdout, run.stderr))" "await \$.process.run(['rm', '-rf', cwd])"
+altcase2 "a shell string" "['node', root + '/hooks/roster.mjs', 'disband']" "['sh', '-c', root]"
+OUT=$(planted "$HELPER2")
+check "lexer alone catches: the dismiss helper text present twice  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "dismiss helper appears more than once"'
+OUT=$(altered2 "'--plan'" "'--list'" "/* $HELPER2 */")
+check "lexer alone catches: an altered live dismiss helper with the pinned text in a comment  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "dismiss helper text is missing or altered"'
+copy_mod; sed -i.bak "s#^export const dismissTeam#const dismissTeam#" "$SANDBOX/mod/register.tsx"; rm -f "$SANDBOX/mod/register.tsx.bak"
+OUT=$(violations "$SANDBOX/mod")
+check "lexer alone catches: the dismiss helper without its export (a changed text)  [${OUT%%$'\n'*}]" '[ -n "$OUT" ]'
+copy_mod; printf '%s\n' "$HELPER2" > "$SANDBOX/mod/other.ts"
+OUT=$(violations "$SANDBOX/mod")
+check "lexer alone catches: the pinned dismiss text in a file other than register.tsx  [${OUT%%$'\n'*}]" 'printf "%s" "$OUT" | grep -q "dismiss helper outside register.tsx"'
+OUT=$(violations "$PLUGIN/mod")
+check "the repo's own register.tsx holds the dismiss helper exactly once" '[ -z "$OUT" ] && [ "$(grep -c "export const dismissTeam" "$PLUGIN/mod/register.tsx")" = 1 ]'
 
 echo "---"
 echo "$PASS passed, $FAIL failed"

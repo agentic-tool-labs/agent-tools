@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { bandLine, keepSeen, nullCause, PANE_BUTTON, paneSections, parseDoc, SIZE_CAP, scope, statusText, toastMs, viewModel, type Doc } from './view.ts'
+import { anywayQuestion, bandButtons, bandLine, closeToast, DISMISS_BUTTON, dismissQuestion, failReason, inFlight, keepSeen, nullCause, ownedTeams, PANE_BUTTON, paneSections, parseDoc, readPlan, SIZE_CAP, scope, statusText, teamLabels, toastMs, viewModel, type Doc } from './view.ts'
 
 // The one table from a tone to Text props. Only `warning` is a documented theme key, so bold tells bad from warn;
 // any tone not named here draws dim.
@@ -23,6 +23,91 @@ export const focusMember = async ($: any, name: unknown): Promise<boolean> => {
   }
   await $.ui.toast(`Could not focus ${name}.`)
   return false
+}
+
+// The other process the mod may run, on a person's press of Dismiss: close one of the viewer's own teams through the roster
+// CLI's plan and close calls. A dialog names what will close and which work is in flight, and a second one confirms losing it,
+// before anything closes. The guard (tests/test-mod-readonly.sh) holds this text whole; it is called from the band's Dismiss
+// button alone. The team name is checked against the shape roster.mjs gives team names (isTeamAliasShape in hooks/lib-config.mjs),
+// and the plan token against the shape closeToken in hooks/roster.mjs produces; the script path is this plugin's own directory.
+export const dismissTeam = async ($: any): Promise<void> => {
+  const flag = { plugin: 'ah', key: 'dismissing' }
+  if ((await $.state.get(flag)).value === true) return
+  await $.state.set(flag, true)
+  try {
+    const teams = ownedTeams((await $.state.get({ plugin: 'ah', key: 'view' })).value)
+    if (teams.length === 0) return
+    if (teams.length > 3) {
+      await $.ui.toast('Too many teams to choose here; use the agent-team skill to disband.')
+      return
+    }
+    const labels = teamLabels(teams)
+    let pick = 0
+    if (teams.length > 1) {
+      const chosen = await $.ui.ask('Dismiss which team?', { header: 'Dismiss', options: ['Cancel', ...labels] })
+      if (chosen === 'Cancel' || !labels.includes(chosen)) return
+      pick = labels.indexOf(chosen)
+    }
+    const team = teams[pick]
+    const label = labels[pick]
+    if (!team.isDefault && !/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(team.name)) {
+      await $.ui.toast('Could not dismiss that team.')
+      return
+    }
+    const root = $.plugin.root
+    const cwd = await $.session.cwd()
+    if (typeof root !== 'string' || !/^(\/|[A-Za-z]:[\\/])/.test(root)) {
+      await $.ui.toast(`Could not dismiss ${label}: plugin path unavailable`)
+      return
+    }
+    if (typeof cwd !== 'string' || !/^(\/|[A-Za-z]:[\\/])/.test(cwd)) {
+      await $.ui.toast(`Could not dismiss ${label}: working directory unavailable`)
+      return
+    }
+    const roster = ['node', root + '/hooks/roster.mjs', 'disband']
+    const target = ['--team', team.isDefault ? '@default' : team.name, '--cwd', cwd]
+    let run
+    try {
+      run = await $.process.run([...roster, '--plan', ...target], { timeoutMs: 15000 })
+    } catch {
+      await $.ui.toast(`Could not dismiss ${label}: plan failed`)
+      return
+    }
+    if (run.exitCode !== 0) {
+      await $.ui.toast(`Could not dismiss ${label}: ${failReason(run.stderr, 'plan failed')}`)
+      return
+    }
+    const read = readPlan(run.stdout)
+    if (read.kind === 'nothing') {
+      await $.ui.toast(`Nothing to dismiss: ${read.reason}`)
+      return
+    }
+    if (read.kind === 'failed') {
+      await $.ui.toast(`Could not dismiss ${label}: ${read.reason}`)
+      return
+    }
+    if (!/^[0-9a-f]{16}$/.test(read.plan.token)) {
+      await $.ui.toast(`Could not dismiss ${label}: plan failed`)
+      return
+    }
+    const yes = `Dismiss ${label}`
+    const answer = await $.ui.ask(dismissQuestion(label, team.summary, read.plan), { header: 'Dismiss', options: ['Cancel', yes] })
+    if (answer !== yes) return
+    if (inFlight(team.summary)) {
+      const sure = await $.ui.ask(anywayQuestion(label, team.summary), { header: 'Dismiss', options: ['Cancel', 'Dismiss anyway'] })
+      if (sure !== 'Dismiss anyway') return
+    }
+    try {
+      run = await $.process.run([...roster, '--close', '--confirm', '--plan-token', read.plan.token, ...target], { timeoutMs: 30000 })
+    } catch {
+      await $.ui.toast(`Could not dismiss ${label}: close failed`)
+      return
+    }
+    await $.ui.toast(closeToast(label, run.exitCode, run.stdout, run.stderr))
+  } catch {
+  } finally {
+    await $.state.set(flag, false)
+  }
 }
 
 // The one way the Pane opens on the person's request, for the command and the band's button. A member session
@@ -142,8 +227,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { value } = await $.state.get({ plugin: 'ah', key: 'view' })
-    const wide = e.props.bodyColumns >= PANE_BUTTON.minColumns
-    const line = bandLine(value ?? null, wide ? e.props.bodyColumns - PANE_BUTTON.width - PANE_BUTTON.gap : e.props.bodyColumns)
+    const { pane: wide, dismiss, textColumns } = bandButtons(value ?? null, e.props.bodyColumns)
+    const line = bandLine(value ?? null, textColumns)
     if (line === null) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
@@ -169,6 +254,11 @@ export const register: Register = (on, options) => {
                 }}
               />
             </Box>
+            {dismiss ? (
+              <Box marginLeft={DISMISS_BUTTON.gap}>
+                <Button key="ah-dismiss" label={DISMISS_BUTTON.label} onPress={() => dismissTeam($)} />
+              </Box>
+            ) : null}
           </Box>
         ) : (
           <Text {...toneProps(line.tone)}>{line.text}</Text>
