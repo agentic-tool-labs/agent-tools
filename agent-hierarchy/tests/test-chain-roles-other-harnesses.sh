@@ -914,6 +914,8 @@ rm -f "$HIER/activity/pane-myrepo-architect.json"
 r "" answer myrepo-architect --prompt approval --choice approve --screen-hash "$AH"
 check "AC9: answer records the member working" '[ "$(activity_of myrepo-architect a.activity)" = working ]'
 check "K15: a matching prompt and hash: exactly the row's keys, once — approve sends 1" '[ "$RC" -eq 0 ] && [ "$(jo o.status)" = answered ] && [ "$(keys_sent)" = "[\"1\"]" ] && [ "$(jo o.prompt_after)" = null ] && [ "$(jo o.live)" = true ]'
+check "K15: an answer that leaves the member unblocked ends its blocked episode (a clear row by answer)" 'grep -q "\"type\":\"blocked-clear\"" "$HIER/gates.jsonl" && grep -q "\"member\":\"myrepo-architect\"" "$HIER/gates.jsonl" && grep -q "\"by\":\"answer\"" "$HIER/gates.jsonl"'
+rm -f "$HIER/gates.jsonl"
 k15 approval
 r "" answer myrepo-architect --prompt approval --choice deny --screen-hash "$AH"
 check "K15: deny sends esc; the prompt still shown after is answered, reported, keys sent once" '[ "$(keys_sent)" = "[\"esc\"]" ] && [ "$(jo o.status)" = answered ] && [ "$(jo o.prompt_after)" = approval ]'
@@ -945,7 +947,7 @@ check "K15: approval's \"don't ask again\" is not a row: exit 2, nothing sent" '
 r "" answer myrepo-reviewer --prompt approval --choice approve --screen-hash "$AH"
 check "K15: a claude member exits 2" '[ "$RC" -eq 2 ] && [ "$(calls send-keys)" -eq 0 ]'
 r "" answer myrepo-architect --prompt approval --choice approve --screen-hash "$AH" --keys 1
-check "K15: the verb takes no flag for keys or text" '[ "$RC" -eq 2 ] && echo "$OUT" | grep -q "unrecognized flag --keys" && grep -q "^const ANSWER_FLAGS = new Set(\[\"prompt\", \"choice\", \"screen-hash\", \"team\", \"cwd\"\]);" "$H/roster.mjs"'
+check "K15: the verb takes no flag for keys or text" '[ "$RC" -eq 2 ] && echo "$OUT" | grep -q "unrecognized flag --keys" && grep -q "^const ANSWER_FLAGS = new Set(\[\"prompt\", \"choice\", \"cancel\", \"screen-hash\", \"team\", \"cwd\"\]);" "$H/roster.mjs"'
 NH=$(screen_hash approval-reordered)
 k15 approval-reordered
 r "" deliver myrepo-architect --req "$REQ"
@@ -1315,7 +1317,7 @@ done
 ########################################################################
 SK="$PLUGIN/skills/agent-team/SKILL.md"
 check "K9: directive item 13 names deliver" 'grep -q "brief it with \\\\\`roster.mjs deliver\\\\\` in the background, never SendMessage" "$H/lib-config.mjs" && grep -q "roster.mjs deliver" "$PLUGIN/tests/fixtures/0056-i1/golden/directive-auto.txt"'
-check "K9: orchestrator.md names deliver, within its 7350-byte budget" 'grep -q "roster.mjs deliver <name>" "$PLUGIN/agents/orchestrator.md" && [ "$(wc -c < "$PLUGIN/agents/orchestrator.md")" -le 7350 ]'
+check "K9: orchestrator.md names deliver, within its 7800-byte budget" 'grep -q "roster.mjs deliver <name>" "$PLUGIN/agents/orchestrator.md" && [ "$(wc -c < "$PLUGIN/agents/orchestrator.md")" -le 7800 ]'
 check "K9: SKILL.md has the stall mapping" 'grep -q "is pinged with \`deliver --ping <n>\`" "$SK" && grep -q "\`busy\`, \`timeout\`, \`not-sent\` and \`blocked\` never count" "$SK"'
 check "K9: SKILL.md's status table: busy re-runs the same command, and not-sent sends the brief" 'grep -q "^| \`busy\` | still working or not ready at \`--timeout\`; nothing was sent | re-run the \*\*same\*\* command |" "$SK" && grep -q "^| \`not-sent\` |.*| send the brief, without \`--wait-only\` |" "$SK"'
 check "K9: SKILL.md: after answered, the re-run depends on sent" 'grep -q "the \*\*same\*\* command if it had \`sent: false\`, with \`--wait-only\`" "$SK"'

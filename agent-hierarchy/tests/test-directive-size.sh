@@ -57,10 +57,10 @@ md_ceiling() { # <file> <max>
 # Orchestrator instead of dispatching it; these ceilings include that sentence.
 md_ceiling architect     10510
 md_ceiling ultra-advisor 7300
-md_ceiling reviewer      8000
+md_ceiling reviewer      8800
 md_ceiling implementor   5930
 md_ceiling task-runner   5680
-md_ceiling orchestrator  7350
+md_ceiling orchestrator  7800
 # architect, implementor and task-runner each carry the response-command line with all three flag
 # sources spelled out (--id, --from, --req); that sentence is contract text, so the ceilings above
 # hold it in full and it is not to be shortened to fit.

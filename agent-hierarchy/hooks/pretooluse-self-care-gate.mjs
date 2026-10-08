@@ -37,7 +37,7 @@ import {
   SHELL_SELF_CARE,
 } from "./lib-config.mjs";
 import { readRoster } from "./lib-hier.mjs";
-import { teamHomeDir } from "./lib-roster.mjs";
+import { msgsDirsOf } from "./lib-roster.mjs";
 
 const TOKEN_RE = SELF_CARE_TOKEN_RE;
 const MAX_COMMAND = 1024;
@@ -109,9 +109,7 @@ function reqOk(req, cwd) {
   if (!req.endsWith("--request.md")) return false;
   const file = real(resolve(cwd, req));
   if (!file) return false;
-  const pool = hierarchyDir(cwd);
-  const dirs = [join(pool, "msgs"), join(teamHomeDir(pool), "msgs")].map(real).filter(Boolean);
-  return dirs.includes(dirname(file));
+  return msgsDirsOf(hierarchyDir(cwd)).includes(dirname(file));
 }
 
 /** Returns null when the command is a permitted self-care command, else a short reason. */

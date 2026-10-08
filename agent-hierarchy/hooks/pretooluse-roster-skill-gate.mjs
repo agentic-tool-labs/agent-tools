@@ -35,7 +35,7 @@
  * crashing hook must never make roster operations unusable.
  */
 
-import { isSubagent, logHookError, readHookInput, resolveHierarchyRole, ROSTER_CLI } from "./lib-config.mjs";
+import { askDecision, isMemberSession, isSubagent, logHookError, readHookInput, resolveHierarchyRole, ROSTER_CLI } from "./lib-config.mjs";
 import { appendGate, hierarchyDir, pipelineRunLive, readGates } from "./lib-hier.mjs";
 import { dirname, join } from "node:path";
 import { isTrustCommit, parseAhCommand } from "./lib-ah-cli.mjs";
@@ -58,7 +58,8 @@ function deny(reason, systemMessage) {
 }
 
 function ask(reason) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }));
+  const d = askDecision(reason);
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: d.decision, permissionDecisionReason: d.reason } }));
   process.exit(0);
 }
 
@@ -94,7 +95,7 @@ function judgeTrustCommit(input, cwds) {
   if (isSubagent(input)) return { deny: `${TRUST_REFUSED} A subagent can't commit it; tell the user to run the command themselves.` };
   const { role } = resolveHierarchyRole(input);
   if (role && role !== "orchestrator") return { deny: `${TRUST_REFUSED} This is a ${role} session; tell your orchestrator, and the user runs it.` };
-  if (process.env.AH_TEAM_FILE) return { deny: `${TRUST_REFUSED} This session is a team member; tell your orchestrator, and the user runs it.` };
+  if (isMemberSession()) return { deny: `${TRUST_REFUSED} This session is a team member; tell your orchestrator, and the user runs it.` };
   if (cwds.some((cwd) => pipelineRunLive(cwd))) return { deny: `${TRUST_REFUSED} A pipeline run is live in this checkout; adopt or trust pack roles once it has finished.` };
   const mode = input.permission_mode;
   if (typeof mode === "string" && !ASK_MODES.has(mode)) return { deny: `${TRUST_REFUSED} In permission mode ${JSON.stringify(mode)} the approval prompt isn't known to reach the user; switch to the default mode and run it again.` };

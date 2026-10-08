@@ -138,6 +138,8 @@ hook s2 "ah:ultra-advisor"
 check "each-time asks again next time"    'case "$OUT" in *\"permissionDecision\":\"ask\"*) true;; *) false;; esac'
 check "ask reason names the model"        'case "$OUT" in *fable*) true;; *) false;; esac'
 check "each-time ask has no systemMessage" 'no_system_message'
+OUT=$(printf '{"session_id":"s2","cwd":"%s","tool_name":"Agent","tool_input":{"subagent_type":"ah:ultra-advisor","prompt":"x"}}' "$PROJ" | AH_TEAM_FILE="$PROJ/.claude/hierarchy/team.json" HOME="$FAKEHOME" node "$HOOK" 2>&1); RC=$?
+check "each-time in a member session is a deny carrying the member tail, never an ask" 'case "$OUT" in *\"permissionDecision\":\"deny\"*"does not ask here"*) true;; *) false;; esac'
 
 # ---- choice: blocked for this session
 cli set --session s3 --choice off

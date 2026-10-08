@@ -130,6 +130,70 @@ MATCHER_CHECK=$(node -e '
 ' "$HOOKS_JSON")
 check "hooks.json PreToolUse matcher for pretooluse-disband-close-gate.mjs is Bash" '[ "$MATCHER_CHECK" = "PASS" ]'
 
+# ---- the scan reads command text only: heredoc bodies, quoted text and comments never match
+NL=$'\n'
+hook_member() {
+  OUT=$(node -e '
+    process.stdout.write(JSON.stringify({ session_id: "s1", cwd: process.argv[1], tool_name: "Bash", tool_input: { command: process.argv[2] } }));
+  ' "$PROJ" "$1" | AH_TEAM_FILE="$PROJ/.claude/hierarchy/team.json" HOME="$FAKEHOME" node "$HOOK" 2>&1); RC=$?
+}
+silent() { hook "$1"; check "$2 (no decision)" '[ "$RC" -eq 0 ] && [ -z "$OUT" ]'; hook_member "$1"; check "$2 (no decision in a member)" '[ "$RC" -eq 0 ] && [ -z "$OUT" ]'; }
+matches() { hook "$1"; check "$2 (asks)" '[ "$RC" -eq 0 ] && is_ask'; hook_member "$1"; check "$2 (denies in a member)" '[ "$RC" -eq 0 ] && is_deny'; }
+is_deny() { case "$OUT" in *'"permissionDecision":"deny"'*) return 0;; *) return 1;; esac; }
+CLOSE="node $ROSTER disband --close"
+
+silent "cat > /p/x--response.md <<'EOF'${NL}- ran node $ROSTER disband --team x --close --confirm${NL}EOF" "a response file written by heredoc that mentions the close"
+silent "cat > /p/x.md <<EOF${NL}$CLOSE${NL}EOF" "an unquoted heredoc body that mentions the close"
+silent "cat > /p/x.md <<-EOF${NL}	$CLOSE${NL}	EOF" "a <<- heredoc body that mentions the close"
+silent "echo \"$CLOSE\"" "a double-quoted echo of the close"
+silent "printf '%s' '$CLOSE'" "a single-quoted printf of the close"
+silent "git commit -m \"doc: $CLOSE\"" "a commit message that mentions the close"
+silent "ls # $CLOSE" "a comment that mentions the close"
+silent "node /a/hooks/msg.mjs new --type response --id x --from y <<EOF${NL}$CLOSE${NL}EOF" "a runtime with a script operand reading a heredoc as data"
+silent "echo hi; node x.js $ROSTER${NL}disband --close" "words split over two simple commands"
+silent "echo hi && node x.js $ROSTER; echo disband --close" "words split by && and ;"
+matches "cd /c && $CLOSE --team x" "a close after cd &&"
+matches "bash -c \"$CLOSE\"" "bash -c with the close"
+matches "sh -lc '$CLOSE'" "sh -lc with the close"
+matches "eval \"$CLOSE\"" "eval with the close"
+matches "echo \"\$($CLOSE)\"" "a command substitution inside double quotes"
+matches "echo \`$CLOSE\`" "a backtick span"
+matches "bash <<EOF${NL}$CLOSE${NL}EOF" "a heredoc into bash"
+matches "cat <<EOF | bash${NL}$CLOSE${NL}EOF" "a heredoc piped into bash"
+matches "node - <<EOF${NL}$CLOSE${NL}EOF" "a heredoc into node reading stdin"
+matches "node <<'EOF'${NL}$CLOSE${NL}EOF" "a quoted heredoc into node with no operands"
+matches "echo \"$CLOSE" "an unterminated quote (fail safe)"
+matches "cat <<EOF${NL}$CLOSE" "an unterminated heredoc (fail safe)"
+matches "echo \"\$(echo \"\$(echo \"\$(echo \"\$(echo $ROSTER --close)\")\")\")\"" "nesting deeper than three levels (fail safe)"
+
+# close shapes the scan must still catch (each asked before the scan read command text only)
+matches "node \${CLAUDE_PLUGIN_ROOT}/hooks/roster.mjs disband --close --confirm --plan-token t" "an unquoted \${VAR} script path"
+matches "node \"\$R/hooks/roster.mjs\" disband --close --confirm --plan-token t" "a quoted \$VAR script path"
+matches "node \"\${CLAUDE_PLUGIN_ROOT}/hooks/roster.mjs\" disband --close --confirm --plan-token t" "the quoted plugin-root script path"
+matches "timeout 30 bash -c \"$CLOSE\"" "timeout wrapping bash -c"
+matches "env bash -c \"$CLOSE\"" "env wrapping bash -c"
+matches "sudo -u root bash <<EOF${NL}$CLOSE${NL}EOF" "sudo wrapping a shell that reads a heredoc"
+matches "FOO=1 nohup sh <<EOF${NL}$CLOSE${NL}EOF" "assignments and nohup before a shell reading a heredoc"
+matches "cat <<EOF 2>&1 | bash${NL}$CLOSE${NL}EOF" "a heredoc piped through 2>&1 into bash"
+matches "bash <<< \"$CLOSE\"" "a here-string into bash"
+matches "timeout 5 node $ROSTER disband --close 2>&1 | tee /tmp/x" "a close with a redirection and a pipe after it"
+matches "ROOT=\"\$(pwd)\" bash <<EOF${NL}$CLOSE${NL}EOF" "an assignment with a command substitution before a shell reading a heredoc"
+matches "timeout \"\$(echo 30)\" bash <<EOF${NL}$CLOSE${NL}EOF" "a wrapper with a command substitution before a shell reading a heredoc"
+matches "timeout \"\$(echo 30)\" bash <<< \"$CLOSE\"" "a wrapper with a command substitution before a shell reading a here-string"
+matches "cat <<EOF |& bash${NL}$CLOSE${NL}EOF" "a heredoc piped with |& into bash"
+silent "cat <<< \"$CLOSE\"" "a here-string into cat"
+silent "{ echo \"$CLOSE\"; } > /tmp/x" "a brace group that only echoes the close"
+
+# a parsed close in a member is a deny carrying the original reason and the member tail; outside a member it is the ask it always was
+hook_member "node $ROSTER disband --close --confirm --plan-token t --team x --cwd $PROJ"
+check "a parsed close in a member: deny with the original reason" '[ "$RC" -eq 0 ] && is_deny && echo "$OUT" | grep -q "close the live session"'
+check "the member deny carries the tail" 'echo "$OUT" | grep -q "does not ask here. Do not retry this command. Put what you needed in your report as BLOCKED or NEEDS-DECISION"'
+hook "node $ROSTER disband --close --confirm --plan-token t --team x --cwd $PROJ"
+check "the same parsed close outside a member is still an ask" '[ "$RC" -eq 0 ] && is_ask'
+check "the ask outside a member has no tail" '! echo "$OUT" | grep -q "does not ask here"'
+AH_TEAM_FILE="" hook "node $ROSTER disband --close --confirm --plan-token t --team x --cwd $PROJ"
+check "an empty AH_TEAM_FILE is no member: still an ask" '[ "$RC" -eq 0 ] && is_ask'
+
 # gate/matcher agreement check (spec 0042 §4 item 4, re-keyed by 0048 §2.4.5)
 NAME_AGREEMENT=$(node "$PLUGIN/tests/check-gate-name-agreement.mjs" 2>&1); NA_RC=$?
 echo "$NAME_AGREEMENT"

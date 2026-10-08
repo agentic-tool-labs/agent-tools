@@ -249,6 +249,18 @@ The same mod shows the team in three more places, to every session that sees
 the status entry. A member session sees none of them (more on that
 [below](#who-sees-them)).
 
+### Members never wait at a prompt
+
+Nobody watches a member session, so none may wait at a prompt. A hook decision
+that would ask you becomes a denial with the reason in a member session
+(`AH_TEAM_FILE` set), and so does `AskUserQuestion`, which the member reports as
+NEEDS-DECISION instead. The disband/close confirmation scans command text
+only: a heredoc body, a quoted string or a comment that merely mentions the
+command no longer triggers it. The Reviewer files its report by editing its own
+response file, gated to that one file. Whatever prompt remains (a permission
+dialog is not a hook decision) the dispatch watcher detects within about 30 s
+and wakes the Orchestrator to cancel it safely.
+
 ### The band
 
 Whenever the hierarchy has something to show for this session (a team is live,
@@ -531,6 +543,13 @@ polls every 15 s and exits with code 3 to wake the session, when:
   Orchestrator is told to `ListAgents` and send one status query.
 - **SILENT:** no report and no reply half an eta after the check-in: the
   Orchestrator is told to tell you.
+
+- **BLOCKED:** a member of a team this session owns has sat at a prompt for two
+  polls in a row (herdr reports it blocked, or its activity record says so),
+  whether or not a dispatch is open. The Orchestrator gets the prompt's text,
+  cancels it with `roster.mjs answer <name> --cancel` and tells you in one
+  line, and never picks Yes or any granting option itself. One wake per
+  member per episode.
 
 A peer that replies to the status query restarts the clock. The events reach
 the Orchestrator from the report-back store on its next prompt, never from a

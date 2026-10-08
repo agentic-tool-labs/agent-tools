@@ -161,13 +161,14 @@ import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { SHELL_SELF_CARE, activeRosterSetting, AGENT_REF_RE, agentRefError, escapeTerminal, expandFromRow, hiddenCharAt, installRecords, isFromRow, packAgentParse, packClaimMessage, packDigest, packNameClaims, packExtras, packRecords, packRoleState, packToolReport, packTree, parseFrom, pluginNameAt, readPackManifest, readStoredCopy, roleNameError, UNATTENDED_LINE, writeStoredCopy, hierarchyNameParts as parseNameParts, chainRoles, checkCustomRow, CLASSES, classBuiltin, classProp, customRoleNames, defaultLabel, DISPATCH_MODES, formatFindings, hasContractErrors, isAlternative, isBuiltinRole, isOverride, locateAgentFile, registryRoles, roleAgent, roleClass, ROLE_LABELS, roleLabel, validateAgentContract, validateRole, CONFIG_VERSION, checkoutRoot, findGitRoot, hierarchyDir, isPaneMember, mainHierarchyDir, peerName, pluginVersion, recentHookErrors, resolveConfig, statusReport, HOOK_ERROR_LOG, ROLES, ROSTER_LEVELS, resolveRoster, rosterLevelPaths, rosterMemberNames, namedRosterKeys, normalizeRosterBlock, dropNonObjectMembers, legworkHandedOff, rosterBlocksOf, staleTeamKeys, TASK_GOPHER, STALE_ROUTE_VALUES, suggestTeamAlias, teamLayoutPreference, teamPrefix, teamPrefixInfo, tierOf, validateHerdrName, validateTeamAlias, declaredModelTiers, declaredTier, DEFAULT_ROSTER, rosterLevelCandidates, rosterSelection, ownedRosterSelections, rosterSelectionProblem, selectableRosters, selectionView, sessionRosterSelection, TIER, userConfigPath } from "./lib-config.mjs";
-import { ageSecOf, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, reviewIntentGap, reviewIntentReason, attributedRoster, createMessage, fmtAge, latestRoster, readRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
+import { ageSecOf, appendGate, appendRosterRecord, pipelineRunLive, openExchanges, readMsgFile, reviewIntentGap, reviewIntentReason, attributedRoster, createMessage, fmtAge, latestRoster, readRoster, livePeerSlots, attributedLiveness, msgsDir, parseFrontmatter, peersPath, readJsonl, newId, localIso, NO_TEAM_SCOPE, pidAlive, realCwd, reportStatus, responsePlan, SELF_STATE, synthesizedPeerName } from "./lib-hier.mjs";
 import { getDecision } from "./lib-gate.mjs";
 import { readPeerRecords } from "./lib-peer.mjs";
-import { clearActivity, computeStatus, plainStatus, recordActivity, saveStatus } from "./lib-status.mjs";
+import { promptNoteLine, readPromptCore } from "./lib-blocked.mjs";
+import { clearActivity, computeStatus, describeMembers, plainStatus, recordActivity, saveStatus } from "./lib-status.mjs";
 import { ADVISE_TIERS, attributeSessionTeam, unmappedAdviseMessage, clearTeam, defaultTeamScope, envTeamFile, expectedRootFor, fingerprint, herdrOnPath, historyEntryIsActive, KIND_AUTO_MODE_ARGS, KIND_DEFAULT, KIND_HARNESS, KIND_RE, kindAutoModeArgs, kindFieldErrors, kindFieldWarnings, listTeamNames, memberArgs, memberNamePrefix, normalizeMembers, DEFAULT_TEAM_ARG, ownedTeams, promptOptions, promptRows, readHistory, readTeam, recognizeScreen, teamArgName, teamListText, teamsWithMember, resolveKind, rowOffered, resolveTeamByPane, ROSTER_LAYOUT_VALUES, ROSTER_ROUTE_VALUES, routeHasPane, screenHash, sessionMemberRow, teamFileState, teamIsLive, teamIsOrphaned, teamMemberNameSet, teamOwnedBy, teamPath, teamRosterKey, upsertHistory, validateMember, validateRosterBlock, validateTeamMember, writeTeam, writeTeamFile, clearTeamFile, readTeamFile, splitTeamCopy, teamHomeDir, poolTeamPath } from "./lib-roster.mjs";
 
-const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
+const BOOL_FLAGS = new Set(["plain", "json", "plan", "commit", "partial", "manual", "next", "apply", "kill", "keep-sessions", "spawn", "dry-run", "new-tab", "new-workspace", "allow-global", "cancel", "clear", "close", "confirm", "also-config", "no-spawn", "allow-roster-edit", "no-legwork-handoff", "wait-only", "no-worktree"]);
 const DISBAND_FLAGS = new Set(["kill", "plan", "close", "confirm", "plan-token", "allow-global", "cwd", "team"]);
 // Spec 0046 §3: tracking-only removal moved OFF dismiss/disband and onto its own verb, so the
 // destructive verbs cannot be reached with a flag that quietly means "do not close anything".
@@ -194,7 +195,7 @@ const CHECKIN_FLAGS = new Set(["cwd", "team", "orchestrator-pid"]);
 const WHOAMI_FLAGS = new Set(["cwd", "team"]);
 const DELIVER_FLAGS = new Set(["req", "ping", "wait-only", "timeout", "team", "cwd"]);
 /** No flag here takes keys or text: what `answer` sends is only ever a table row's keys. */
-const ANSWER_FLAGS = new Set(["prompt", "choice", "screen-hash", "team", "cwd"]);
+const ANSWER_FLAGS = new Set(["prompt", "choice", "cancel", "screen-hash", "team", "cwd"]);
 const TIER_FLAGS = new Set(["cwd"]);
 /** Verbs that can create a team, and so check the name it would get. */
 const TEAM_CREATING_VERBS = new Set(["create", "spawn-one", "spawn-ad-hoc", "stream-open"]);
@@ -3763,17 +3764,12 @@ function promptContext(kind) {
  */
 function readPrompt(member, agentStatus) {
   const kind = resolveKind(member);
-  let screen = "";
-  try {
-    const r = herdrCall(["agent", "read", member.name, "--source", "visible"], { allowFailure: true });
-    screen = r.ok ? r.stdout : "";
-  } catch {
-    screen = "";
-  }
-  const seen = recognizeScreen(kind, screen, agentStatus);
-  const blocked_by = seen.prompt || (agentStatus === "blocked" ? "harness-prompt" : null);
-  const options = seen.prompt ? promptOptions(kind, seen.prompt, seen.block, promptContext(kind)) : [];
-  return { composer: seen.composer, recognized: seen.prompt, block: seen.block, blocked_by, screen, screen_hash: screenHash(screen), options };
+  const core = readPromptCore(member, agentStatus, (name) => {
+    const r = herdrCall(["agent", "read", name, "--source", "visible"], { allowFailure: true });
+    return r.ok ? r.stdout : "";
+  });
+  const options = core.recognized ? promptOptions(kind, core.recognized, core.block, promptContext(kind)) : [];
+  return { ...core, options };
 }
 
 /**
@@ -3806,11 +3802,7 @@ function blockedFields(p) {
 
 /** The screen line a recognised prompt starts on (the line holding its heading), or null. */
 function promptNote(member, p) {
-  const prompts = (KIND_HARNESS[resolveKind(member)] || {}).prompts || {};
-  const spec = p && p.recognized ? prompts[p.recognized] : null;
-  if (!spec || typeof spec.heading !== "string") return null;
-  const line = String(p.screen || "").split("\n").find((l) => l.includes(spec.heading));
-  return line ? line.trim() : null;
+  return promptNoteLine(resolveKind(member), p && p.recognized, p && p.screen);
 }
 
 const PANE_ACTIVITY = { working: "working", idle: "idle", done: "idle", blocked: "blocked", agent_not_found: "unknown" };
@@ -6920,9 +6912,63 @@ try {
       // that row, exactly as the user was shown them.
       for (const key of Object.keys(opts)) {
         if (key === "_") continue;
-        if (!ANSWER_FLAGS.has(key)) fail(`answer: unrecognized flag --${key} (use --prompt, --choice, --screen-hash, --team, or --cwd)`);
+        if (!ANSWER_FLAGS.has(key)) fail(`answer: unrecognized flag --${key} (use --prompt, --choice, --cancel, --screen-hash, --team, or --cwd)`);
       }
       const dir = hierarchyDir(cwd);
+      // The one place the answer verb presses keys: a table row's keys, or the single Esc of --cancel.
+      const pressKeys = (name, keys) => {
+        for (const key of keys) herdrCall(["agent", "send-keys", name, key]);
+      };
+      if (opts.cancel !== undefined) {
+        // `--cancel` presses Esc once, on a Claude member that is blocked at a dialog right now and
+        // whose screen is still the one the caller saw. It sends nothing else, ever.
+        if (opts.cancel !== true) fail("answer: --cancel takes no value");
+        if (opts.choice !== undefined || opts.prompt !== undefined) fail("answer: --cancel cannot be combined with --choice or --prompt; it only ever sends Esc");
+        const name = opts._[0];
+        const cancelHash = opts["screen-hash"];
+        if (typeof cancelHash !== "string" || !/^[0-9a-f]{64}$/.test(cancelHash)) fail("answer --cancel: --screen-hash <hash> is required: the screen_hash the watcher reported");
+        if (typeof name !== "string" || !name) fail("answer: name the member — answer <member name> --cancel");
+        const team = readTeam(dir, teamFile);
+        if (!team) fail(`answer: there is no team at ${teamPath(dir, teamFile)} — pass --team <name> for the team ${name} is in`);
+        const member = (Array.isArray(team.members) ? team.members : []).find((m) => m && typeof m === "object" && m.name === name);
+        if (!member) fail(`answer: ${teamPath(dir, teamFile)} has no member named ${JSON.stringify(name)}`);
+        const kind = resolveKind(member);
+        const info = { name, kind };
+        if (kind !== KIND_DEFAULT) {
+          out({ status: "cancel-unsupported", ...info, why: `Esc is Claude Code's dismiss key, not ${kind}'s: relay this prompt to the user instead` });
+          break;
+        }
+        if ((member.transport ?? team.transport) !== "herdr" || typeof member.transport_id !== "string" || !member.transport_id) {
+          out({ status: "cancel-unsupported", ...info, why: "answer --cancel sends its key through herdr, and this member has no herdr pane" });
+          break;
+        }
+        const state = herdrAgentState(name);
+        if (state.indeterminate) {
+          out({ status: "indeterminate", ...info, agent_status: state.agent_status, why: state.why });
+          break;
+        }
+        if (!state.live) {
+          out({ status: "not-live", ...info, agent_status: null });
+          break;
+        }
+        const seen = readPrompt(member, state.agent_status);
+        if (seen.screen_hash !== cancelHash) {
+          out({ status: "screen-changed", ...info, agent_status: state.agent_status, ...blockedFields(seen) });
+          break;
+        }
+        // A stray Esc in a Claude session that is working interrupts its turn, so this check carries the weight.
+        const recorded = describeMembers(dir, team, readRoster(dir)).find((m) => m.name === name);
+        if (state.agent_status !== "blocked" && !(recorded && recorded.activity === "blocked")) {
+          out({ status: "not-blocked", ...info, agent_status: state.agent_status });
+          break;
+        }
+        pressKeys(name, ["esc"]);
+        const after = herdrAgentState(name);
+        // A cancel ends the member's blocked episode, so a watcher started later reports the next block as a new one.
+        if (after.agent_status !== "blocked") appendGate(dir, { type: "blocked-clear", team: teamFile, member: name, by: "answer" });
+        out({ status: after.agent_status === "blocked" ? "still-blocked" : "cancelled", ...info, agent_status: after.agent_status, ...(after.indeterminate ? {} : { live: after.live }) });
+        break;
+      }
       const member = paneMemberOrFail(dir, opts._[0], "answer");
       const kind = resolveKind(member);
       const prompt = opts.prompt;
@@ -6954,11 +7000,13 @@ try {
       if (!rowOffered(row, now.block)) {
         fail(`answer: ${choice} was not offered on this screen, so nothing was sent — the ids offered on it: ${now.options.map((o) => o.id).join(", ") || "(none)"}`);
       }
-      for (const key of row.keys) herdrCall(["agent", "send-keys", member.name, key]);
+      pressKeys(member.name, row.keys);
       // One look afterwards. A prompt still shown is reported, never answered again; an agent that
       // is gone (distrust quits Codex) is reported not live.
       recordActivity(dir, `pane-${member.name}`, { activity: "working" });
       const after = herdrAgentState(member.name);
+      // An answered prompt ends the member's blocked episode, as a cancel does: its next block is a new one.
+      if (after.agent_status !== "blocked") appendGate(dir, { type: "blocked-clear", team: teamFile, member: member.name, by: "answer" });
       const read = readPrompt(member, after.agent_status);
       out({ status: "answered", ...base, agent_status: after.agent_status, live: after.indeterminate ? null : after.live, prompt_after: read.recognized, screen: read.screen });
       break;

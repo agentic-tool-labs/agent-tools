@@ -47,6 +47,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
+  askDecision,
   declaredTier,
   hierarchyRoleOf,
   KIND_DEFAULT,
@@ -85,6 +86,12 @@ function decide(decision, reason, systemMessage) {
     );
   }
   process.exit(0);
+}
+
+/** The each-time prompt: a member session cannot answer one, so there it is a deny (see askDecision). */
+function decideAsk(reason) {
+  const d = askDecision(reason);
+  decide(d.decision, d.reason);
 }
 
 function setCommand(sessionId, choice) {
@@ -225,7 +232,7 @@ try {
         decide(null);
         break;
       case "each":
-        decide("ask", eachTimeReason(model));
+        decideAsk(eachTimeReason(model));
         break;
       case "off":
         decide("deny", blockedReason(sessionId), BLOCKED_CALM);
@@ -254,7 +261,7 @@ try {
       decide(null);
       break;
     case "each":
-      decide("ask", eachTimeReason(model));
+      decideAsk(eachTimeReason(model));
       break;
     case "off":
       decide("deny", blockedReason(sessionId), BLOCKED_CALM);
