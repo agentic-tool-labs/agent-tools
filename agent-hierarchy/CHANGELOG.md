@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.126.0]
+
+### Fixed
+
+- An auto-deny countdown on a permission prompt no longer makes `answer --cancel` or `answer --choice` refuse with `screen-changed`, and the watcher's second-time line works on such prompts: the screen hash ignores the ticking time on a line that says the request will be automatically denied.
+
 ## [0.125.0]
 
 ### Fixed

@@ -181,6 +181,36 @@ if kill -0 "$RUNNING" 2>/dev/null; then kill "$RUNNING" 2>/dev/null; wait "$RUNN
 OUT=$(cat "$SB/run.out")
 check "...and an answer-written clear newer than the wake ends it while that watcher runs: a new wake" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "is BLOCKED at a prompt"'
 
+# ---- an auto-deny countdown does not change the screen hash
+cdscreen() { printf 'Allow this tool?\n  1. Yes\n  2. No\nClaude Code will automatically deny this request in %s\n' "$1" > "$HS/screen"; }
+hash_text() { node --input-type=module -e "import { screenHash } from '$H/lib-roster.mjs'; process.stdout.write(screenHash(process.argv[1]))" "$1"; }
+
+reset; team "$$" claude herdr; touch "$HS/esc_unblocks"
+cdscreen 1:39; CH=$(hash_of); cdscreen 1:12
+ans demo-arch --cancel --screen-hash "$CH"
+check "V1: a countdown that ticked between the read and the cancel: cancelled" 'echo "$OUT" | grep -q "\"status\": \"cancelled\"" && [ "$(keys)" = 1 ] && [ "$(cat "$HS/keys")" = esc ]'
+
+reset; team "$$" claude herdr
+printf 'Allow this tool?\n  1. Yes\n  2. No\nrm a\nClaude Code will automatically deny this request in 1:39\n' > "$HS/screen"; CH=$(hash_of)
+printf 'Allow this tool?\n  1. Yes\n  2. No\nrm b\nClaude Code will automatically deny this request in 1:12\n' > "$HS/screen"
+ans demo-arch --cancel --screen-hash "$CH"
+check "V2: the prompt's command changed while the countdown ticked: screen-changed, nothing sent" 'echo "$OUT" | grep -q "\"status\": \"screen-changed\"" && [ "$(keys)" = 0 ]'
+
+reset; team "$$" claude herdr; cdscreen 1:39
+watch 8
+check "V3: first wake on the countdown screen" '[ "$RC" -eq 3 ]'
+echo idle > "$HS/status"; watch 2
+cdscreen 1:12; echo blocked > "$HS/status"; watch 8
+check "V3: the second wake, countdown changed between wakes, carries the second-time line" '[ "$RC" -eq 3 ] && echo "$OUT" | grep -q "^Second time at the same prompt"'
+
+check "V4a: 1:39 and 0:05 on a phrase line hash equal" '[ "$(hash_text "x
+Claude Code will automatically deny this request in 1:39")" = "$(hash_text "x
+Claude Code will automatically deny this request in 0:05")" ]'
+check "V4b: 45s and 9 seconds on a phrase line hash equal" '[ "$(hash_text "Claude Code will automatically deny this request in 45s")" = "$(hash_text "Claude Code will automatically deny this request in 9 seconds")" ]'
+check "V4c: sleep 1:30 and sleep 1:31 without the phrase hash differently" '[ "$(hash_text "sleep 1:30")" != "$(hash_text "sleep 1:31")" ]'
+check "V4d: the no-countdown screen hashes as it did before the mask" '[ "$(hash_text "$(printf "Allow this tool?\n  1. Yes\n  2. No\n")")" = 0a18ad31e717a4b348bcdb8747b0c7d08dc23c97c435ce535923fc33d80d7a85 ]'
+check "V4e: mixed case phrase is masked; changed words are still hashed" '[ "$(hash_text "Automatically Deny in 1:39")" = "$(hash_text "Automatically Deny in 0:05")" ] && [ "$(hash_text "will automatically deny in 1:39")" != "$(hash_text "will automatically approve in 1:39")" ]'
+
 echo "---"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

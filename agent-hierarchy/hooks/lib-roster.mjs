@@ -559,9 +559,16 @@ export function rowOffered(row, block) {
   return (block || []).some((o) => (digit === undefined || o.n === Number(digit)) && reads(o.label));
 }
 
-/** SHA-256 hex of a screen read, with trailing whitespace cut from each line and trailing blank lines dropped. */
+/** A prompt line that carries an auto-deny countdown; its time values tick every second, so they stay out of the hash. */
+const COUNTDOWN_LINE_RE = /automatically (deny|reject|approve)/i;
+const COUNTDOWN_TIME_RE = /\d+:\d{2}|\d+\s*s(ec(ond)?s?)?\b/gi;
+
+/** SHA-256 hex of a screen read, with trailing whitespace cut from each line, countdown times on an auto-deny line masked, and trailing blank lines dropped. */
 export function screenHash(screen) {
-  const lines = String(screen ?? "").split("\n").map((l) => l.replace(/\s+$/, ""));
+  const lines = String(screen ?? "").split("\n").map((l) => {
+    const t = l.replace(/\s+$/, "");
+    return COUNTDOWN_LINE_RE.test(t) ? t.replace(COUNTDOWN_TIME_RE, "<time>") : t;
+  });
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
