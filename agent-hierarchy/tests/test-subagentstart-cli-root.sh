@@ -8,12 +8,13 @@
 # HOME-redirected; real state untouched.
 # Usage: bash tests/test-subagentstart-cli-root.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 HOOK="$PLUGIN/hooks/subagentstart-cli-root.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-subagentstart-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/myrepo"

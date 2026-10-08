@@ -4,6 +4,7 @@
 # its own prompt would leave a member waiting at a prompt nobody watches. Comments are not code.
 # Usage: bash tests/test-no-bare-ask.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0; FAIL=0
 check() {
@@ -36,7 +37,7 @@ OUT=$(bare "$PLUGIN/hooks")
 check "no hook file names the ask decision except askDecision in lib-config.mjs" '[ -z "$OUT" ]'
 
 T=$(mktemp -d); [ -n "$T" ] && [ -d "$T" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$T"' EXIT
+hermetic_on_exit 'rm -rf "$T"'
 for f in "$PLUGIN"/hooks/*.mjs; do cp "$f" "$T/"; done
 printf '%s\n' 'process.stdout.write(JSON.stringify({ hookSpecificOutput: { permissionDecision: "ask" } }))' > "$T/pretooluse-new-gate.mjs"
 OUT=$(bare "$T")

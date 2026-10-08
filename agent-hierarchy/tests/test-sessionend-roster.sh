@@ -4,14 +4,15 @@
 # HOME-redirected, throwaway repo; real config and pool never touched.
 # Usage: bash tests/test-sessionend-roster.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/ah-sessionend-test.XXXXXX")"
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 KIDS=()
 cleanup() { for k in "${KIDS[@]}"; do kill "$k" 2>/dev/null; wait "$k" 2>/dev/null; done; rm -rf "$SANDBOX"; }
-trap cleanup EXIT
-unset AGENT_HIERARCHY_DIR HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE CLAUDE_PID
+hermetic_on_exit cleanup
+unset AGENT_HIERARCHY_DIR AH_TEAM_FILE CLAUDE_PID
 FAKEHOME="$SANDBOX/home"; PROJ="$SANDBOX/repo"; ROSTER="$PROJ/.claude/hierarchy/peers.jsonl"
 mkdir -p "$FAKEHOME/.claude" "$PROJ/.claude/hierarchy"
 git -C "$PROJ" init -q

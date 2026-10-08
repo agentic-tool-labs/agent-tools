@@ -4,11 +4,12 @@
 # HOME-redirected; real state untouched.
 # Usage: bash tests/test-reviewer-write-gate.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK="$PLUGIN/hooks/pretooluse-reviewer-write-gate.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-reviewer-write-gate-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 unset AH_TEAM_FILE CLAUDE_PID
 FAKEHOME="$SANDBOX/home"

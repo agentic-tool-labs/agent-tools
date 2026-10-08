@@ -5,14 +5,20 @@
 # HOME-redirected; real state untouched.
 # Usage: bash tests/test-config-unparsable.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 # Every Claude session exports some of these; a test must not inherit any of them.
-unset AH_TEAM_FILE CLAUDE_PID AH_ROSTER HERDR_ENV HERDR_PANE_ID TMUX_PANE AGENT_HIERARCHY_DIR
+unset AH_TEAM_FILE CLAUDE_PID AH_ROSTER AGENT_HIERARCHY_DIR
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-config-unparsable-test.XXXXXX")"
+export AH_TEST_FAKE_BIN="$SANDBOX/closebin:$SANDBOX/nolaunch"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
+# No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH (a failing herdr or tmux is what a
+# machine without a running multiplexer gives), and the guard in lib-hermetic.sh is told it is a fake.
+mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
+export PATH="$SANDBOX/nolaunch:$PATH"
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/myrepo"
 REPO_CFG="$PROJ/.claude/agent-hierarchy.json"

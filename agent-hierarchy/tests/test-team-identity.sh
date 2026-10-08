@@ -6,13 +6,15 @@
 # HOME-redirected; no test reaches the real herdr, tmux, or ~/.claude.
 # Usage: bash tests/test-team-identity.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-team-identity-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch:$SANDBOX/bin:$SANDBOX/fakes:$SANDBOX/closebin"
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/claude"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux" "$SANDBOX/nolaunch/claude"
-export PATH="$SANDBOX/nolaunch:$PATH"; unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE CLAUDE_PID
+export PATH="$SANDBOX/nolaunch:$PATH"; unset AH_TEAM_FILE CLAUDE_PID
 FAKEHOME="$SANDBOX/home"
 GLOBAL="$FAKEHOME/.claude/agent-hierarchy.json"
 NODE_DIR="$(dirname "$(command -v node)")"
@@ -286,7 +288,7 @@ check "B7b: with the recorded session it is the invoker's own team and the commi
 # ==================================================================== step 3 — a launched member knows its team
 sleep 600 & OWNER_PID=$!
 sleep 600 & OTHER_PID=$!
-trap 'kill $OWNER_PID $OTHER_PID 2>/dev/null; rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'kill $OWNER_PID $OTHER_PID 2>/dev/null; rm -rf "$SANDBOX"'
 resolve_team() { # <env assignments...> — resolveConfig(PROJ,{sessionId}).team and its prefix, as a hook computes them
   OUT=$(env -u AH_TEAM_FILE -u HERDR_PANE_ID -u TMUX_PANE HOME="$FAKEHOME" "$@" node --input-type=module -e "
     const C = await import('$H/lib-config.mjs');

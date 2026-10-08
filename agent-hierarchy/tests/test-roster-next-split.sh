@@ -4,6 +4,7 @@
 # geometry. No herdr required — next-split performs no I/O.
 # Usage: bash tests/test-roster-next-split.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it

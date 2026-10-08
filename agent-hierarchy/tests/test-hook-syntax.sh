@@ -7,6 +7,7 @@
 # catching the whole class before a session does.
 # Usage: bash tests/test-hook-syntax.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
@@ -36,7 +37,7 @@ check "every hooks.json command points at a file that exists" '[ -z "$MISSING" ]
 
 # Control: the check must be able to fail, or a syntax error would sail past it.
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-hook-syntax.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+hermetic_on_exit 'rm -rf "$TMP"'
 printf 'const x = {;\n' > "$TMP/broken.mjs"
 OUT=$(node --check "$TMP/broken.mjs" 2>&1)
 check "control: node --check reports a broken file" '[ -n "$OUT" ]'

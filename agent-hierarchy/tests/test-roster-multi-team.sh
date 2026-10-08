@@ -6,6 +6,7 @@
 # HOME- and AGENT_HIERARCHY_DIR-redirected; real state untouched.
 # Usage: bash tests/test-roster-multi-team.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
@@ -19,8 +20,12 @@ check() {
 }
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-multi-team-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
+# No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH (a failing herdr or tmux is what a
+# machine without a running multiplexer gives), and the guard in lib-hermetic.sh is told it is a fake.
+mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
+export PATH="$SANDBOX/nolaunch:$PATH"; export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch"
 FAKEHOME="$SANDBOX/home"
 HD="$SANDBOX/hier"
 PROJ="$SANDBOX/myrepo"

@@ -5,6 +5,7 @@
 # HOME- and AGENT_HIERARCHY_DIR-redirected; real state untouched.
 # Usage: bash tests/test-sendmessage-response-nudge.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
@@ -15,7 +16,7 @@ TRACK="$H/userpromptsubmit-peer-tracking.mjs"
 LIVENESS="$H/stop-orchestrator-liveness.mjs"
 MSG="$H/msg.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-sendresp-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 FAKEHOME="$SANDBOX/home"
 HD="$SANDBOX/hier"

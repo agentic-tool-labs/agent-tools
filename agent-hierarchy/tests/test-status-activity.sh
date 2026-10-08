@@ -5,6 +5,7 @@
 # HOME- and AGENT_HIERARCHY_DIR-redirected; real state untouched.
 # Usage: bash tests/test-status-activity.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
 
@@ -12,7 +13,7 @@ PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-status-pool.sh"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-status-activity-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 PASS=0; FAIL=0
 

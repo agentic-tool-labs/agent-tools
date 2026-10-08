@@ -4,6 +4,7 @@
 # no network, no scratch files; it runs node against the fixture in place.
 # Usage: bash tests/test-review-scenario.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 FX="$PLUGIN/tests/fixtures/review-scenario"
 PASS=0; FAIL=0

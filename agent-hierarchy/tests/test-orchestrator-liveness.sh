@@ -3,6 +3,7 @@
 # HOME-redirected; real config and real state are never touched.
 # Usage: bash tests/test-orchestrator-liveness.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
@@ -12,7 +13,7 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-liveness-test.XXXXXX")"
 SANDBOX="$(cd "$SANDBOX" && pwd)"  # canonicalize — TMPDIR can carry a trailing slash on macOS, which would otherwise
                                     # make shell-concatenated paths (e.g. mark_peer_route's) diverge byte-for-byte from
                                     # the same paths as built internally via Node's path.join (which collapses "//").
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 HIER_DIR="$SANDBOX/hier"

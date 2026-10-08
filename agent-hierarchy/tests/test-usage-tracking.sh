@@ -4,6 +4,7 @@
 # never touched, and no model is ever involved — the point of the feature.
 # Usage: bash tests/test-usage-tracking.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it
@@ -11,7 +12,7 @@ ROOT="$(cd "$PLUGIN/.." && pwd)"
 COLLECT="$PLUGIN/hooks/subagentstop-usage.mjs"
 REPORT="$PLUGIN/hooks/usage-report.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-usage-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/projects/myproj"
 PASS=0; FAIL=0

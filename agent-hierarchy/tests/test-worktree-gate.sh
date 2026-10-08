@@ -5,15 +5,17 @@
 # HOME-redirected; real state untouched.
 # Usage: bash tests/test-worktree-gate.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 . "$PLUGIN/tests/lib-quiet-deny.sh"
 H="$PLUGIN/hooks"
 HOOK="$H/pretooluse-worktree-gate.mjs"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-worktree-gate-test.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+export AH_TEST_FAKE_BIN="$SANDBOX/nolaunch"
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 mkdir -p "$SANDBOX/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nolaunch/herdr"; cp "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"; chmod +x "$SANDBOX/nolaunch/herdr" "$SANDBOX/nolaunch/tmux"
-export PATH="$SANDBOX/nolaunch:$PATH"; unset HERDR_ENV HERDR_PANE_ID TMUX_PANE TMUX AH_TEAM_FILE
+export PATH="$SANDBOX/nolaunch:$PATH"; unset AH_TEAM_FILE
 unset CLAUDE_PID
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"

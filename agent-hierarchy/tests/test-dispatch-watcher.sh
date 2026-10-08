@@ -4,6 +4,7 @@
 # backdating request `created`, response mtimes and gate timestamps, never by changing thresholds.
 # Usage: bash tests/test-dispatch-watcher.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE CLAUDE_PID
 H="$PLUGIN/hooks"
@@ -12,7 +13,7 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-watcher-test.XXXXXX")"
 SANDBOX="$(cd "$SANDBOX" && pwd)"
 PIDS=()
 cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$SANDBOX"; }
-trap cleanup EXIT
+hermetic_on_exit cleanup
 FAKEHOME="$SANDBOX/home"
 PROJ="$SANDBOX/proj"
 HIER_DIR="$SANDBOX/hier"

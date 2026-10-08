@@ -6,13 +6,18 @@
 # for a backoff. HOME- and hierarchy-redirected; real state untouched.
 # Usage: bash tests/test-recovery-watcher.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 H="$PLUGIN/hooks"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-recovery-watcher-test.XXXXXX")"
 [ -n "$SB" ] && [ -d "$SB" ] || { echo "mktemp failed"; exit 1; }
 SB="$(cd "$SB" && pwd -P)"
+# No test may reach the real herdr or tmux: a stub that fails every call sits first on PATH (a failing herdr or tmux is what a
+# machine without a running multiplexer gives), and the guard in lib-hermetic.sh is told it is a fake.
+mkdir -p "$SB/nolaunch"; printf '#!/bin/sh\nexit 1\n' > "$SB/nolaunch/herdr"; cp "$SB/nolaunch/herdr" "$SB/nolaunch/tmux"; chmod +x "$SB/nolaunch/herdr" "$SB/nolaunch/tmux"
+export PATH="$SB/nolaunch:$PATH"; export AH_TEST_FAKE_BIN="$SB/nolaunch"
 sleep 300 & OTHER=$!
-trap 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"' EXIT
+hermetic_on_exit 'kill "$OTHER" 2>/dev/null; rm -rf "$SB"'
 unset AH_TEAM_FILE CLAUDE_PID CLAUDE_CODE_SESSION_ID AGENT_HIERARCHY_DIR
 export HOME="$SB/home" CLAUDE_PID=$$
 PROJ="$SB/proj"; HD="$PROJ/.claude/hierarchy"; PR="$HOME/.claude/projects/p"

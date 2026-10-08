@@ -5,6 +5,12 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.129.0]
+
+### Fixed
+
+- The test suite can no longer open tabs in your real herdr or windows in your real tmux. Full test runs inside a herdr pane had been leaving idle `· sx` tabs behind, because some tests inherited the herdr environment and found the real `herdr` on the path. Every test now starts from one shared preamble that clears the herdr and tmux environment and gives tmux a private socket directory, and herdr and tmux are only ever run through one guarded call: in a test, a binary that is not one of the test's own fakes is not run, the attempt is recorded and the test file is stopped. The suite checks that every test file uses the preamble and declares its fake binaries.
+
 ## [0.128.0]
 
 ### Added

@@ -5,6 +5,7 @@
 # links are the cheapest, most common defect in a docs commit.
 # Usage: bash tests/test-doc-links.sh   (exits 0 iff all links resolve)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 unset AH_TEAM_FILE  # every session roster.mjs launches carries one; a test must not inherit it
 unset CLAUDE_PID  # every Claude session exports one; a test must not inherit it

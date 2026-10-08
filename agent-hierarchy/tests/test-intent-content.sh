@@ -3,10 +3,11 @@
 # the Orchestrator directive: each assertion greps for a token or phrase the rule cannot be stated without.
 # Usage: bash tests/test-intent-content.sh   (exits 0 iff all cases pass)
 
+. "$(dirname "$0")/lib-hermetic.sh"
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/agent-hierarchy-intent-content-test.XXXXXX")"
 [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] || { echo "mktemp failed"; exit 1; }
-trap 'rm -rf "$SANDBOX"' EXIT
+hermetic_on_exit 'rm -rf "$SANDBOX"'
 PASS=0; FAIL=0
 
 check() {
