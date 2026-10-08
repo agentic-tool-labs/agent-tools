@@ -16,7 +16,7 @@ Full test loops opened idle tabs labelled `· sx` in the user's real herdr works
 
 ## 2. Root cause
 
-**The leaking test.** `tests/test-state-team-peers.sh:230`, on the openrig research branches only (`ah/openrig-*`; not on `main`):
+**The leaking test.** `tests/test-state-team-peers.sh:230`, on some in-progress feature branches only (not on `main`):
 
 ```
 stream_open() { OUT=$(cd "$PROJ" && env -u AH_TEAM_FILE CLAUDE_PID="$$" "$@" node "$SB_HOOKS/roster.mjs" stream-open sx --no-worktree … --cwd "$PROJ" 2>&1); RC=$?; }
@@ -37,7 +37,7 @@ stream_open() { OUT=$(cd "$PROJ" && env -u AH_TEAM_FILE CLAUDE_PID="$$" "$@" nod
 | Isolation is per test file and opt-in. About 26 of 130 files build a fake herdr and 37 have a failing `nolaunch` stub. Many roster-invoking files have neither (for example `test-roster.sh`, `test-roster-spawn.sh`, `test-roster-multi-team.sh`, `test-roster-reap.sh`, `test-multi-owned-teams.sh`, `test-roster-worktree.sh`). No test uses a private tmux socket (`-L` or `TMUX_TMPDIR`: zero matches) | `tests/` |
 | No shared env helper, and `main` has no suite runner. `tests/test-suite-hermeticity.sh` only lints the `AH_TEAM_FILE` and `CLAUDE_PID` unsets | `tests/` |
 
-On `main` today, no test is confirmed to leak. The gap rows above are what let the openrig test leak, and what would let the next one.
+On `main` today, no test is confirmed to leak. The gap rows above are what let that test leak, and what would let the next one.
 
 ## 3. The fix
 
@@ -177,7 +177,7 @@ Must not change:
 |---|---|
 | A fake `herdr` in `$SANDBOX/bin`, listed in `AH_TEST_FAKE_BIN`, first on PATH | runs the fake |
 | A fake `herdr` on PATH, but its directory is not listed | tripwire line, stderr message, test killed, binary not run |
-| No fake; the real herdr is on PATH (the openrig leak) | the same: tripwire, nothing reaches the real herdr |
+| No fake; the real herdr is on PATH (the original leak) | the same: tripwire, nothing reaches the real herdr |
 | No `herdr` anywhere on PATH | the ENOENT failure as today; no tripwire, no kill |
 | A symlink in a listed directory pointing at the real `/opt/homebrew/bin/herdr` | tripwire, because the realpath is outside the listed directories |
 | A team file with `transport: "herdr"` and `HERDR_ENV` unset | still guarded (the guard is at exec, not at detection) |
@@ -241,5 +241,5 @@ Then the full suite passes with every file migrated, and running it leaves no tr
 ## 8. Open questions (defaults taken)
 
 - **Q1.** Is killing the test file on a tripwire too harsh? Default: **kill**. A swallowed refusal could leave a leaking test green, and that is how this leak went unseen.
-- **Q2, for the Orchestrator rather than the user.** `test-state-team-peers.sh` lives only on the `ah/openrig-*` branches. 0091 cannot fix it on `main`. When those branches take 0.129.0, H1 and the guard will force the fix. Until then, that file should get a fake `herdr` and `unset HERDR_ENV HERDR_WORKSPACE_ID` on the research branch now, as a one-line R11 follow-up, so loops stop leaking today.
+- **Q2, for the Orchestrator rather than the user.** `test-state-team-peers.sh` lives only on some in-progress feature branches, so 0091 cannot fix it on `main`. When those branches take 0.129.0, H1 and the guard will force the fix. Until then, that file should get a fake `herdr` and `unset HERDR_ENV HERDR_WORKSPACE_ID` on those branches, so loops stop leaking today.
 - **Q3, for the user.** Ten idle `· sx` tabs are open in the user's herdr now. Closing them is the user's call. Nothing in this change touches the real herdr.
