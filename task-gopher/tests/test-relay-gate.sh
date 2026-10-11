@@ -1028,6 +1028,68 @@ w_allow W8 cW8 'mkdir -p d && cat <<< "x" > d/f'
 a_ckpt W9 cW9 $'mkdir -p d && cat > d/f <<EOF\n$(cat big)\nEOF'
 a_ckpt W10 cW10 $'mkdir -p d && cat > d/f <<\'EOF\'\nx'
 
+# R-5: every checkpoint and bypass row carries the command category (cls) and a salted session hash (sh);
+# the report reads old rows without either and never throws.
+last_row() { tail -1 "$TGLOG"; }
+row_has() { last_row | grep -q "$1"; }
+cls_row() { # <row> <prompt_id> <command> <event> <cls>
+  run_hook "$(bash_payload "$3" "$2")"
+  check "R5-$1: logged as $4 with cls $5" "row_has '\"event\":\"$4\"' && row_has '\"cls\":\"$5\"'"
+}
+cls_row c1 r5a 'grep -rn foo src' checkpoint search
+check "R5-c1: sh is 8 hex digits and not the raw session id" \
+  "last_row | grep -Eq '\"sh\":\"[0-9a-f]{8}\"' && ! last_row | grep -q '\"sh\":\"sB\"'"
+SH_B=$(last_row | sed -n 's/.*"sh":"\([0-9a-f]*\)".*/\1/p')
+cls_row c2 r5a 'grep -rn foo src' bypass search
+check "R5-c2: same session, same sh" "row_has '\"sh\":\"$SH_B\"'"
+cls_row c3 r5b 'cat big.log' checkpoint view
+cls_row c4 r5c 'find . -name x' checkpoint find
+cls_row c5 r5d 'git log --oneline -20' checkpoint git-read
+cls_row c6 r5e 'npm test 2>&1 | tail -40' checkpoint test
+cls_row c7 r5f 'make all' checkpoint build
+cls_row c8 r5g 'python3 gen.py && grep -n x out.txt' checkpoint script
+# nearest non-match: a quoted retrieval word is text, so no row is written
+N0=$(wc -l < "$TGLOG")
+run_hook "$(bash_payload 'git commit -m "grep fix"' r5h)"
+check "R5-n1: a quoted word writes no row" "[ \"\$(wc -l < \"$TGLOG\")\" = \"$N0\" ]"
+run_hook '{"tool_name":"Read","prompt_id":"r5i","session_id":"sOTHER5","tool_input":{"file_path":"/x/a.txt"}}'
+check "R5-c9: Read logged with cls read" "row_has '\"cls\":\"read\"'"
+check "R5-c9: another session hashes differently" "! row_has '\"sh\":\"$SH_B\"'"
+
+RP="$SANDBOX/rhome"; mkdir -p "$RP/.claude"
+R5="$RP/.claude/task-gopher.log"
+row() { printf '{"ts":"2026-10-12T10:00:00.000Z","pid":"%s","aid":"","event":"%s"%s}\n' "$1" "$2" "$3" >> "$R5"; }
+# t1: dispatch first. t2: Read turn-start checkpoint, then dispatch. t3: checkpoint, bypass, escalation, task then smart
+# dispatch. t4: Read turn-start checkpoint only.
+row t1 dispatch ',"agent":"task-gopher","detail":"task-gopher:task-gopher"'
+row t2 checkpoint ',"kind":"turn-start","tool":"Read","detail":"/x","cls":"read","sh":"aaaaaaaa"'
+row t2 dispatch ',"agent":"task-gopher","detail":"task-gopher:task-gopher"'
+row t3 checkpoint ',"kind":"turn-start","tool":"Bash","detail":"grep x","cls":"search","sh":"aaaaaaaa"'
+row t3 bypass ',"n":1,"tool":"Bash","detail":"grep y","cls":"search","sh":"aaaaaaaa"'
+row t3 checkpoint ',"kind":"escalated","tool":"Bash","detail":"grep z","cls":"search","sh":"aaaaaaaa"'
+row t3 dispatch ',"agent":"task-gopher","detail":"task-gopher:task-gopher"'
+row t3 dispatch ',"agent":"smart-gopher","detail":"task-gopher:smart-gopher"'
+row t4 checkpoint ',"kind":"turn-start","tool":"Read","detail":"/y","cls":"read","sh":"bbbbbbbb"'
+REPORT=$(HOME="$RP" node "$PLUGIN/hooks/report.mjs" 2>&1)
+check "R5-m: work turns counted" "printf '%s' \"\$REPORT\" | grep -q 'work turns (a checkpoint or a dispatch): 4'"
+check "R5-m: M1 upfront delegation 1/4" "printf '%s' \"\$REPORT\" | grep -q 'M1 .*: 1/4 = 25.0%'"
+check "R5-m: M2 dispatches per 100 gated calls" "printf '%s' \"\$REPORT\" | grep -q 'M2 dispatches per 100 gated direct calls: 80.00  (4 dispatches / 5 gated calls)'"
+check "R5-m: M3 as logged and as if G1" "printf '%s' \"\$REPORT\" | grep -q 'M3 .*as logged 0.33  |  as if G1 1.00'"
+check "R5-m: M4 as logged and as if G1" "printf '%s' \"\$REPORT\" | grep -q 'M4 .*as logged 75.0%  |  as if G1 33.3%'"
+check "R5-m: M5 per gopher" "printf '%s' \"\$REPORT\" | grep -q 'M5 .*task-gopher 60.00, smart-gopher 20.00'"
+check "R5-m: M6a escalations" "printf '%s' \"\$REPORT\" | grep -q 'M6a .*: 1/3 task-gopher turns = 33.3%'"
+
+# an old log: no cls, sh or open, plus junk lines; the report still runs and still answers
+OLD="$SANDBOX/ohome"; mkdir -p "$OLD/.claude"
+printf '%s\n' '{"ts":"2026-01-05T10:00:00.000Z","pid":"o1","aid":"","event":"checkpoint","kind":"turn-start","tool":"Bash","detail":"grep x"}' \
+  '{"ts":"2026-01-05T10:00:01.000Z","pid":"o1","aid":"","event":"bypass","n":1,"tool":"Bash","detail":"grep y"}' \
+  'not json at all' '[1,2]' 'null' '{"event":"dispatch"}' '{"pid":"o2","event":"dispatch","agent":"smart-gopher"}' > "$OLD/.claude/task-gopher.log"
+OLDOUT=$(HOME="$OLD" node "$PLUGIN/hooks/report.mjs" 2>&1); OLDRC=$?
+check "R5-old: report exits 0 on an old log with junk lines" "[ $OLDRC -eq 0 ]"
+check "R5-old: metrics still printed" "printf '%s' \"\$OLDOUT\" | grep -q 'per-turn delegation metrics'"
+check "R5-old: no stack trace" "! printf '%s' \"\$OLDOUT\" | grep -qi 'TypeError\|at .*\.mjs'"
+check "R5-none: no log -> message, exit 0" "HOME='$SANDBOX/nohome' node '$PLUGIN/hooks/report.mjs' | grep -q 'No task-gopher audit log yet'"
+
 echo "----"
 echo "SUMMARY: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

@@ -14,6 +14,10 @@
  * non-strict-era dispatches would dilute the exact rubber-stamping signal the
  * ratio exists to expose.
  *
+ * It also prints the per-turn delegation metrics M1-M6 (spec 0003 §4), a turn being one `pid`. Checkpoint counts are
+ * shown twice, as logged and "as if G1": the first Read of a turn passes unchallenged once G1 ships, so older rows where
+ * a turn-start checkpoint hit a Read are recomputed as passes, which is what lets the two eras be compared.
+ *
  * Read-only. Prints to stdout. Never throws.
  */
 
@@ -21,6 +25,90 @@ import { readFileSync } from "node:fs";
 import { LOG_FILE, gopherKind } from "./directive.mjs";
 
 const RECENT = Number(process.argv[2]) || 12;
+
+const pct = (a, b) => (b ? `${((100 * a) / b).toFixed(1)}%` : "n/a");
+const per = (a, b) => (b ? (a / b).toFixed(2) : "n/a");
+
+/** ISO week label (YYYY-Www) of an ISO timestamp, or "" when it has none. */
+function weekOf(ts) {
+  const d = new Date(ts);
+  if (!ts || Number.isNaN(d.getTime())) return "";
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return `${t.getUTCFullYear()}-W${String(Math.ceil(((t - y0) / 86400000 + 1) / 7)).padStart(2, "0")}`;
+}
+
+/**
+ * M1-M6 over the work events (checkpoint, bypass, dispatch) of each turn, in log order. `asIfG1` recomputes the log as
+ * if the first Read of a turn had been a free pass: such a turn-start checkpoint row becomes a bypass.
+ */
+function metricsOf(events, agentOf, asIfG1) {
+  const turns = new Map();
+  for (const e of events) {
+    if (!e.pid || !["checkpoint", "bypass", "dispatch"].includes(e.event)) continue;
+    let row = e;
+    if (asIfG1 && e.event === "checkpoint" && e.kind === "turn-start" && e.tool === "Read") row = { ...e, event: "bypass", open: "read" };
+    if (!turns.has(e.pid)) turns.set(e.pid, []);
+    turns.get(e.pid).push(row);
+  }
+  let work = 0, firstDispatch = 0, firstCheckpoint = 0, withCheckpoint = 0, escalated = 0, gated = 0;
+  const byAgent = { "task-gopher": 0, "smart-gopher": 0 };
+  let taskTurns = 0, escalatedTurns = 0;
+  for (const rows of turns.values()) {
+    const hasCp = rows.some((r) => r.event === "checkpoint");
+    const hasDisp = rows.some((r) => r.event === "dispatch");
+    if (hasCp) withCheckpoint++;
+    escalated += rows.filter((r) => r.event === "checkpoint" && r.kind === "escalated").length;
+    gated += rows.filter((r) => r.event === "checkpoint" || r.event === "bypass").length;
+    for (const r of rows) if (r.event === "dispatch") byAgent[agentOf(r)] = (byAgent[agentOf(r)] || 0) + 1;
+    if (hasCp || hasDisp) {
+      work++;
+      if (rows[0].event === "dispatch") firstDispatch++;
+      if (rows[0].event === "checkpoint") firstCheckpoint++;
+    }
+    const kinds = rows.filter((r) => r.event === "dispatch").map(agentOf);
+    const t = kinds.indexOf("task-gopher");
+    if (t >= 0) {
+      taskTurns++;
+      if (kinds.slice(t + 1).includes("smart-gopher")) escalatedTurns++;
+    }
+  }
+  const dispatches = byAgent["task-gopher"] + byAgent["smart-gopher"];
+  return { work, firstDispatch, firstCheckpoint, withCheckpoint, escalated, gated, dispatches, byAgent, taskTurns, escalatedTurns };
+}
+
+function printMetrics(events, agentOf, smartGateCheckpoints) {
+  const a = metricsOf(events, agentOf, false);
+  const g = metricsOf(events, agentOf, true);
+  console.log("");
+  console.log("per-turn delegation metrics (a turn is one prompt id; spec 0003 §4)");
+  console.log(`  work turns (a checkpoint or a dispatch): ${a.work}`);
+  console.log(`  M1 upfront delegation (first work event is a dispatch): ${a.firstDispatch}/${a.work} = ${pct(a.firstDispatch, a.work)}   target >= 40% (>= 30% passes)`);
+  console.log(`  M2 dispatches per 100 gated direct calls: ${per(100 * a.dispatches, a.gated)}  (${a.dispatches} dispatches / ${a.gated} gated calls)   target >= 10`);
+  console.log(`  M3 escalated checkpoints per retrieval turn: as logged ${per(a.escalated, a.withCheckpoint)}  |  as if G1 ${per(g.escalated, g.withCheckpoint)}   target <= 1.0`);
+  console.log(`  M4 turns that open with a checkpoint: as logged ${pct(a.firstCheckpoint, a.work)}  |  as if G1 ${pct(g.firstCheckpoint, g.work)}   target <= 50% as if G1`);
+  console.log(
+    `  M5 per-gopher dispatches per 100 gated calls: task-gopher ${per(100 * a.byAgent["task-gopher"], a.gated)}, smart-gopher ${per(100 * a.byAgent["smart-gopher"], a.gated)}`
+  );
+  console.log(
+    `  M6a escalations (a smart-gopher dispatch after a task-gopher one in the same turn): ${a.escalatedTurns}/${a.taskTurns} task-gopher turns = ${pct(a.escalatedTurns, a.taskTurns)}   target <= 15%`
+  );
+  console.log(`  M6b smart-gopher orders available for a blind label (first 160 characters): ${smartGateCheckpoints.length}   target <= 20% decision-free of >= 100 sampled`);
+  // by week: how M2 moves, which is the trend the spec's baseline is read from
+  const weeks = new Map();
+  for (const e of events) {
+    const w = weekOf(e.ts);
+    if (!w) continue;
+    const row = weeks.get(w) || { gated: 0, disp: 0 };
+    if (e.event === "checkpoint" || e.event === "bypass") row.gated++;
+    if (e.event === "dispatch") row.disp++;
+    weeks.set(w, row);
+  }
+  const shown = [...weeks.entries()].sort().slice(-8);
+  if (shown.length) console.log(`  M2 by week: ${shown.map(([w, r]) => `${w} ${per(100 * r.disp, r.gated)}`).join(", ")}`);
+}
 
 function main() {
   let raw;
@@ -59,6 +147,9 @@ function main() {
   const authorized = events.filter((e) => e.event === "destructive-allowed");
   const asked = events.filter((e) => e.event === "destructive-ask");
   const smartGateCheckpoints = events.filter((e) => e.event === "smart-gate-checkpoint");
+  const verbatimDenies = events.filter((e) => e.event === "verbatim-deny");
+  const exempts = events.filter((e) => e.event === "exempt");
+  const openReads = events.filter((e) => e.open === "read");
   const turns = new Set(events.map((e) => e.pid).filter(Boolean)).size;
 
   // Only dispatches from turns the strict gate actually saw count toward the
@@ -148,6 +239,14 @@ function main() {
       console.log(`  - ${what} [${agentOf(b)}]: ${b.detail || "?"}${labels}${why}`);
     }
   }
+
+  if (verbatimDenies.length || exempts.length || openReads.length) {
+    console.log(
+      `other gate events: ${verbatimDenies.length} verbatim-deny, ${exempts.length} exempt (a flagged command that is not a retrieval), ` +
+        `${openReads.length} free first Read(s) (open: "read")`
+    );
+  }
+  printMetrics(events, agentOf, smartGateCheckpoints);
 
   const recent = bypasses.slice(-RECENT);
   if (recent.length) {

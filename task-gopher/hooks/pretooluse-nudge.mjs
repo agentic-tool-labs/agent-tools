@@ -94,6 +94,7 @@
 
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { heredocSpans, isExempt, isHeredocWrite, nestedLookup } from "./action-exempt.mjs";
 import { cannotDispatch } from "./agent-tools.mjs";
@@ -222,15 +223,19 @@ const ask = (reason) => {
 // Bash commands that are retrieval/search/read/heavy — the delegatable kind.
 // (Plain state changes like git add/commit, mkdir, cd, echo are intentionally
 // NOT gated: they aren't what floods context and aren't task-gopher's job.)
-const RETRIEVAL_ANY = [
-  /\b(grep|rg|ack|ag)\b/,
-  /\bfind\b/,
-  /\bgit\s+(diff|log|show|blame|grep)\b/,
-  /\b(npm|yarn|pnpm|bun)\s+(test|run\s+build|run\s+lint)\b/,
-  /\b(pytest|jest|vitest|tox|nox)\b/,
-  /\b(cargo|go)\s+(test|build)\b/,
-  /\b(make|gradle|gradlew|mvn)\b/,
+// Each pattern carries the category label it is logged under (`cls`). The union of the patterns is what fires the gate.
+const CATEGORY_PATTERNS = [
+  ["search", /\b(grep|rg|ack|ag)\b/],
+  ["find", /\bfind\b/],
+  ["git-read", /\bgit\s+(diff|log|show|blame|grep)\b/],
+  ["test", /\b(npm|yarn|pnpm|bun)\s+test\b/],
+  ["build", /\b(npm|yarn|pnpm|bun)\s+run\s+(build|lint)\b/],
+  ["test", /\b(pytest|jest|vitest|tox|nox)\b/],
+  ["test", /\b(cargo|go)\s+test\b/],
+  ["build", /\b(cargo|go)\s+build\b/],
+  ["build", /\b(make|gradle|gradlew|mvn)\b/],
 ];
+const RETRIEVAL_ANY = CATEGORY_PATTERNS.map(([, re]) => re);
 
 /**
  * These count ONLY when they lead the command. `tail -50 app.log` reads a file;
@@ -321,6 +326,36 @@ function commandStarts(text) {
 }
 
 const bashLooksUp = (command) => isRetrieval({ tool_name: "Bash", tool_input: { command } });
+
+// A command that leads with one of these runs a program that prints data: logged as "script" whatever stage fired the gate.
+const SCRIPT_LEADS = new Set(["python", "python3", "node", "perl", "ruby", "sed", "awk"]);
+
+/**
+ * The category label of a call the gate fires on, for the audit log: read, search, find, git-read, test, build, view or
+ * script. It labels; it never decides whether the gate fires.
+ */
+function categoryOf(payload) {
+  const tool = payload.tool_name;
+  if (tool === "Read") return "read";
+  if (tool === "Grep") return "search";
+  if (tool === "Glob") return "find";
+  const cmd = payload?.tool_input?.command;
+  if (typeof cmd !== "string") return "script";
+  const masked = maskQuoted(cmd);
+  const lead = commandStarts(masked)
+    .map(([from, to]) => masked.slice(from, to).trim().split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w))[0])
+    .find((w) => w && w !== "cd" && w !== "export");
+  if (lead && SCRIPT_LEADS.has(lead.split("/").pop())) return "script";
+  const stages = stripQuoted(cmd).split(/\|\||&&|[|;\n]/);
+  for (const [cat, re] of CATEGORY_PATTERNS) if (stages.some((stage) => re.test(stage))) return cat;
+  if (stages.some((stage, i) => i === 0 && READER_LEADING.some((re) => re.test(stage)))) return "view";
+  for (const [cat, re] of CATEGORY_PATTERNS) if (re.test(cmd)) return cat;
+  return READER_LEADING.some((re) => re.test(cmd)) ? "view" : "script";
+}
+
+/** A short salted hash of the session id, so sessions can be clustered in the log without the raw id. */
+const sessionHash = (sid) =>
+  sid ? createHash("sha256").update(`task-gopher|${homedir()}|${sid}`).digest("hex").slice(0, 8) : "";
 
 // A short description of WHAT the agent ran directly, for the audit log.
 function detailOf(payload) {
@@ -703,7 +738,7 @@ try {
   // the mark persists, else the re-run would re-trigger forever.
   if (!seen) {
     if (!appendState(key + RESET)) allow();
-    logEvent({ pid, aid, event: "checkpoint", kind: "turn-start", tool, detail });
+    logEvent({ pid, aid, event: "checkpoint", kind: "turn-start", tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
     deny(
       nudgeMessage(payload, 0),
       "task-gopher: paused one direct lookup to suggest delegating it; re-running proceeds."
@@ -714,7 +749,7 @@ try {
   const next = n + 1;
   if (next >= RENUDGE_AFTER) {
     if (!appendState(key + RESET)) allow(); // reset streak; re-block once
-    logEvent({ pid, aid, event: "checkpoint", kind: "escalated", bypasses: next, tool, detail });
+    logEvent({ pid, aid, event: "checkpoint", kind: "escalated", bypasses: next, tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
     deny(
       nudgeMessage(payload, next),
       "task-gopher: paused again after several direct lookups in a row; re-running proceeds."
@@ -722,7 +757,7 @@ try {
   }
 
   if (!appendState(key)) allow(); // record the bypass and allow
-  logEvent({ pid, aid, event: "bypass", n: next, tool, detail });
+  logEvent({ pid, aid, event: "bypass", n: next, tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
   allow();
 } catch {
   allow(); // fail open, always
