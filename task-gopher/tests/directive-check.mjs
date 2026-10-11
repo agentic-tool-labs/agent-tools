@@ -21,8 +21,7 @@ const TASK = "task-gopher:task-gopher";
 const SMART = "task-gopher:smart-gopher";
 
 const whitespaceWords = (s) => s.split(/\s+/).filter(Boolean);
-// A bare "->", "=" or "+" is punctuation, not a word.
-const words = (s) => whitespaceWords(s).filter((w) => /[A-Za-z0-9]/.test(w));
+const words = whitespaceWords;
 const bareSmart = (s) => /(?<!task-gopher:)smart-gopher/.test(s);
 
 const { DIRECTIVE, TICK, SENTINEL, EXCEPTION_LINE, ESCALATED_LEAD, CATEGORIES, checkpointReason } = m;

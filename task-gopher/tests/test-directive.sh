@@ -138,7 +138,7 @@ rejects() {
 
 EXTRA="$(printf 'extra%d ' $(seq 1 30))"
 LONG_EXTRA="$(printf 'extra%d ' $(seq 1 45))"
-mutate m-words directive.mjs 'Re-run it only if it was one of the exceptions.`;' "Re-run it only if it was one of the exceptions. ${EXTRA}\`;"
+mutate m-words directive.mjs 'Re-run only for an exception.`;' "Re-run only for an exception. ${EXTRA}\`;"
 check "can fail: 30 extra words in the directive are rejected" "rejects m-words directive-words"
 
 mutate m-bare directive.mjs '-> task-gopher:smart-gopher (Sonnet)' '-> smart-gopher (Sonnet)'
@@ -147,7 +147,7 @@ check "can fail: bare smart-gopher name is rejected" "rejects m-bare directive-b
 mutate m-purpose directive.mjs '[task-gopher: ON] PURPOSE: keep' '[task-gopher: ON] Keep'
 check "can fail: no PURPOSE clause first is rejected" "rejects m-purpose directive-purpose-first"
 
-mutate m-counter directive.mjs 'If you have already made 2 direct retrieval calls in a row' 'If you have already made a few direct retrieval calls in a row'
+mutate m-counter directive.mjs 'If you have made 2 direct retrieval calls in a row' 'If you have made a few direct retrieval calls in a row'
 check "can fail: no '2 direct retrieval calls' in the directive is rejected" "rejects m-counter directive-token"
 
 mutate m-bullet directive.mjs '- The answer needs picking among candidates, reconciling disagreeing evidence, a summary with an editorial cut, or later steps depend on earlier findings -> task-gopher:smart-gopher (Sonnet). E.g. "which of these call sites is the real entry point, and why".

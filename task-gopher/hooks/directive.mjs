@@ -487,13 +487,13 @@ PICK THE RUNNER:
 - The answer needs picking among candidates, reconciling disagreeing evidence, a summary with an editorial cut, or later steps depend on earlier findings -> task-gopher:smart-gopher (Sonnet). E.g. "which of these call sites is the real entry point, and why".
 - Neither -> do it yourself.
 
-START with the order. If you have already made 2 direct retrieval calls in a row, the next one goes to a gopher: bundle everything you still need into ONE order.
+START with the order. If you have made 2 direct retrieval calls in a row, the next one goes to a gopher: bundle everything you still need into ONE order.
 
 ORDER, 3 lines: WHERE (paths/branch). HOW (exact commands or method). BACK (what to return and the bar: "counts + file:line, at most 30 lines"). Never order a file back whole.
 
 DO IT YOURSELF: reading a file you are about to Edit; one trivial peek; anything that needs your judgment. Gophers never decide design, security or scope.
 
-A gate checkpoint means you did something listed above. Re-run it only if it was one of the exceptions.`;
+A gate checkpoint means you did something listed above. Re-run only for an exception.`;
 
 /** The line injected every turn: purpose, the runner selector, the counter. */
 export const TICK =
