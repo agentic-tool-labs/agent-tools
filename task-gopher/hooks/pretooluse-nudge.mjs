@@ -98,14 +98,16 @@ import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { heredocSpans, isExempt, isHeredocWrite, nestedLookup } from "./action-exempt.mjs";
 import { cannotDispatch } from "./agent-tools.mjs";
-import { askMessage, classify, denyMessage, isAllowed, recordAllowances, sandboxEscape } from "./destructive.mjs";
+import { ALLOW_MARKER, askMessage, classify, denyMessage, isAllowed, recordAllowances, sandboxEscape } from "./destructive.mjs";
 import {
-  FULL_DIRECTIVE,
+  CATEGORIES,
+  DIRECTIVE,
   LOG_FILE,
   NUDGE_FILE,
   SENTINEL,
   agentGopherKind,
   canAskHuman,
+  checkpointReason,
   gopherKind,
   guardMode,
   isEnabled,
@@ -161,7 +163,7 @@ const injectDirective = (toolInput) => {
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        updatedInput: { ...toolInput, prompt: FULL_DIRECTIVE + "\n\n" + toolInput.prompt },
+        updatedInput: { ...toolInput, prompt: DIRECTIVE + "\n\n" + toolInput.prompt },
       },
     })
   );
@@ -223,18 +225,8 @@ const ask = (reason) => {
 // Bash commands that are retrieval/search/read/heavy — the delegatable kind.
 // (Plain state changes like git add/commit, mkdir, cd, echo are intentionally
 // NOT gated: they aren't what floods context and aren't task-gopher's job.)
-// Each pattern carries the category label it is logged under (`cls`). The union of the patterns is what fires the gate.
-const CATEGORY_PATTERNS = [
-  ["search", /\b(grep|rg|ack|ag)\b/],
-  ["find", /\bfind\b/],
-  ["git-read", /\bgit\s+(diff|log|show|blame|grep)\b/],
-  ["test", /\b(npm|yarn|pnpm|bun)\s+test\b/],
-  ["build", /\b(npm|yarn|pnpm|bun)\s+run\s+(build|lint)\b/],
-  ["test", /\b(pytest|jest|vitest|tox|nox)\b/],
-  ["test", /\b(cargo|go)\s+test\b/],
-  ["build", /\b(cargo|go)\s+build\b/],
-  ["build", /\b(make|gradle|gradlew|mvn)\b/],
-];
+// The category table owns the patterns and each pattern's label (`cls`); the union of them is what fires the gate.
+const CATEGORY_PATTERNS = CATEGORIES.flatMap((c) => c.patterns.map((re) => [c.id, re]));
 const RETRIEVAL_ANY = CATEGORY_PATTERNS.map(([, re]) => re);
 
 /**
@@ -242,7 +234,7 @@ const RETRIEVAL_ANY = CATEGORY_PATTERNS.map(([, re]) => re);
  * `git push | tail -10` TRIMS output — which is the habit this plugin exists to
  * encourage, so gating it was backwards. Same for `cmd | head`, `... | less`.
  */
-const READER_LEADING = [/\b(cat|head|tail|bat|less)\b/];
+const READER_LEADING = CATEGORIES.find((c) => c.id === "view").leadPatterns;
 
 /**
  * A retrieval word inside a quoted span is text, not a command:
@@ -328,7 +320,7 @@ function commandStarts(text) {
 const bashLooksUp = (command) => isRetrieval({ tool_name: "Bash", tool_input: { command } });
 
 // A command that leads with one of these runs a program that prints data: logged as "script" whatever stage fired the gate.
-const SCRIPT_LEADS = new Set(["python", "python3", "node", "perl", "ruby", "sed", "awk"]);
+const SCRIPT_LEADS = new Set(CATEGORIES.find((c) => c.id === "script").leads);
 
 /**
  * The category label of a call the gate fires on, for the audit log: read, search, find, git-read, test, build, view or
@@ -423,6 +415,9 @@ function contextKey(payload) {
  * re-run apart from a fresh turn.
  */
 const RESET = "\tR";
+// Written right after RESET by a dispatch. The last line of a context being this mark means no retrieval has happened
+// since the dispatch; a reader that does not know the mark skips it and sees the RESET before it.
+const DISPATCHED = "\tD";
 const NUDGE_MAX_LINES = 400;
 
 function readLines() {
@@ -433,21 +428,30 @@ function readLines() {
   }
 }
 
-/** Replay one context's lines: has it been checkpointed, and how many bypasses since its last reset. */
+/**
+ * Replay one context's lines: has it been checkpointed, how many bypasses since its last reset, and whether the
+ * latest thing it did was dispatch (so the next retrieval is the first since).
+ */
 function readStreak(lines, key) {
   const reset = key + RESET;
+  const dispatched = key + DISPATCHED;
   let seen = false;
   let n = 0;
+  let afterDispatch = false;
   for (const line of lines) {
     if (line === key) {
       seen = true;
       n++;
+      afterDispatch = false;
     } else if (line === reset) {
       seen = true;
       n = 0;
+      afterDispatch = false;
+    } else if (line === dispatched) {
+      afterDispatch = true;
     }
   }
-  return { seen, n };
+  return { seen, n, afterDispatch };
 }
 
 /** Compact once the log has grown well past what any live turn needs. */
@@ -499,31 +503,14 @@ function smartGateMessage(prompt) {
     "",
     "Reach for smart-gopher only when you cannot write a decision-free order for task-gopher, or when task-gopher already stopped on a genuine judgment gap — not because it seems more capable or the task merely touches several files.",
     "",
+    `The destructive guard holds either runner: a command that deletes local state or leaves the machine goes to the USER, and neither the runner nor you can consent for them. If you judge a specific one right, put a line reading "${ALLOW_MARKER} <the exact command>" in the order: that is a recommendation the user sees, not a bypass. Prefer running such steps yourself.`,
+    "",
     "If you've considered that and smart-gopher is still the right call, RE-RUN the IDENTICAL dispatch to proceed. This checkpoints per distinct request, not per session: the exact same prompt goes straight through from here on, but any OTHER smart-gopher dispatch — even later in this same session — gets its own fresh checkpoint.",
   ].join("\n");
 }
 
-function nudgeMessage(payload, bypasses) {
-  const what =
-    payload.tool_name === "Bash"
-      ? "this command (`" + String(payload?.tool_input?.command || "").slice(0, 80) + "`)"
-      : "a " + payload.tool_name;
-  if (bypasses >= RENUDGE_AFTER) {
-    return [
-      `task-gopher (strict) — checkpoint again: ${RENUDGE_AFTER} direct retrievals in a row this turn without dispatching.`,
-      "",
-      `You're about to run ${what}. You've been pulling tool output into your own context repeatedly — that's the drift this guards against. Batch the retrievals you still need into ONE task-gopher order instead of continuing.`,
-      "",
-      "If you genuinely must keep doing these yourself, RE-RUN to proceed. Dispatching to task-gopher clears this streak so the checkpoint stops recurring. (Haiku-tier: re-run; this isn't for you.)",
-    ].join("\n");
-  }
-  return [
-    "task-gopher (strict) — checkpoint for this turn.",
-    "",
-    `You're about to run ${what} directly. If you're Sonnet-tier or higher: could task-gopher do this retrieval instead? Bundle it with any other reads/greps/diffs you need this turn into ONE dispatched order and keep your own context clean.`,
-    "",
-    "If you've considered that and still want to do it yourself — it needs YOUR judgment, or it's a single trivial peek — just RE-RUN the exact same call. This won't ask again until you've done a few more direct retrievals. (Haiku-tier: this isn't for you — re-run.)",
-  ].join("\n");
+function nudgeMessage(payload, escalated) {
+  return checkpointReason(categoryOf(payload), escalated);
 }
 
 try {
@@ -691,6 +678,7 @@ try {
       }
       if (key) {
         appendState(key + RESET);
+        appendState(key + DISPATCHED);
         logEvent({ pid, aid, event: "dispatch", agent: target, tool: payload.tool_name, detail: st });
       }
       allow();
@@ -730,9 +718,18 @@ try {
   if (cannotDispatch(payload.agent_type, payload.cwd)) allow();
   if (!key) allow(); // can't scope a turn -> fail open
 
-  const { seen, n } = readStreak(readLines(), key);
+  const { seen, n, afterDispatch } = readStreak(readLines(), key);
   const tool = payload.tool_name;
   const detail = detailOf(payload);
+
+  // A Read that opens a turn, or follows a dispatch, passes: the harness requires one before an Edit and the hook
+  // cannot see the Edit coming. It opens the cadence the way the turn-start checkpoint did, so the next two pass and
+  // the third is held. Any other first retrieval still draws the checkpoint below.
+  if (tool === "Read" && (!seen || afterDispatch)) {
+    if (!appendState(key + RESET)) allow();
+    logEvent({ pid, aid, event: "bypass", n: 0, open: "read", tool, detail, cls: "read", sh: sessionHash(sid) });
+    allow();
+  }
 
   // First retrieval by THIS agent in this turn: the checkpoint. Only block if
   // the mark persists, else the re-run would re-trigger forever.
@@ -740,7 +737,7 @@ try {
     if (!appendState(key + RESET)) allow();
     logEvent({ pid, aid, event: "checkpoint", kind: "turn-start", tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
     deny(
-      nudgeMessage(payload, 0),
+      nudgeMessage(payload, false),
       "task-gopher: paused one direct lookup to suggest delegating it; re-running proceeds."
     );
   }
@@ -751,7 +748,7 @@ try {
     if (!appendState(key + RESET)) allow(); // reset streak; re-block once
     logEvent({ pid, aid, event: "checkpoint", kind: "escalated", bypasses: next, tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
     deny(
-      nudgeMessage(payload, next),
+      nudgeMessage(payload, true),
       "task-gopher: paused again after several direct lookups in a row; re-running proceeds."
     );
   }

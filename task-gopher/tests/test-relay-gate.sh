@@ -262,16 +262,30 @@ check "on (non-strict): Read not checkpointed" is_allow
 # ---- strict mode regressions
 touch "$FAKEHOME/.claude/task-gopher.strict"
 
+# A first retrieval that is not a Read draws the turn-start checkpoint; a first Read passes and opens the same cadence.
+GREP_TS='{"tool_name":"Grep","prompt_id":"tTS","session_id":"sTS","tool_input":{"pattern":"x"}}'
+run_hook "$GREP_TS"
+check "strict: first Grep of turn -> checkpoint deny" is_deny
+check "strict: turn-start deny is quiet" "quiet_deny \"\$TG4_CALM\" 'task-gopher checkpoint: you are searching code'"
+run_hook "$GREP_TS"
+check "strict: Grep re-run passes (bypass 1)" is_allow
+run_hook "$GREP_TS"
+check "strict: Grep bypass 2 silent" is_allow
+run_hook "$GREP_TS"
+check "strict: Grep 3rd consecutive bypass -> escalated deny" is_deny
+check "strict: escalated deny is quiet and leads with the bundle line" "quiet_deny \"\$TG5_CALM\" 'That is 3 direct calls this turn'"
+
 run_hook "$READ_P"
-check "strict: first Read of turn -> checkpoint deny" is_deny
-check "strict: turn-start deny is quiet" "quiet_deny \"\$TG4_CALM\" 'checkpoint for this turn'"
+check "strict: first Read of turn passes silently" is_allow
+check "strict: first-Read pass is logged as a bypass with n 0 and open read" \
+  "tail -1 \"\$FAKEHOME/.claude/task-gopher.log\" | grep -q '\"event\":\"bypass\",\"n\":0,\"open\":\"read\"'"
 run_hook "$READ_P"
-check "strict: re-run passes (bypass 1)" is_allow
+check "strict: second Read passes (bypass 1)" is_allow
 run_hook "$READ_P"
-check "strict: bypass 2 silent" is_allow
+check "strict: third Read passes (bypass 2)" is_allow
 run_hook "$READ_P"
-check "strict: 3rd consecutive bypass -> escalated deny" is_deny
-check "strict: escalated deny is quiet" "quiet_deny \"\$TG5_CALM\" 'checkpoint again'"
+check "strict: fourth Read -> escalated deny" is_deny
+check "strict: Read escalation is quiet" "quiet_deny \"\$TG5_CALM\" 'task-gopher checkpoint: you are reading files'"
 
 run_hook "$READ_P"
 check "strict: re-run passes after escalation (escape hatch survives the reset)" is_allow
@@ -287,15 +301,15 @@ check "strict: dispatch reset streak (Read allowed, no escalate)" is_allow
 # checkpoints hit a turn already in progress, median 2.7s after its last event.
 # A checkpointed context must survive another context checkpointing between
 # its calls.
-READ_OTHER='{"tool_name":"Read","prompt_id":"tOTHER","session_id":"sOTHER","tool_input":{"file_path":"/x"}}'
+READ_OTHER='{"tool_name":"Grep","prompt_id":"tOTHER","session_id":"sOTHER","tool_input":{"pattern":"x"}}'
 run_hook "$READ_OTHER"
 check "strict: a different context gets its own turn-start" is_deny
 run_hook "$READ_P"
 check "strict: original context NOT re-checkpointed after a foreign turn" is_allow
 
 # Concurrent sessions must not share a streak at all.
-READ_S2='{"tool_name":"Read","prompt_id":"tS","session_id":"sTWO","tool_input":{"file_path":"/x"}}'
-READ_S3='{"tool_name":"Read","prompt_id":"tS","session_id":"sTHREE","tool_input":{"file_path":"/x"}}'
+READ_S2='{"tool_name":"Grep","prompt_id":"tS","session_id":"sTWO","tool_input":{"pattern":"x"}}'
+READ_S3='{"tool_name":"Grep","prompt_id":"tS","session_id":"sTHREE","tool_input":{"pattern":"x"}}'
 run_hook "$READ_S2"; run_hook "$READ_S2"   # sTWO: checkpointed, then bypassing
 run_hook "$READ_S3"
 check "strict: same prompt_id in another SESSION is its own streak" is_deny
@@ -305,8 +319,8 @@ check "strict: same prompt_id in another SESSION is its own streak" is_deny
 # before the fix, the subagent shared the parent's counter, so a parent that
 # had already spent its turn-start meant the subagent was never checkpointed
 # at all — measured live, a subagent's first Read sailed straight through.
-READ_PAR='{"tool_name":"Read","prompt_id":"tPAR","session_id":"sPAR","tool_input":{"file_path":"/x"}}'
-READ_SUB='{"tool_name":"Read","prompt_id":"tPAR","session_id":"sPAR","agent_id":"agSUB","tool_input":{"file_path":"/x"}}'
+READ_PAR='{"tool_name":"Grep","prompt_id":"tPAR","session_id":"sPAR","tool_input":{"pattern":"x"}}'
+READ_SUB='{"tool_name":"Grep","prompt_id":"tPAR","session_id":"sPAR","agent_id":"agSUB","tool_input":{"pattern":"x"}}'
 run_hook "$READ_PAR"
 check "strict: parent turn-start" is_deny
 run_hook "$READ_PAR"
@@ -329,7 +343,7 @@ EOF
 printf -- '---\nname: reader\ntools: Read\n---\n\nbody\n' > "$SANDBOX/plugroot-ro/agents/reader.md"
 printf -- '---\nname: dispatcher\ntools: Read, Agent\n---\n\nbody\n' > "$SANDBOX/plugroot-ro/agents/dispatcher.md"
 printf -- '---\nname: inheritor\n---\n\nbody\n' > "$SANDBOX/plugroot-ro/agents/inheritor.md"
-read_as() { printf '{"tool_name":"Read","prompt_id":"%s","session_id":"sRO","agent_id":"ag%s","agent_type":"%s","tool_input":{"file_path":"/x"}}' "$1" "$1" "$2"; }
+read_as() { printf '{"tool_name":"Grep","prompt_id":"%s","session_id":"sRO","agent_id":"ag%s","agent_type":"%s","tool_input":{"pattern":"x"}}' "$1" "$1" "$2"; }
 run_hook "$(read_as tRO1 roplug:reader)"
 check "strict: Read by an agent whose tools are only Read -> no checkpoint" is_allow
 run_hook "$(read_as tRO2 roplug:dispatcher)"
@@ -466,7 +480,7 @@ run_hook "$(payload "$DISPATCH_NOSENT" s2 smart-gopher)"
 check "R3: bare unnamespaced smart-gopher not stamped" is_allow
 
 # ---- R4: dispatch to smart-gopher resets the strict streak (mirrors the t4 sequence)
-READ_P4='{"tool_name":"Read","prompt_id":"t4b","tool_input":{"file_path":"/x"}}'
+READ_P4='{"tool_name":"Grep","prompt_id":"t4b","tool_input":{"pattern":"x"}}'
 run_hook "$READ_P4"
 check "R4: strict turn-start checkpoint" is_deny
 run_hook "$READ_P4"
@@ -882,7 +896,7 @@ run_hook "$(bash_payload 'grep -rn foo src' aL1)"; check "A-L1: re-run passes" i
 run_hook "$(bash_payload 'grep -rn foo src' aL1)"; check "A-L1: bypass 2 passes" is_allow
 run_hook "$(bash_payload 'grep -rn foo src' aL1)"; check "A-L1: 3rd bypass escalates" is_deny
 run_hook '{"tool_name":"Read","prompt_id":"aL2","session_id":"sB","tool_input":{"file_path":"src/a.ts"}}'
-check "A-L2: Read checkpointed" is_deny
+check "A-L2: a first Read of a turn passes (the opening Read is not delegable legwork)" is_allow
 a_ckpt L3 aL3 'git diff HEAD~1'
 run_hook "$(bash_payload $'git commit -m "$(cat <<\'EOF\'\nmake sure to find it\nEOF\n)"' aL4)"
 check "A-L4: commit-message heredoc allowed" is_allow
@@ -1028,10 +1042,55 @@ w_allow W8 cW8 'mkdir -p d && cat <<< "x" > d/f'
 a_ckpt W9 cW9 $'mkdir -p d && cat > d/f <<EOF\n$(cat big)\nEOF'
 a_ckpt W10 cW10 $'mkdir -p d && cat > d/f <<\'EOF\'\nx'
 
-# R-5: every checkpoint and bypass row carries the command category (cls) and a salted session hash (sh);
-# the report reads old rows without either and never throws.
+# R-7 (G1): the first Read of a context+turn passes and opens the cadence; any other first retrieval is held.
 last_row() { tail -1 "$TGLOG"; }
 row_has() { last_row | grep -q "$1"; }
+g1_read() { printf '{"tool_name":"Read","prompt_id":"%s","session_id":"sG1","tool_input":{"file_path":"/x/%s"}}' "$1" "${2:-a.txt}"; }
+g1_bash() { bash_payload "$2" "$1" | sed 's/"sB"/"sG1"/'; }
+run_hook "$(g1_read g1a)"; check "G1-1: Read first -> pass" is_allow
+check "G1-1: logged bypass n 0 open read cls read" \
+  "row_has '\"event\":\"bypass\",\"n\":0,\"open\":\"read\"' && row_has '\"cls\":\"read\"'"
+run_hook "$(g1_read g1a)"; check "G1-2: Read second -> pass" is_allow
+check "G1-2: the second Read is an ordinary bypass (n 1, no open key)" "row_has '\"n\":1' && ! row_has 'open'"
+run_hook "$(g1_read g1a)"; check "G1-3: Read third -> pass" is_allow
+run_hook "$(g1_read g1a)"; check "G1-4: Read fourth -> escalated deny" is_deny
+# the nearest inputs that must NOT get the free pass
+run_hook "$(g1_bash g1b 'grep -rn foo src')"; check "G1-5: Bash grep first -> deny" is_deny
+run_hook "$(g1_bash g1b 'grep -rn foo src')"; check "G1-5: re-run passes" is_allow
+run_hook "$(g1_bash g1b 'grep -rn foo src')"; check "G1-5: second bypass passes" is_allow
+run_hook "$(g1_bash g1b 'grep -rn foo src')"; check "G1-5: third -> escalated deny" is_deny
+run_hook "$(g1_bash g1c 'cat src/index.ts')"; check "G1-6: Bash cat first is not a Read -> deny" is_deny
+run_hook '{"tool_name":"Glob","prompt_id":"g1d","session_id":"sG1","tool_input":{"pattern":"**/*.ts"}}'
+check "G1-7: Glob first -> deny" is_deny
+run_hook "$(g1_bash g1e 'npm test 2>&1 | tail -20')"; check "G1-8: test run first -> deny" is_deny
+# a Read that is not the first call follows the unchanged cadence
+run_hook "$(g1_bash g1f 'grep -rn foo src')"; check "G1-9: Bash grep first -> deny" is_deny
+run_hook "$(g1_read g1f)"; check "G1-9: a Read after it is a plain bypass" is_allow
+check "G1-9: no open key on that Read" "row_has '\"event\":\"bypass\",\"n\":1' && ! row_has 'open'"
+# a dispatch resets: the Read after it is a free first again, and its cadence is the full one
+run_hook "$(payload "$DISPATCH_NOSENT" g1g task-gopher:task-gopher | sed 's/"prompt_id"/"session_id":"sG1","prompt_id"/')"
+check "G1-10: dispatch allowed" is_allow
+run_hook "$(g1_read g1g)"; check "G1-10: Read after a dispatch -> pass" is_allow
+check "G1-10: logged as a free first" "row_has '\"n\":0,\"open\":\"read\"'"
+run_hook "$(g1_read g1g)"; run_hook "$(g1_read g1g)"
+run_hook "$(g1_read g1g)"; check "G1-10: fourth call after the dispatch -> escalated deny" is_deny
+# a Read after a retrieval that followed the dispatch is not free
+run_hook "$(payload "$DISPATCH_NOSENT" g1h task-gopher:task-gopher | sed 's/"prompt_id"/"session_id":"sG1","prompt_id"/')"
+run_hook "$(g1_bash g1h 'grep -rn foo src')"
+run_hook "$(g1_read g1h)"
+check "G1-11: Read after dispatch-then-grep is a plain bypass" "row_has '\"event\":\"bypass\"' && ! row_has 'open'"
+# state that cannot be written fails open, and a free pass is not logged
+BADHOME="$SANDBOX/badhome"; mkdir -p "$BADHOME/.claude/task-gopher.nudge"
+touch "$BADHOME/.claude/task-gopher.enabled" "$BADHOME/.claude/task-gopher.strict"
+B0=$(wc -l < "$BADHOME/.claude/task-gopher.log" 2>/dev/null || echo 0)
+OUT=$(g1_read g1z | HOME="$BADHOME" node "$HOOK" 2>/dev/null); RC=$?
+check "G1-12: unwritable state -> Read allowed" is_allow
+check "G1-12: no free-Read row logged" "! grep -q 'open' \"$BADHOME/.claude/task-gopher.log\" 2>/dev/null"
+OUT=$(g1_bash g1y 'grep -rn foo src' | HOME="$BADHOME" node "$HOOK" 2>/dev/null); RC=$?
+check "G1-12: unwritable state -> Bash grep allowed too" is_allow
+
+# R-5: every checkpoint and bypass row carries the command category (cls) and a salted session hash (sh);
+# the report reads old rows without either and never throws.
 cls_row() { # <row> <prompt_id> <command> <event> <cls>
   run_hook "$(bash_payload "$3" "$2")"
   check "R5-$1: logged as $4 with cls $5" "row_has '\"event\":\"$4\"' && row_has '\"cls\":\"$5\"'"

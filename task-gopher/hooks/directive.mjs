@@ -467,54 +467,116 @@ export function verbatimDenyMessage(prompt, hit) {
 
 /**
  * Marker the relay gate looks for at the top of Agent dispatch prompts, to tell
- * an already-stamped dispatch from one that still needs the directive. Both
- * directive texts open with it.
+ * an already-stamped dispatch from one that still needs the directive. The
+ * directive and the per-turn tick both open with it.
  */
 export const SENTINEL = "[task-gopher: ON]";
 
-/** Full directive — injected at SessionStart (and re-injected post-compaction). */
-export const FULL_DIRECTIVE = [
-  "[task-gopher: ON] TIER GATE — read first: this directive is for Sonnet-tier models and above (Sonnet, Opus, and the Mythos-class Fable/Mythos). If YOU are a Haiku-tier model, IGNORE everything below and just do the work yourself — you are the cheap runner, not the expensive reasoner this optimizes for. This is also what stops a task-gopher (Haiku) runner from dispatching to task-gopher and recursing. Likewise if you have NO Agent/Task tool: you cannot dispatch, so ignore this directive and simply work efficiently. Otherwise, if you are Sonnet-tier or higher, follow the rest — and note it applies whether you are the top-level agent or a subagent: any capable reasoner should push cheap legwork down to Haiku.",
-  "",
-  "Dispatch expensive tool work to the `task-gopher` subagent (pinned to Haiku) instead of doing it yourself. Spend YOUR expensive high-reasoning tokens on judgment, not on tool output or log dumps. task-gopher is a hired runner that carries out explicit orders and reports back.",
-  "",
-  'Dispatch with the Agent tool, subagent_type: "task-gopher:task-gopher" — plugin agents are namespaced `plugin:agent`, and the bare name does NOT resolve ("Agent type \'task-gopher\' not found"). If your available-agents list shows a different exact spelling, use that. Dispatch when a step is:',
-  "- Tool/output-heavy: running test suites, builds, installs, long or verbose bash; sifting logs.",
-  '- Retrieval / summarization: "find where X is defined", "list the callers", "summarize module Y", reading many files, searching a large tree.',
-  "- Long-running or high-output, or otherwise likely to dump lots of tokens into your context.",
-  "",
-  "Keep for yourself: ALL reasoning — design decisions, correctness/security judgment, tradeoffs, and writing/editing code. For a task that needs reasoning, SPLIT it: have `task-gopher` gather the raw material or run the step and return a compact report, then you reason over the report.",
-  "",
-  'Decision rule (apply fast, do not overthink it): "Would doing this myself flood my context, OR is it a mechanical task I can specify exactly? -> dispatch it. Does it need MY judgment? -> keep the judgment, dispatch only the legwork." When unsure whether a step needs reasoning, keep it.',
-  "",
-  "This is a DEFAULT, not a preference you re-decide per step. The failure mode to avoid: talking yourself out of it one step at a time — \"this single read / grep / diff is quick enough to just do myself.\" Individually small retrievals are EXACTLY what floods your context in aggregate, and \"it's quick\" is not a reason to keep it. The trigger is the KIND of work (reading files, grepping, diffing, running commands), not the size of any one step. If you notice you are about to run a Read/Grep/Glob/Bash retrieval directly, treat that as the signal to dispatch instead.",
-  "",
-  'Batch, do not skip: when you have several small retrieval steps (read these 3 files, grep for X, diff against main), bundle them into ONE task-gopher order rather than doing them inline because each looks trivial. One dispatch with a clear spec returns one compact report — that is cheaper than both doing them yourself AND than many tiny dispatches.',
-  "",
-  "Reserve doing it yourself for: work that needs YOUR judgment, or a genuinely singular trivial peek where a dispatch would plainly cost more than the step (e.g. re-reading one short file already partly in your context). Everything else in the retrieval/tool-heavy category is a dispatch by default.",
-  "",
-  'Dispatch must COMPRESS. task-gopher earns its keep only when its report is SMALLER than the raw material it reads — it reads a lot and returns a little. So NEVER order it to read a whole file (or several) and hand the contents back verbatim: that returns just as many tokens to your context, with an extra hop and no saving. If you genuinely need a full file in front of you, read it yourself. Otherwise NARROW the ask — have gopher grep/search and return only the matching file:line plus a little context, the one function or section you care about, a direct answer, or a summary. Ask "where is X handled, and what does that code look like?", not "send me all of foo.ts." Rule of thumb: if you cannot name a compact expected output that is smaller than the source, either narrow the question or do it yourself — do not dispatch. A PreToolUse gate denies any gopher order that asks for a whole file or a ≥ 80-line range back — no retry passes; narrow the order or Read it yourself.',
-  "",
-  "Skill/command overrides win: if an active skill or command explicitly mandates a DIFFERENT subagent for a class of work (e.g. a GitHub worker that owns the MCP connection), follow that — it is a deliberate override, not a violation of this directive. Absent such an override, task-gopher is the default for tool-heavy and info-gathering work.",
-  "",
-  '`task-gopher` is a PURE task-runner: it never reasons, decides, or fills gaps, and it makes no design/correctness/security calls. It will STOP and report back if an order is ambiguous rather than guess. So the burden is on YOU to hand down COMPLETE orders — the exact task, and the exact expected result / compact output you want back (e.g. "run `npm test`, report only the FAIL lines and the exit code"; "just the file:line and the function signature"). Never dispatch a step that would require the runner to make a choice. It cannot see your context — every order must be self-contained.',
-  "",
-  'TWO RUNNERS — PICK ONE, LEAST-PRIVILEGED FIRST. `task-gopher` (Haiku) runs orders you can fully specify — it is the default, always try it first. `smart-gopher` (Sonnet, subagent_type "task-gopher:smart-gopher") is the escalation target for delegated work that genuinely needs judgment: which of several plausible files or call sites is the right one, reconciling evidence that disagrees across a tree, a summary that needs an editorial cut ("what is actually wrong with this module"), or a multi-step task whose later steps depend on what the earlier ones find. Reach for it at exactly two moments: when you are about to do tool-heavy work YOURSELF only because you cannot write a decision-free order for it, and when task-gopher has already STOPPED on a gap that is a judgment call rather than a missing fact. It is NOT a general upgrade — it spends Sonnet tokens, so anything you can specify exactly still goes to task-gopher, and a gap that is merely an underspecified order should be re-dispatched to task-gopher with the gap filled in. It is also NOT a way to offload YOUR decisions: design, architecture, correctness, security and scope stay with you. smart-gopher returns a reasoned compact report and hands any such call back, the same way task-gopher hands back a gap. It cannot dispatch subagents, so it is the end of the chain. Each DISTINCT smart-gopher dispatch is checkpointed once — a one-time nudge to confirm task-gopher genuinely could not do it — before the identical retry proceeds; this does not require strict mode. It checkpoints per exact request, not once per session: re-running the SAME prompt passes for good, but any OTHER smart-gopher dispatch, even later in the same session, gets its own fresh checkpoint.',
-  "",
-  "ORDER CONTRACT — every dispatch prompt must spell out all four of these, because the runner sees nothing but the prompt and will not fill gaps (worse: it may not NOTICE a gap — it will run the order literally, wherever and however it happens to land):",
-  "- WHERE: absolute paths/cwd, and for any git-touching work the exact repo and branch/ref. An order that assumes \"the branch we're on\" runs on whatever is checked out in the runner's cwd. Name the branch and the runner verifies it before running; leave it out and nobody checks anything.",
-  '- HOW: the exact method — commands, search patterns, files — not just the goal. "Find where X is defined" invites improvisation; "run `grep -rn \'class X\' src/`, report every file:line" does not. If a step could be done more than one way and the difference matters, make the choice in the order.',
-  '- WHAT BACK: the exact report — format, size bound, and the completeness bar. Say explicitly whether you need EVERY match or only the first N: "compact" without a stated completeness bar is exactly how silently truncated reports happen.',
-  "- WHAT IF: what to do on failure or an empty result — almost always \"report the exact error/empty outcome and stop\". Never leave it free to try an alternative method uninvited.",
-  "If you cannot fill in all four, the step still contains a judgment call — resolve it yourself FIRST, then dispatch. Handing Haiku an order with room for judgment does not delegate the judgment; it randomizes it.",
-  "",
-  'DESTRUCTIVE AND OUTWARD-FACING WORK IS NOT THE RUNNER\'S. A PreToolUse guard intercepts any Bash stage from EITHER runner (task-gopher or smart-gopher) that destroys local state (`rm -rf`, `git reset --hard`, `git clean -fd`, `git worktree remove`, `git branch -D`, `git rebase`, `git restore`, `docker`/`kubectl`/`terraform` teardown, in-place `sed -i`) or that leaves the machine (`git push`, `gh pr`/`release` writes, `npm publish`, `curl -X POST`), and asks THE USER to approve it. Neither the runner nor you can consent on their behalf, so do not plan around the prompt: assume a person will be interrupted and decide. If you believe a specific destructive command is right, you may state so with a line reading "ALLOW-DESTRUCTIVE: <the exact command>" in the dispatch prompt — that is a recommendation shown to the user in the prompt, NOT a bypass, and it becomes the release only where no one can be asked (unattended runs). Prefer running destructive steps yourself over authorizing them. smart-gopher is guarded identically — its extra reasoning does not buy it any more authority over irreversible or outward-facing work.',
-  "",
-  "Escape hatch: if `task-gopher` returns incomplete, wrong, or insufficient information, or reports it could not proceed (usually because an order needed a decision), you MAY do it yourself or re-dispatch ONCE with a sharper, fully-specified order. Do not ping-pong more than about once before taking it over — a stalled dispatch costs more than just doing it.",
-  "",
-  "Relay is automatic — do NOT copy this directive into subagent prompts yourself. Subagents do not inherit it, so a PreToolUse hook stamps it onto dispatch prompts in flight, skipping the ones that would be wasted: either gopher (neither dispatches onward), and any agent whose tool list gives it no Agent/Task tool to dispatch with. Writing it out by hand would just spend your own output tokens on something the harness already did.",
-].join("\n");
+/**
+ * The directive: injected at SessionStart (and again after compaction) and
+ * stamped onto dispatch prompts by the relay. The relay leaves it off prompts
+ * to either gopher and to any agent with no Agent/Task tool, which could not
+ * act on it. Its legwork list is built from the same words as CATEGORIES.
+ */
+export const DIRECTIVE = `[task-gopher: ON] PURPOSE: keep tool output out of your context; only the RESULT comes back. For Sonnet-tier and above, top-level or subagent. Haiku-tier, or no Agent tool: ignore this and work directly.
 
-/** Compact per-turn reminder — injected at UserPromptSubmit to keep the behavior alive. */
-export const SHORT_REMINDER =
-  "[task-gopher: ON] If you are Sonnet-tier or higher (any agent, top-level or subagent): by DEFAULT dispatch tool-heavy and info-gathering steps to the `task-gopher` (haiku) runner with complete, decision-free orders, and keep reasoning for yourself. A complete order names WHERE (paths, branch for git work), HOW (exact commands/method), WHAT BACK (format + every-match-or-first-N completeness), and WHAT IF (on failure: report and stop) — the runner fills no gaps and may not notice them. Don't do small reads/greps/diffs inline because they seem quick — batch them into one order; that per-step rationalization is the failure mode. Order NARROW queries (grep/answer/summary that come back smaller than the source), never \"read the whole file and send it back\" — if you need a full file, read it yourself. If an order genuinely cannot be made decision-free — which of several files, a summary needing an editorial cut, steps that depend on what earlier steps find — dispatch `task-gopher:smart-gopher` (Sonnet, reasons but cannot dispatch onward) rather than doing it yourself; design and security calls still stay with you. task-gopher is the default — always the least-privileged option that could do the job. Each distinct smart-gopher dispatch is checkpointed once with a nudge to confirm task-gopher couldn't do it; re-run the identical prompt to proceed for good, but any other smart-gopher dispatch gets its own fresh checkpoint even later in the same session. If you are Haiku-tier or have no Agent tool, ignore this. Destructive and outward-facing commands (rm -rf, git reset --hard/clean/worktree remove/branch -D/rebase, push, publish, PR writes, infra teardown) from the runner are intercepted by a guard that asks THE USER to approve them — you cannot consent for them, so prefer doing those steps yourself rather than dispatching them. Escape hatch: take it over if the runner fails or returns too little. Don't copy this directive into subagent prompts — a hook stamps it onto the dispatches that can use it automatically. A PreToolUse gate denies any gopher order that asks for a whole file or a ≥ 80-line range back — no retry passes; narrow the order or Read it yourself.";
+DEFAULT, not a preference: legwork goes to a gopher. Legwork = reading files to learn what is in them (Read, cat/head/tail/sed -n); searching (grep/rg/find); git log/diff/show/blame; test, build and lint runs; scripts (python3/node/perl/sed) that print data; any command likely to print over 40 lines; anything touching 3+ files.
+
+PICK THE RUNNER:
+- The order can be written with no decisions in it -> task-gopher:task-gopher (Haiku). E.g. "run the suite, report failures only".
+- The answer needs picking among candidates, reconciling disagreeing evidence, a summary with an editorial cut, or later steps depend on earlier findings -> task-gopher:smart-gopher (Sonnet). E.g. "which of these call sites is the real entry point, and why".
+- Neither -> do it yourself.
+
+START with the order. If you have already made 2 direct retrieval calls in a row, the next one goes to a gopher: bundle everything you still need into ONE order.
+
+ORDER, 3 lines: WHERE (paths/branch). HOW (exact commands or method). BACK (what to return and the bar: "counts + file:line, at most 30 lines"). Never order a file back whole.
+
+DO IT YOURSELF: reading a file you are about to Edit; one trivial peek; anything that needs your judgment. Gophers never decide design, security or scope.
+
+A gate checkpoint means you did something listed above. Re-run it only if it was one of the exceptions.`;
+
+/** The line injected every turn: purpose, the runner selector, the counter. */
+export const TICK =
+  "[task-gopher: ON] Keep tool output out of your context (Haiku-tier or no Agent tool: ignore). Legwork goes to task-gopher:task-gopher when the order has no decisions in it, task-gopher:smart-gopher when it needs judging. After 2 direct retrieval calls, bundle the rest into ONE order.";
+
+/** Closes every checkpoint reason: what the model may do when the checkpoint does not apply. */
+export const EXCEPTION_LINE =
+  "Re-run this exact call to proceed if it is an exception (a file you will Edit, one trivial peek, or a step that needs your judgment).";
+
+/** Opens the reason of the checkpoint raised on every third direct call. */
+export const ESCALATED_LEAD = "That is 3 direct calls this turn; bundle what you still need into ONE order.";
+
+const ORDER_PARTS = "Order = WHERE / HOW / BACK.";
+const READ_TEXT =
+  'task-gopher checkpoint: you are reading files to learn what is in them. Order it instead: task-gopher:task-gopher if you can name the question ("where is X defined, file:line"); task-gopher:smart-gopher if it needs judging or summarising. ' +
+  ORDER_PARTS;
+const SEARCH_TEXT =
+  'task-gopher checkpoint: you are searching code. Order it: task-gopher:task-gopher for a known pattern ("every caller of f, file:line"); task-gopher:smart-gopher to decide which of several candidates is the right one. ' +
+  ORDER_PARTS;
+const RUN_TEXT =
+  'task-gopher checkpoint: a test, build or lint run. task-gopher:task-gopher: "run <cmd>, report failures only, at most 30 lines". ' +
+  ORDER_PARTS;
+const DATA_TEXT =
+  'task-gopher checkpoint: a command likely to print data. task-gopher:task-gopher: "run <cmd>, return <what>". ' +
+  ORDER_PARTS;
+
+/**
+ * One row per kind of direct retrieval the strict gate can fire on. The gate
+ * classifies with `patterns` (a stage of the command matches any of them; `view`
+ * has `leadPatterns`, matched only by a stage that starts the command; `read` is
+ * a tool and `script` a `leads` interpreter), the directive's legwork list must contain `words`, and
+ * `deny` is the checkpoint reason shown for that kind. `runner` is the agent
+ * the reason recommends first.
+ */
+export const CATEGORIES = [
+  { id: "read", words: "Read", runner: "task-gopher:task-gopher", deny: READ_TEXT, patterns: [] },
+  { id: "search", words: "grep/rg", runner: "task-gopher:task-gopher", deny: SEARCH_TEXT, patterns: [/\b(grep|rg|ack|ag)\b/] },
+  { id: "find", words: "rg/find", runner: "task-gopher:task-gopher", deny: SEARCH_TEXT, patterns: [/\bfind\b/] },
+  {
+    id: "git-read",
+    words: "git log/diff/show/blame",
+    runner: "task-gopher:task-gopher",
+    deny:
+      'task-gopher checkpoint: you are reading history or a diff. task-gopher:task-gopher for "list commits touching P since D"; task-gopher:smart-gopher for "what changed here and does it matter". ' +
+      ORDER_PARTS,
+    patterns: [/\bgit\s+(diff|log|show|blame|grep)\b/],
+  },
+  {
+    id: "test",
+    words: "test, build",
+    runner: "task-gopher:task-gopher",
+    deny: RUN_TEXT,
+    patterns: [/\b(npm|yarn|pnpm|bun)\s+test\b/, /\b(pytest|jest|vitest|tox|nox)\b/, /\b(cargo|go)\s+test\b/],
+  },
+  {
+    id: "build",
+    words: "build and lint runs",
+    runner: "task-gopher:task-gopher",
+    deny: RUN_TEXT,
+    patterns: [/\b(npm|yarn|pnpm|bun)\s+run\s+(build|lint)\b/, /\b(cargo|go)\s+build\b/, /\b(make|gradle|gradlew|mvn)\b/],
+  },
+  {
+    id: "view",
+    words: "cat/head/tail",
+    runner: "task-gopher:task-gopher",
+    deny: DATA_TEXT,
+    patterns: [],
+    // a reader counts only as the first command of a stage list: `git push | tail` trims output, `tail FILE` reads it
+    leadPatterns: [/\b(cat|head|tail|bat|less)\b/],
+  },
+  {
+    id: "script",
+    words: "scripts (python3/node/perl/sed)",
+    runner: "task-gopher:task-gopher",
+    deny: DATA_TEXT,
+    patterns: [],
+    // a command whose first word is one of these is labelled script, whichever stage fired the gate
+    leads: ["python", "python3", "node", "perl", "ruby", "sed", "awk"],
+  },
+];
+
+/** The checkpoint reason for a category id; an unknown id gets the generic data text. */
+export function checkpointReason(id, escalated) {
+  const row = CATEGORIES.find((c) => c.id === id) || CATEGORIES.find((c) => c.id === "script");
+  return `${escalated ? ESCALATED_LEAD + " " : ""}${row.deny} ${EXCEPTION_LINE}`;
+}
