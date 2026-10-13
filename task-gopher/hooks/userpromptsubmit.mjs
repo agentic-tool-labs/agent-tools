@@ -12,7 +12,7 @@
  * silent inside either gopher.
  */
 
-import { SHORT_REMINDER, isEnabled, isGopherAgent, isHierarchyRoleAgent, readHookInput } from "./directive.mjs";
+import { TICK, isEnabled, isGopherAgent, isHierarchyRoleAgent, readHookInput } from "./directive.mjs";
 
 const input = await readHookInput();
 
@@ -21,7 +21,7 @@ if (isEnabled() && !isGopherAgent(input) && !isHierarchyRoleAgent(input)) {
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
-        additionalContext: SHORT_REMINDER,
+        additionalContext: TICK,
       },
     })
   );

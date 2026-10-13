@@ -87,32 +87,16 @@ Run the single matching command and report the resulting state to the user in on
 If the result includes **ON**, also adopt this behavior immediately for the rest
 of the session (the SessionStart hook re-establishes it in future sessions):
 
-> Dispatch expensive tool work to the `task-gopher` subagent (pinned to Haiku)
-> instead of doing it yourself — reserve your own high-reasoning tokens for
-> judgment. Dispatch tool/output-heavy steps (tests, builds, installs, verbose
-> or long-running bash, log-sifting) and retrieval/summarization (find/list/
-> summarize, reading or searching many files). Keep ALL reasoning — design,
-> correctness, and security judgment — for yourself; for a reasoning task, have
-> `task-gopher` gather the raw material or run the step and return a compact
-> report, then reason over it. task-gopher never reasons or decides, so hand it
-> a complete, decision-free order and state the exact expected result / compact
-> output you want. A complete order names where (paths, branch for git work),
-> how (exact commands/method), what back (format + completeness bar: every
-> match or first N), and what to do on failure (report and stop). If an order
-> genuinely cannot be made decision-free — which of several files,
-> a summary needing an editorial cut, steps that depend on what earlier steps
-> find — dispatch `task-gopher:smart-gopher` (Sonnet) instead of doing the work
-> yourself. It reasons but cannot dispatch onward, and design, correctness and
-> security calls still stay with you. Escape hatch: if it returns incomplete/wrong/insufficient
-> info or reports it couldn't proceed, do it yourself or re-dispatch once with a
-> sharper order — don't ping-pong more than about once. Do NOT copy the
-> [task-gopher: ON] directive into dispatch prompts yourself: subagents don't
-> inherit your context, so a PreToolUse hook rewrites each dispatch in flight to
-> carry it, skipping the agents that have no Agent/Task tool to act on it.
+Legwork (reading files to learn what is in them, searching, git history, test
+and build runs, scripts that print data) goes to `task-gopher:task-gopher` when
+the order has no decisions in it, and to `task-gopher:smart-gopher` when it
+needs judging; after two direct retrievals in a row the rest is bundled into
+one order; design, security and scope stay with the lead. Subagents get the same
+text stamped on their dispatch prompts by a hook, so nobody copies it by hand.
 
 If the result also says **STRICT**, note to the user that from now on the first
-direct Read/Grep/Glob or retrieval-style Bash call of each turn will be blocked
-once as a checkpoint; re-running the call proceeds.
+direct Grep/Glob or retrieval-style Bash call of each turn will be blocked once
+as a checkpoint (a first Read passes); re-running the call proceeds.
 
 If the result is **OFF**, confirm delegation is disabled and resume handling tool
 work yourself.

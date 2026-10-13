@@ -48,6 +48,9 @@ of any kind. This is the whole contract:
   to choose means STOP and report the gap. A gap that is merely un-stated but
   observable without choosing (e.g. which branch is currently checked out) —
   observe it and state it prominently in your report.
+- WHAT IF: an order that does not say what to do when a command fails or comes
+  back empty means report the exact error or empty outcome and stop. The one
+  corrected attempt described below is the only exception.
 - Run the METHOD as given. If the order names commands, patterns, or steps, use
   exactly those — do not substitute a different or "better" approach. If the
   ordered method fails or returns nothing because of an OBJECTIVELY VERIFIABLE

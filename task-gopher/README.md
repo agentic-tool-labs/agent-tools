@@ -51,11 +51,23 @@ the raw material and reports back briefly, and the main agent reasons over the
 report.
 
 The call the main agent makes about what to send out is kept shallow on
-purpose, so it doesn't burn reasoning deciding what to delegate:
+purpose, so it doesn't burn reasoning deciding what to delegate. The directive
+is about 250 words and says four things: why (keep tool output out of the
+context), what counts as legwork (reading files to learn what is in them,
+searching, git history, test and build runs, scripts that print data, anything
+that prints a lot), which runner (an order with no decisions in it goes to
+`task-gopher:task-gopher`; one that needs picking among candidates or
+reconciling evidence goes to `task-gopher:smart-gopher`; neither means do it
+yourself), and when (after two direct retrieval calls in a row, bundle the
+rest into one order). It also lists what to keep: a file you're about to edit,
+one trivial peek, anything that needs judgment.
 
-> Would doing this myself flood my context, or is it a mechanical task I can
-> specify exactly? → dispatch it. Does it need my judgment? → keep the judgment,
-> dispatch only the legwork. When unsure, keep it.
+The directive goes in at session start and onto each relayed dispatch prompt.
+Every turn gets a one-line tick with the purpose, the runner choice and the
+counter. The words the directive uses for each kind of legwork, the strict
+gate's categories and the checkpoint texts come from one table in
+`hooks/directive.mjs`, so a checkpoint only ever names something the directive
+already said to delegate.
 
 This is meant as a default, not something weighed step by step. The failure
 it guards against is talking yourself out of it one step at a time: "this one
@@ -120,9 +132,10 @@ named and counted, never dropped silently.
 exactly what happened and stop", never "try something else" uninvited.
 
 If the lead can't spell out an order to that level, there's still a judgment
-call hiding in it. The directive tells the lead to settle that first, because
-handing Haiku an order with room for judgment doesn't delegate the judgment,
-it randomizes it.
+call hiding in it. Settle that first, or send the order to smart-gopher,
+because handing Haiku an order with room for judgment doesn't delegate the
+judgment, it randomizes it. The runner's own definition says what it does when
+an order is silent on failure: report the exact outcome and stop.
 
 ### A dispatch has to shrink things
 
@@ -130,8 +143,8 @@ task-gopher only pays for itself when its report is smaller than what it read.
 It reads a lot and returns a little. The pattern to avoid is ordering it to
 read a whole file and hand the contents back word for word. That puts just as
 many tokens back in the lead's context, with an extra hop and nothing saved.
-So the directive tells the lead: if you really need the full file in front of
-you, read it yourself. Otherwise narrow the ask. Grep and return only the
+So the rule for the lead is: never order a file back whole, and if you really
+need the full file in front of you, read it yourself. Otherwise narrow the ask. Grep and return only the
 matching `file:line` plus a little context, the one function you care about, a
 direct answer, or a summary. Ask "where is X handled, and what does that code
 look like?", not "send me all of foo.ts". If you can't name an expected answer
@@ -469,10 +482,23 @@ nested in `$(…)`, backticks, `bash -c` or `eval`. Each pass is logged as
 > as one inside a script file or in a variable holding the command, was never
 > caught and still isn't.
 
+The checkpoint text depends on what was retrieved: reading files, searching,
+reading history, a test or build run, or a command likely to print data. Each
+names the runner that fits (`task-gopher:task-gopher` for a question you can
+name, `task-gopher:smart-gopher` for one that needs judging) and ends by saying
+what is an exception (a file you will edit, one trivial peek, a step that needs
+your judgment).
+
 It doesn't nudge once and give up for the rest of the turn. It escalates on
 repeated bypasses: it blocks the first retrieval of a turn, lets the next two
 direct retrievals through quietly, then blocks again on the third in a row,
-and on every third after that. An agent that keeps pulling things into its own
+and on every third after that. The one exception to the first block is a
+`Read`: Claude Code needs a Read before an Edit, and a hook can't see the Edit
+coming, so a first `Read` of a turn passes and opens the same cadence (the next
+two pass, the third is blocked). Any other first retrieval is still blocked, and
+a `Read` right after a dispatch is a free first again. A third-in-a-row block
+also opens with "That is 3 direct calls this turn; bundle what you still need
+into ONE order." An agent that keeps pulling things into its own
 context gets checkpointed again instead of drifting quietly.
 
 Dispatching to task-gopher resets the count. Good behavior buys a clean slate,
@@ -520,8 +546,21 @@ record of what the agent chose to do itself.
 /task-gopher log clear   # wipe it
 ```
 
+Checkpoint and bypass lines also carry `cls` (what kind of retrieval the gate
+matched: read, search, find, git-read, test, build, view or script) and `sh` (a
+short salted hash of the session id, so sessions can be told apart without
+storing the id). A free first `Read` is a bypass line with `n: 0` and
+`open: "read"`.
+
 The report shows totals, the bypass-to-dispatch ratio (lower is better), which
 tools get bypassed most, and the latest bypasses with what was run directly.
+It also prints per-turn delegation metrics, a turn being one prompt:
+how often the first work of a turn is a dispatch (M1), dispatches per 100
+direct calls (M2), escalated blocks per turn that had one (M3), how often a
+turn opens with a block (M4), dispatches per runner (M5), and how often a
+task-gopher dispatch was followed by a smart-gopher one in the same turn (M6).
+M3 and M4 are shown twice, as logged and as if a first Read had always passed,
+so logs from before and after that change can be compared.
 You can see at a glance whether the lead is choosing deliberately or just
 clicking through the checkpoint. For example:
 
