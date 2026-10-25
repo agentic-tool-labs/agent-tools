@@ -471,10 +471,17 @@ mod_check 'assessing: a non-runner passes' is_quiet
 rm -f "$SANDBOX/.git/code-critic-mA1.assessing"
 touch "$SANDBOX/.git/code-critic-mA2.assessing"
 mod_run "$(bash_input '"ls"' mA2)"
-check 0 'assessing: with a fresh beacon the hook entry leaves the nudge to the mod' "$(bash_input '"npm test"' mA2)"
-touch -t 200001010000 "$TMPDIR"/github-pr-toolkit-mod-active/*
-check 2 'assessing: with a stale beacon the hook entry nudges itself' "$(bash_input '"npm test"' mA2)"
+check 2 'assessing: a fresh beacon does not silence the hook entry (the mod may have looked in another cwd)' "$(bash_input '"npm test"' mA2)"
+check 0 'assessing: the hook entry nudges once, the re-run passes' "$(bash_input '"npm test"' mA2)"
 rm -f "$SANDBOX/.git/code-critic-mA2.assessing"
+# mod cwd != hook cwd: the mod looks under a directory with no marker and stays quiet; the hook entry still nudges once
+touch "$SANDBOX/.git/code-critic-mA3.assessing"
+mkdir -p "$SANDBOX/elsewhere/.git"
+mod_run "$(printf '{"tool_name":"Bash","tool_input":{"command":"npm test"},"cwd":"%s","session_id":"mA3"}' "$SANDBOX/elsewhere")"
+mod_check 'assessing: marker under another cwd -> the mod stays quiet' is_quiet
+check 2 'assessing: hook entry (marker cwd) still fires with the fresh beacon' "$(bash_input '"npm test"' mA3)"
+check 0 'assessing: and only once' "$(bash_input '"npm test"' mA3)"
+rm -f "$SANDBOX/.git/code-critic-mA3.assessing"
 
 # hard gate stays with the hook entry, and does not spend the one-shot
 touch "$SANDBOX/.git/code-critic-mO1.lock"

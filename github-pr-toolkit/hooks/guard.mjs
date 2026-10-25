@@ -96,9 +96,12 @@
 // of a PreToolUse hook error. In that mode the script prints `{"nudge": text}`
 // for those two and nothing else: subagent grants, the destruction gate and the
 // outbound-git block stay with the hook entry. Each mod run refreshes the
-// session's beacon file; the hook entry skips the two nudges only while the
-// beacon is under BEACON_TTL_MS old, so a mod that stopped answering hands them
-// back within that window and a nudge is never silently off.
+// session's beacon file; the hook entry skips the first-call stop only while the
+// beacon is under BEACON_TTL_MS old, so a mod that stopped answering hands it
+// back within that window. The assessing nudge never stands down: the mod's cwd
+// is the session's, which may differ from the hook payload's after a `cd`, and
+// the `.assessing` marker is looked up under that cwd. Whichever side runs first
+// records the command's hash in the marker, so the other passes it.
 //
 // Fallback: a bare `<cwd>/.git/code-critic.lock` (armed when the session-id env
 // var was unavailable) blocks ALL sessions — safe-but-blunt legacy behavior.
@@ -395,7 +398,6 @@ const assessingMarker = [
 if (
   assessingMarker &&
   tool === 'Bash' &&
-  (MOD_MODE || !modActive(input.session_id)) &&
   runsCode(cmd) &&
   !isPeerTransport(cmd)
 ) {
