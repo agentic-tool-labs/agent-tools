@@ -16,7 +16,8 @@ const setup = async ($: any, on: any, sessionId: string) => {
     const flag = e.argv[2]
     runs.push({ flag, input })
     let stdout = ''
-    const isLookup = input.tool_name === 'Grep' || (input.tool_name === 'Bash' && /grep/.test(input.tool_input?.command ?? ''))
+    const isLookup = input.tool_name === 'Grep' || (input.tool_name === 'Bash' && /grep/.test(input.tool_input?.command ?? '')) ||
+      (input.tool_name === 'Agent' && input.tool_input?.subagent_type === 'task-gopher:smart-gopher')
     if (flag === '--mod-checkpoint' && isLookup && !seen.has(`${input.prompt_id}|${input.tool_name}`)) {
       seen.add(`${input.prompt_id}|${input.tool_name}`)
       stdout = JSON.stringify({ checkpoint: 'Could task-gopher do this? Re-run the same call to proceed.' })
@@ -59,6 +60,17 @@ test('Grep: the first call is denied rather than answered, the re-run passes', a
 
   const again = await $.tool.call({ tool: 'Grep', pattern: 'x' })
   expect(again.deny).toBeUndefined()
+})
+
+test('Agent: a smart-gopher gate answer is denied with the NOT RUN prefix; other agents are left alone', async ($, on) => {
+  await setup($, on, 'sAgentGate')
+  await $.turn.start({ text: 'go', turnId: 't1' })
+
+  const other = await $.tool.call({ tool: 'Agent', subagent_type: 'general-purpose', prompt: 'x' })
+  expect(other.deny).toBeUndefined()
+
+  const gated = await $.tool.call({ tool: 'Agent', subagent_type: 'task-gopher:smart-gopher', prompt: 'x' })
+  expect(gated.deny.startsWith('[task-gopher] NOT RUN. ')).toBe(true)
 })
 
 test('Read: a script that lets the call through leaves it alone', async ($, on) => {

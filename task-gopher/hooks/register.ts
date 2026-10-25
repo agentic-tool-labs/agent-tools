@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-// The strict checkpoint, answered as a tool result instead of a hook error. The decision stays in
+// The strict checkpoint and the smart-gopher gate, answered as a tool result instead of a hook error. The decision stays in
 // pretooluse-nudge.mjs (run with --mod-checkpoint); this module only feeds it and shows the answer.
 
 const TOOLS = ['Bash', 'Read', 'Grep', 'Glob', 'Agent', 'Task'] as const

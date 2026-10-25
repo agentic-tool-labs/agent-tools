@@ -155,11 +155,11 @@ function relaySkipReason(subagentType, cwd) {
 
 const allow = () => process.exit(0);
 
-// The mod (hooks/register.ts) runs this script as `--mod-checkpoint` to get the strict checkpoint's decision. In that
-// mode only the strict checkpoint and its dispatch reset run: the relay, the destructive guard and the gopher-order
-// gates stay with the hook entry. Each such run refreshes the session's beacon; the hook entry skips its own strict
-// checkpoint only while the beacon is under BEACON_TTL_MS old, so a call is never checkpointed twice and a mod that
-// stopped answering hands the checkpoint back within that window.
+// The mod (hooks/register.ts) runs this script as `--mod-checkpoint` to get the strict checkpoint's and the
+// smart-gopher gate's decisions. In that mode only those two and the dispatch reset run: the relay, the destructive
+// guard and the verbatim gate stay with the hook entry. Each such run refreshes the session's beacon; the hook entry
+// skips its own strict checkpoint and smart-gopher gate only while the beacon is under BEACON_TTL_MS old, so a call is
+// never checkpointed twice and a mod that stopped answering hands the checkpoint back within that window.
 const MOD_MODE = process.argv.includes("--mod-checkpoint");
 const BEACON_TTL_MS = 30_000;
 const BEACON_DIR = join(dirname(NUDGE_FILE), "task-gopher.mod-active");
@@ -533,7 +533,7 @@ function smartGateKey(sid, prompt) {
 function smartGateMessage(prompt) {
   const preview = typeof prompt === "string" ? prompt.slice(0, 120) : "";
   return [
-    "task-gopher: smart-gopher gate — new request, first attempt.",
+    `${MOD_MODE ? "" : "task-gopher: "}smart-gopher gate — new request, first attempt.`,
     "",
     `You're about to dispatch smart-gopher for: "${preview}". Before you do: could task-gopher (Haiku) do this instead?`,
     "",
@@ -657,6 +657,7 @@ try {
   }
 
   if (!isEnabled()) allow();
+  if (MOD_MODE) writeBeacon(sid);
 
   const key = contextKey(payload);
 
@@ -699,8 +700,8 @@ try {
       // session-wide pass.
       if (target === "smart-gopher" && sid) {
         const gateKey = smartGateKey(sid, t.prompt);
-        if (!readLines().includes(gateKey)) {
-          if (MOD_MODE) allow(); // the hook entry holds it and records the key; the retry resets the streak
+        // The mod holds it first and records the key; the hook entry then finds the key (or a live beacon) and passes.
+        if (!readLines().includes(gateKey) && (MOD_MODE || !modActive(sid))) {
           if (appendState(gateKey)) {
             logEvent({
               pid,
@@ -747,8 +748,7 @@ try {
   }
 
   if (!isStrict()) allow();
-  if (MOD_MODE) writeBeacon(sid);
-  else if (modActive(sid)) allow(); // the mod answered this call's checkpoint moments ago
+  if (!MOD_MODE && modActive(sid)) allow(); // the mod answered this call's checkpoint moments ago
   // A lookup nested inside a command (a substitution, `bash -c`, `eval`) counts
   // too. An exempt command is then passed like any non-retrieval: nothing is
   // added to the streak state, but a use the patterns flagged is logged.
