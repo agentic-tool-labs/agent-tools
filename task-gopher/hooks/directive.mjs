@@ -576,6 +576,12 @@ export const CATEGORIES = [
 ];
 
 /** The checkpoint reason for a category id; an unknown id gets the generic data text. */
+export function checkpointShort(id, escalated) {
+  const row = CATEGORIES.find((c) => c.id === id) || CATEGORIES.find((c) => c.id === "script");
+  const lead = row.deny.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
+  return `${escalated ? "That is 3 direct calls this turn. " : ""}${lead} Re-run the same call to proceed.`;
+}
+
 export function checkpointReason(id, escalated) {
   const row = CATEGORIES.find((c) => c.id === id) || CATEGORIES.find((c) => c.id === "script");
   return `${escalated ? ESCALATED_LEAD + " " : ""}${row.deny} ${EXCEPTION_LINE}`;
