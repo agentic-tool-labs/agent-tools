@@ -93,7 +93,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { heredocSpans, isExempt, isHeredocWrite, nestedLookup } from "./action-exempt.mjs";
@@ -155,12 +155,13 @@ function relaySkipReason(subagentType, cwd) {
 
 const allow = () => process.exit(0);
 
-// The mod (mod/hooks/register.ts) runs this script as `--mod-checkpoint` to get the strict checkpoint's decision, and as
-// `--mod-beacon` to announce itself. In checkpoint mode only the strict checkpoint and its dispatch reset run: the
-// relay, the destructive guard and the gopher-order gates stay with the hook entry. Once a session's beacon exists the
-// hook entry skips its own strict checkpoint, so a call is never checkpointed twice.
+// The mod (hooks/register.ts) runs this script as `--mod-checkpoint` to get the strict checkpoint's decision. In that
+// mode only the strict checkpoint and its dispatch reset run: the relay, the destructive guard and the gopher-order
+// gates stay with the hook entry. Each such run refreshes the session's beacon; the hook entry skips its own strict
+// checkpoint only while the beacon is under BEACON_TTL_MS old, so a call is never checkpointed twice and a mod that
+// stopped answering hands the checkpoint back within that window.
 const MOD_MODE = process.argv.includes("--mod-checkpoint");
-const MOD_BEACON = process.argv.includes("--mod-beacon");
+const BEACON_TTL_MS = 30_000;
 const BEACON_DIR = join(dirname(NUDGE_FILE), "task-gopher.mod-active");
 
 function beaconFile(sid) {
@@ -179,8 +180,7 @@ function writeBeacon(sid) {
 function modActive(sid) {
   if (!sid) return false;
   try {
-    readFileSync(beaconFile(sid));
-    return true;
+    return Date.now() - statSync(beaconFile(sid)).mtimeMs < BEACON_TTL_MS;
   } catch {
     return false;
   }
@@ -562,12 +562,7 @@ try {
   // Runs before the ON check: the guard protects against the agent, not against
   // the directive, and both agents exist whenever the plugin is installed.
   const runnerKind = agentGopherKind(payload);
-  if (MOD_BEACON) {
-    writeBeacon(sid);
-    allow();
-  }
   if (MOD_MODE) {
-    writeBeacon(sid);
     if (runnerKind) allow(); // never gate a runner's own lookups
   } else if (runnerKind) {
     const mode = guardMode();
@@ -679,7 +674,8 @@ try {
       // it. Stateless and unconditional — a hit is denied every time, in every
       // session, because a retry pass would teach rewording rather than
       // narrowing (spec 0001 §3, user ruling).
-      const verbatim = MOD_MODE ? null : verbatimReadHit(t.prompt);
+      const verbatim = verbatimReadHit(t.prompt);
+      if (verbatim && MOD_MODE) allow(); // the hook entry denies it; a denied dispatch must not clear the streak
       if (verbatim) {
         logEvent({
           pid,
@@ -701,9 +697,10 @@ try {
       // turn, and independent of strict mode. task-gopher is never gated
       // this way. A different prompt is a different request — no blanket
       // session-wide pass.
-      if (!MOD_MODE && target === "smart-gopher" && sid) {
+      if (target === "smart-gopher" && sid) {
         const gateKey = smartGateKey(sid, t.prompt);
         if (!readLines().includes(gateKey)) {
+          if (MOD_MODE) allow(); // the hook entry holds it and records the key; the retry resets the streak
           if (appendState(gateKey)) {
             logEvent({
               pid,
@@ -750,7 +747,8 @@ try {
   }
 
   if (!isStrict()) allow();
-  if (!MOD_MODE && modActive(sid)) allow(); // the mod answers the checkpoint for this session
+  if (MOD_MODE) writeBeacon(sid);
+  else if (modActive(sid)) allow(); // the mod answered this call's checkpoint moments ago
   // A lookup nested inside a command (a substitution, `bash -c`, `eval`) counts
   // too. An exempt command is then passed like any non-retrieval: nothing is
   // added to the streak state, but a use the patterns flagged is logged.

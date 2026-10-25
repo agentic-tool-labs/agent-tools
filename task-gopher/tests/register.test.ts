@@ -69,16 +69,25 @@ test('Read: a script that lets the call through leaves it alone', async ($, on) 
   expect(read.deny).toBeUndefined()
 })
 
-test('the mod announces the session at start and feeds the script the turn, session and tool input', async ($, on) => {
-  const runs = await setup($, on, 'sBeacon')
+test('the mod feeds the script the turn, session and tool input', async ($, on) => {
+  const runs = await setup($, on, 'sFeed')
   await $.turn.start({ text: 'go', turnId: 't9' })
   await $.tool.call({ tool: 'Grep', pattern: 'needle' })
 
-  expect(runs[0].flag).toBe('--mod-beacon')
-  expect(runs[0].input.session_id).toBe('sBeacon')
   const call = runs.find(r => r.flag === '--mod-checkpoint')!
-  expect(call.input.session_id).toBe('sBeacon')
+  expect(call.input.session_id).toBe('sFeed')
   expect(call.input.prompt_id).toBe('t9')
   expect(call.input.tool_name).toBe('Grep')
   expect(call.input.tool_input).toEqual({ pattern: 'needle' })
+  expect(call.input.agent_type).toBeUndefined()
+})
+
+test('an --agent main loop sends its agent type; a plain session sends none', async ($, on) => {
+  on('classic.SessionStart', () => ({}))
+  const runs = await setup($, on, 'sAgent')
+  await $.classic.SessionStart({ source: 'startup', agent_type: 'task-gopher:task-gopher' })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call({ tool: 'Grep', pattern: 'x' })
+
+  expect(runs.find(r => r.flag === '--mod-checkpoint')!.input.agent_type).toBe('task-gopher:task-gopher')
 })

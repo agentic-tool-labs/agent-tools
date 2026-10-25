@@ -14,18 +14,15 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('session.start', async ($, e, next) => {
-    const started = await next(e)
-    try {
-      const session_id = await $.session.id()
-      await $.process.run(['node', `${$.plugin.root}/hooks/pretooluse-nudge.mjs`, '--mod-beacon'], {
-        stdin: JSON.stringify({ session_id }),
-        timeoutMs: 5000,
-      })
-    } catch {
-      // no beacon: the legacy hook keeps checkpointing
-    }
-    return started
+  // The main loop's agent type (an `--agent` session) is only on the classic events; subagents are looked up by id.
+  let mainType: string | undefined
+  on('classic.SessionStart', ($, e, next) => {
+    mainType = e.agent_type
+    return next(e)
+  })
+  on('classic.UserPromptSubmit', ($, e, next) => {
+    mainType = e.agent_type
+    return next(e)
   })
 
   for (const tool of TOOLS) {
@@ -33,13 +30,13 @@ export const register: Register = on => {
       let reason: string | undefined
       try {
         const { tool: _tool, tool_use_id: _id, consent: _consent, agentId, ...tool_input } = e
-        let agent_type: string | undefined
+        let agent_type = mainType
         if (agentId) {
           if (!types.has(agentId)) {
             const found = (await $.agent.list()).find(a => a.id === agentId)
             if (found) types.set(agentId, found.type)
           }
-          agent_type = types.get(agentId)
+          agent_type = types.get(agentId) // a subagent never inherits the main loop's type
         }
         const ran = await $.process.run(['node', `${$.plugin.root}/hooks/pretooluse-nudge.mjs`, '--mod-checkpoint'], {
           stdin: JSON.stringify({

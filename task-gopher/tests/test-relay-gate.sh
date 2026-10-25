@@ -1149,7 +1149,7 @@ check "R5-old: metrics still printed" "printf '%s' \"\$OLDOUT\" | grep -q 'per-t
 check "R5-old: no stack trace" "! printf '%s' \"\$OLDOUT\" | grep -qi 'TypeError\|at .*\.mjs'"
 check "R5-none: no log -> message, exit 0" "HOME='$SANDBOX/nohome' node '$PLUGIN/hooks/report.mjs' | grep -q 'No task-gopher audit log yet'"
 
-# ---- mod mode: --mod-checkpoint answers the strict checkpoint as {"checkpoint": ...}; --mod-beacon silences the hook entry
+# ---- mod mode: --mod-checkpoint answers the strict checkpoint as {"checkpoint": ...}; a fresh beacon from it silences the hook entry's own
 run_mod() { OUT=$(printf '%s' "$1" | HOME="$FAKEHOME" node "$HOOK" --mod-checkpoint 2>/dev/null); RC=$?; }
 is_checkpoint() { [ $RC -eq 0 ] && printf '%s' "$OUT" | grep -q '^{"checkpoint":"' && ! printf '%s' "$OUT" | grep -q 'hookSpecificOutput'; }
 
@@ -1166,16 +1166,32 @@ run_mod '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_inpu
 check "mod: a non-gopher dispatch is not relayed or answered" is_allow
 run_mod '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"x"}}'
 check "mod: the smart-gopher gate stays with the hook entry" is_allow
+NUDGE="$FAKEHOME/.claude/task-gopher.nudge"
+check "mod: a dispatch the smart gate will hold does not clear the streak" "! grep -q 'sMOD||tMOD2' '$NUDGE'"
+run_hook '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"x"}}'
+check "mod: the hook entry holds that smart-gopher dispatch" is_deny
+run_mod '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"x"}}'
+check "mod: once the gate is passed the retry clears the streak" "grep -q 'sMOD||tMOD2' '$NUDGE'"
+run_mod '{"tool_name":"Agent","prompt_id":"tMODV","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:task-gopher","prompt":"Now return the whole file hooks/x.mjs"}}'
+check "mod: a dispatch the verbatim gate will deny does not clear the streak" "! grep -q 'sMOD||tMODV' '$NUDGE'"
+run_mod '{"tool_name":"Agent","prompt_id":"tMODD","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:task-gopher","prompt":"grep -n TODO hooks/x.mjs and report file:line"}}'
+check "mod: an allowed gopher dispatch clears the streak" "grep -q 'sMOD||tMODD' '$NUDGE'"
 
 run_hook '{"tool_name":"Grep","prompt_id":"tB0","session_id":"sMODB","tool_input":{"pattern":"x"}}'
 check "mod: before the beacon the hook entry still checkpoints" is_deny
-printf '%s' '{"session_id":"sMODB"}' | HOME="$FAKEHOME" node "$HOOK" --mod-beacon
+run_mod '{"tool_name":"Grep","prompt_id":"tBM","session_id":"sMODB","tool_input":{"pattern":"x"}}'
 run_hook '{"tool_name":"Grep","prompt_id":"tB1","session_id":"sMODB","tool_input":{"pattern":"x"}}'
 check "mod: with the session's beacon the hook entry stays quiet" is_allow
 run_hook '{"tool_name":"Grep","prompt_id":"tB2","session_id":"sOTHER","tool_input":{"pattern":"x"}}'
 check "mod: another session's beacon does not silence this one" is_deny
 run_hook '{"tool_name":"Agent","prompt_id":"tB3","session_id":"sMODB","tool_input":{"subagent_type":"general-purpose","prompt":"do the thing"}}'
 check "mod: with the beacon the relay still runs in the hook entry" is_inject
+touch -t 200001010000 "$FAKEHOME"/.claude/task-gopher.mod-active/*
+run_hook '{"tool_name":"Grep","prompt_id":"tB4","session_id":"sMODB","tool_input":{"pattern":"x"}}'
+check "mod: a stale beacon hands the checkpoint back to the hook entry" is_deny
+run_mod '{"tool_name":"Bash","prompt_id":"tB5","session_id":"sMODB","tool_input":{"command":"echo hi"}}'
+run_hook '{"tool_name":"Grep","prompt_id":"tB6","session_id":"sMODB","tool_input":{"pattern":"x"}}'
+check "mod: a mod run refreshes a stale beacon" is_allow
 
 echo "----"
 echo "SUMMARY: $PASS passed, $FAIL failed"
