@@ -93,9 +93,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { heredocSpans, isExempt, isHeredocWrite, nestedLookup } from "./action-exempt.mjs";
 import { cannotDispatch } from "./agent-tools.mjs";
 import { ALLOW_MARKER, askMessage, classify, denyMessage, isAllowed, recordAllowances, sandboxEscape } from "./destructive.mjs";
@@ -108,6 +108,7 @@ import {
   agentGopherKind,
   canAskHuman,
   checkpointReason,
+  checkpointShort,
   gopherKind,
   guardMode,
   isEnabled,
@@ -154,6 +155,37 @@ function relaySkipReason(subagentType, cwd) {
 
 const allow = () => process.exit(0);
 
+// The mod (hooks/register.ts) runs this script as `--mod-checkpoint` to get the strict checkpoint's and the
+// smart-gopher gate's decisions. In that mode only those two and the dispatch reset run: the relay, the destructive
+// guard and the verbatim gate stay with the hook entry. Each such run refreshes the session's beacon; the hook entry
+// skips its own strict checkpoint and smart-gopher gate only while the beacon is under BEACON_TTL_MS old, so a call is
+// never checkpointed twice and a mod that stopped answering hands the checkpoint back within that window.
+const MOD_MODE = process.argv.includes("--mod-checkpoint");
+const BEACON_TTL_MS = 30_000;
+const BEACON_DIR = join(dirname(NUDGE_FILE), "task-gopher.mod-active");
+
+function beaconFile(sid) {
+  return join(BEACON_DIR, createHash("sha256").update(sid).digest("hex").slice(0, 32));
+}
+
+function writeBeacon(sid) {
+  try {
+    mkdirSync(BEACON_DIR, { recursive: true });
+    writeFileSync(beaconFile(sid), String(Date.now()));
+  } catch {
+    // unwritable: the hook entry keeps checkpointing, which is the safe side
+  }
+}
+
+function modActive(sid) {
+  if (!sid) return false;
+  try {
+    return Date.now() - statSync(beaconFile(sid)).mtimeMs < BEACON_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Rewrite the dispatch in flight. Passes the whole tool_input back with only
  * `prompt` changed, so it is correct whether the harness merges or replaces.
@@ -196,14 +228,18 @@ function sandboxDenyMessage({ toplevel, stages, unset = [] }) {
  */
 const deny = (reason, calm) => {
   process.stdout.write(
-    JSON.stringify({
-      systemMessage: calm,
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: reason,
-      },
-    })
+    JSON.stringify(
+      MOD_MODE
+        ? { checkpoint: reason }
+        : {
+            systemMessage: calm,
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason: reason,
+            },
+          }
+    )
   );
   process.exit(0);
 };
@@ -497,7 +533,7 @@ function smartGateKey(sid, prompt) {
 function smartGateMessage(prompt) {
   const preview = typeof prompt === "string" ? prompt.slice(0, 120) : "";
   return [
-    "task-gopher: smart-gopher gate — new request, first attempt.",
+    `${MOD_MODE ? "" : "task-gopher: "}smart-gopher gate — new request, first attempt.`,
     "",
     `You're about to dispatch smart-gopher for: "${preview}". Before you do: could task-gopher (Haiku) do this instead?`,
     "",
@@ -510,6 +546,7 @@ function smartGateMessage(prompt) {
 }
 
 function nudgeMessage(payload, escalated) {
+  if (MOD_MODE) return checkpointShort(categoryOf(payload), escalated);
   return checkpointReason(categoryOf(payload), escalated);
 }
 
@@ -525,7 +562,9 @@ try {
   // Runs before the ON check: the guard protects against the agent, not against
   // the directive, and both agents exist whenever the plugin is installed.
   const runnerKind = agentGopherKind(payload);
-  if (runnerKind) {
+  if (MOD_MODE) {
+    if (runnerKind) allow(); // never gate a runner's own lookups
+  } else if (runnerKind) {
     const mode = guardMode();
     if (payload.tool_name === "Bash" && mode !== "off") {
       // Before the destructive path, and never an ask: the fix is always to pin
@@ -598,7 +637,7 @@ try {
   // stamped). An ALLOW-DESTRUCTIVE line written for one gopher releases the same
   // command for the OTHER gopher too, for the rest of the session. Fixing that
   // needs per-agent keying, which is impossible at stamp time.
-  if (payload.tool_name === "Agent" || payload.tool_name === "Task") {
+  if (!MOD_MODE && (payload.tool_name === "Agent" || payload.tool_name === "Task")) {
     const t = payload.tool_input || {};
     const st = typeof t.subagent_type === "string" ? t.subagent_type : "";
     const kind = gopherKind(st);
@@ -618,6 +657,7 @@ try {
   }
 
   if (!isEnabled()) allow();
+  if (MOD_MODE) writeBeacon(sid);
 
   const key = contextKey(payload);
 
@@ -636,6 +676,7 @@ try {
       // session, because a retry pass would teach rewording rather than
       // narrowing (spec 0001 §3, user ruling).
       const verbatim = verbatimReadHit(t.prompt);
+      if (verbatim && MOD_MODE) allow(); // the hook entry denies it; a denied dispatch must not clear the streak
       if (verbatim) {
         logEvent({
           pid,
@@ -659,7 +700,8 @@ try {
       // session-wide pass.
       if (target === "smart-gopher" && sid) {
         const gateKey = smartGateKey(sid, t.prompt);
-        if (!readLines().includes(gateKey)) {
+        // The mod holds it first and records the key; the hook entry then finds the key (or a live beacon) and passes.
+        if (!readLines().includes(gateKey) && (MOD_MODE || !modActive(sid))) {
           if (appendState(gateKey)) {
             logEvent({
               pid,
@@ -684,6 +726,8 @@ try {
       allow();
     }
 
+    if (MOD_MODE) allow(); // the relay stays with the hook entry
+
     // Logged rather than silent: a skip that fires wrongly is invisible from the
     // outside — the dispatch still succeeds, the subagent just never sees the
     // directive — so the audit log is the only place it can be caught.
@@ -704,6 +748,7 @@ try {
   }
 
   if (!isStrict()) allow();
+  if (!MOD_MODE && modActive(sid)) allow(); // the mod answered this call's checkpoint moments ago
   // A lookup nested inside a command (a substitution, `bash -c`, `eval`) counts
   // too. An exempt command is then passed like any non-retrieval: nothing is
   // added to the streak state, but a use the patterns flagged is logged.
