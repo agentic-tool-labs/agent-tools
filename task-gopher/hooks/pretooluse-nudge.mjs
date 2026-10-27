@@ -96,7 +96,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { heredocSpans, isExempt, isHeredocWrite, nestedLookup } from "./action-exempt.mjs";
+import { heredocSpans, isExempt, isHeredocWrite, isLight, nestedLookup } from "./action-exempt.mjs";
 import { cannotDispatch } from "./agent-tools.mjs";
 import { ALLOW_MARKER, askMessage, classify, denyMessage, isAllowed, recordAllowances, sandboxEscape } from "./destructive.mjs";
 import {
@@ -354,6 +354,8 @@ function commandStarts(text) {
 }
 
 const bashLooksUp = (command) => isRetrieval({ tool_name: "Bash", tool_input: { command } });
+const RUN_PATTERNS = CATEGORY_PATTERNS.filter(([id]) => id === "test" || id === "build").map(([, re]) => re);
+const isRun = (text) => RUN_PATTERNS.some((re) => re.test(stripQuoted(text)));
 
 // A command that leads with one of these runs a program that prints data: logged as "script" whatever stage fired the gate.
 const SCRIPT_LEADS = new Set(CATEGORIES.find((c) => c.id === "script").leads);
@@ -454,7 +456,21 @@ const RESET = "\tR";
 // Written right after RESET by a dispatch. The last line of a context being this mark means no retrieval has happened
 // since the dispatch; a reader that does not know the mark skips it and sees the RESET before it.
 const DISPATCHED = "\tD";
+// A held call's mark is `heldKey`; the same mark plus this one records that its re-run went through.
+const PASSED = "\tP";
 const NUDGE_MAX_LINES = 400;
+
+/**
+ * Names one held call by what it runs, within one agent's turn (`key`), so a
+ * hold that is never re-run does not release the same call in a later turn.
+ * A Bash call is its command alone: the description may be reworded on a re-run.
+ */
+function heldKey(key, payload) {
+  const t = payload.tool_input || {};
+  const what = payload.tool_name === "Bash" ? String(t.command ?? "") : JSON.stringify(t);
+  const digest = createHash("sha256").update(`${payload.tool_name}\0${what}`).digest("hex").slice(0, 16);
+  return `HELD|${key}|${digest}`;
+}
 
 function readLines() {
   try {
@@ -755,7 +771,7 @@ try {
   const flagged = isRetrieval(payload);
   const command = payload?.tool_input?.command;
   if (!flagged && !(payload.tool_name === "Bash" && nestedLookup(command, bashLooksUp))) allow();
-  if (payload.tool_name === "Bash" && isExempt(command)) {
+  if (payload.tool_name === "Bash" && (isExempt(command) || isLight(command, bashLooksUp, isRun))) {
     if (flagged) logEvent({ pid, aid, event: "exempt", tool: "Bash", detail: detailOf(payload) });
     allow();
   }
@@ -763,9 +779,21 @@ try {
   if (cannotDispatch(payload.agent_type, payload.cwd)) allow();
   if (!key) allow(); // can't scope a turn -> fail open
 
-  const { seen, n, afterDispatch } = readStreak(readLines(), key);
+  const lines = readLines();
+  const { seen, n, afterDispatch } = readStreak(lines, key);
   const tool = payload.tool_name;
   const detail = detailOf(payload);
+
+  // The re-run of a held call always proceeds. Counting alone cannot promise
+  // that: calls held in a parallel batch come back as a batch, and the third
+  // re-run of it reached the escalation count and was held a second time.
+  const held = heldKey(key, payload);
+  if (lines.lastIndexOf(held) > lines.lastIndexOf(held + PASSED)) {
+    appendState(held + PASSED);
+    appendState(key);
+    logEvent({ pid, aid, event: "bypass", n: n + 1, rerun: true, tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
+    allow();
+  }
 
   // A Read that opens a turn, or follows a dispatch, passes: the harness requires one before an Edit and the hook
   // cannot see the Edit coming. It opens the cadence the way the turn-start checkpoint did, so the next two pass and
@@ -779,7 +807,7 @@ try {
   // First retrieval by THIS agent in this turn: the checkpoint. Only block if
   // the mark persists, else the re-run would re-trigger forever.
   if (!seen) {
-    if (!appendState(key + RESET)) allow();
+    if (!appendState(key + RESET) || !appendState(held)) allow();
     logEvent({ pid, aid, event: "checkpoint", kind: "turn-start", tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
     deny(
       nudgeMessage(payload, false),
@@ -790,7 +818,7 @@ try {
   // Already checkpointed this turn: this retrieval is a bypass.
   const next = n + 1;
   if (next >= RENUDGE_AFTER) {
-    if (!appendState(key + RESET)) allow(); // reset streak; re-block once
+    if (!appendState(key + RESET) || !appendState(held)) allow(); // reset streak; re-block once
     logEvent({ pid, aid, event: "checkpoint", kind: "escalated", bypasses: next, tool, detail, cls: categoryOf(payload), sh: sessionHash(sid) });
     deny(
       nudgeMessage(payload, true),
