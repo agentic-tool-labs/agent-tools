@@ -680,26 +680,74 @@ export function nestedLookup(command, isLookup, depth = 0) {
   return false;
 }
 
-// Read-only stdin filters a coordination or log pipeline may pass its output through.
-const FILTERS = new Set(["grep", "egrep", "fgrep", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "jq", "awk", "sed", "column"]);
-const isFilter = (c) => !c.input && FILTERS.has(argvOf(c)[0]);
 const MAX_LINES = 60;
+const nonFlags = (args) => args.filter((x) => !x.startsWith("-"));
 
-/** `git log` with an explicit count of at most MAX_LINES commits and no patch output. */
+// One sed command that only prints, deletes or substitutes: no r/w/e, no w or e substitution flag.
+const SAFE_SED = /^(?:(?:\d+|\$|\/[^/]*\/)(?:,(?:\d+|\$|\/[^/]*\/))?[pd]|s(.)(?:(?!\1).)*\1(?:(?!\1).)*\1[gpiI0-9]*)$/;
+
+/**
+ * A read-only filter of its own stdin: no file operand, no recursion, nothing that
+ * runs a command or touches a file (awk system/getline, sed r/w/e or -i).
+ */
+function isFilter(c) {
+  if (c.input || c.heredocs.length || c.herestrings) return false;
+  const [w, ...args] = argvOf(c);
+  switch (w) {
+    case "grep": {
+      const g = grepArgs(args);
+      return !g.recursive && !g.patternFile && g.files.length === 0;
+    }
+    case "head":
+    case "tail":
+      return headTailFilter(args);
+    case "wc":
+    case "sort":
+    case "uniq":
+    case "column":
+      return nonFlags(args).length === 0 && !args.some((x) => x === "-o" || x.startsWith("--output") || x.startsWith("--files0-from"));
+    case "cut":
+      return nonFlags(args).length === 0;
+    case "tr":
+      return nonFlags(args).length <= 2;
+    case "jq":
+      return nonFlags(args).length <= 1 && args.every((x) => !x.startsWith("-") || /^-[rcSejn]+$/.test(x));
+    case "awk": {
+      if (args.some((x) => x.startsWith("-"))) return false;
+      return args.length === 1 && !/\b(system|getline)\b|[|>]/.test(args[0]);
+    }
+    case "sed": {
+      const script = nonFlags(args);
+      return script.length === 1 && args.every((x) => !x.startsWith("-") || /^-[nEr]+$/.test(x)) && SAFE_SED.test(script[0]);
+    }
+    default:
+      return false;
+  }
+}
+
+// Format flags that keep `git log`/`git show` output small; anything else makes the call ordinary.
+const GIT_FORMAT_FLAG = /^(--oneline|--stat|--format=.*|--pretty=.*|--max-count=\d+|-n\d+|-\d+)$/;
+
+/** `git log` naming a compact format and a count of at most MAX_LINES commits, with only allow-listed flags. */
 function smallGitLog(rest) {
-  if (rest.some((x) => x === "-p" || x === "-u" || x === "--patch" || x.startsWith("--stat") || x === "--all")) return false;
+  let count = Infinity;
+  let compact = false;
   for (let k = 0; k < rest.length; k++) {
     const x = rest[k];
-    const m = /^-(\d+)$/.exec(x) || /^-n(\d+)$/.exec(x) || /^--max-count=(\d+)$/.exec(x) ||
-      ((x === "-n" || x === "--max-count") && /^(\d+)$/.exec(rest[k + 1] ?? ""));
-    if (m && Number(m[1]) <= MAX_LINES) return true;
+    if (x === "-n" && /^\d+$/.test(rest[k + 1] ?? "")) { count = Number(rest[++k]); continue; }
+    if (!x.startsWith("-")) continue;
+    if (!GIT_FORMAT_FLAG.test(x) || x === "--stat") return false;
+    const m = /^(?:--max-count=|-n|-)(\d+)$/.exec(x);
+    if (m) count = Number(m[1]);
+    else compact = true;
   }
-  return false;
+  return compact && count <= MAX_LINES;
 }
 
 function smallGit(a) {
   let k = 1;
-  while (a[k] === "-C" || a[k] === "-c") k += 2;
+  while (a[k] === "-C") k += 2;
+  if (a[k] === "-c" || (a[k] || "").startsWith("-")) return false;
   const [sub, ...rest] = a.slice(k);
   switch (sub) {
     case "status":
@@ -711,7 +759,7 @@ function smallGit(a) {
     case "worktree":
       return rest[0] === "list";
     case "show":
-      return rest.includes("--stat") && !rest.some((x) => x === "-p" || x === "--patch");
+      return rest.includes("--stat") && rest.every((x) => !x.startsWith("-") || GIT_FORMAT_FLAG.test(x));
     case "log":
       return smallGitLog(rest);
     default:
@@ -733,7 +781,9 @@ function isCoordination(c) {
 function grepArgs(args) {
   let count = false;
   let recursive = false;
-  let patternGiven = false;
+  let invert = false;
+  let patternFile = false;
+  const patterns = [];
   const operands = [];
   for (let k = 0; k < args.length; k++) {
     const x = args[k];
@@ -741,8 +791,10 @@ function grepArgs(args) {
     if (x.startsWith("--")) {
       const name = x.includes("=") ? x.slice(0, x.indexOf("=")) : x;
       if (name === "--count") count = true;
+      if (name === "--invert-match") invert = true;
       if (name === "--recursive" || name === "--dereference-recursive" || name === "--directories") recursive = true;
-      if (name === "--regexp" || name === "--file") patternGiven = true;
+      if (name === "--file") patternFile = true;
+      if (name === "--regexp") patterns.push(x.includes("=") ? x.slice(x.indexOf("=") + 1) : args[k + 1] ?? "");
       if ((GREP_LONG_VALUE.has(name) || name === "--file" || name === "--directories") && !x.includes("=")) k++;
       continue;
     }
@@ -750,10 +802,12 @@ function grepArgs(args) {
       for (let m = 1; m < x.length; m++) {
         const ch = x[m];
         if (ch === "c") count = true;
+        if (ch === "v") invert = true;
         if ("rRd".includes(ch)) recursive = true;
         if ("efmdABCD".includes(ch)) {
-          if (ch === "e" || ch === "f") patternGiven = true;
-          if (m === x.length - 1) k++;
+          const value = m === x.length - 1 ? args[++k] ?? "" : x.slice(m + 1);
+          if (ch === "e") patterns.push(value);
+          if (ch === "f") patternFile = true;
           break;
         }
       }
@@ -761,10 +815,11 @@ function grepArgs(args) {
     }
     operands.push(x);
   }
-  return { count, recursive, files: patternGiven ? operands : operands.slice(1) };
+  if (!patterns.length && !patternFile) patterns.push(operands.shift() ?? "");
+  return { count, recursive, invert, patternFile, patterns, files: operands };
 }
 
-/** head/tail printing at most MAX_LINES lines, with or without file operands. */
+/** head/tail trimming its stdin to at most MAX_LINES lines; a file operand makes it a reader. */
 function boundedHeadTail(args) {
   let n = 10;
   for (let k = 0; k < args.length; k++) {
@@ -772,7 +827,7 @@ function boundedHeadTail(args) {
     let m;
     if (x === "-n" && /^\d+$/.test(args[k + 1] ?? "")) { n = Number(args[++k]); continue; }
     if ((m = /^-n?(\d+)$/.exec(x) || /^--lines=(\d+)$/.exec(x))) { n = Number(m[1]); continue; }
-    if (x.startsWith("-")) return false;
+    return false;
   }
   return n <= MAX_LINES;
 }
@@ -789,10 +844,23 @@ function boundsOutput(c) {
   return false;
 }
 
-const isStdoutRedir = (r) =>
-  (r.op === ">" || r.op === ">>" || r.op === ">|" || r.op === "&>" || r.op === "&>>") &&
-  (r.fd === "" || r.fd === "1") &&
-  !/^\/dev\/(stdout|stderr|tty|fd\/)/.test(r.target);
+const TERMINAL = "";
+const toFile = (target) => (/^\/dev\/(stdout|stderr|tty|fd\/)/.test(target) ? TERMINAL : target);
+
+/** Replays the command's redirections in order: true when stdout finally lands in a file. */
+function stdoutToFile(c) {
+  const fds = { 1: TERMINAL, 2: TERMINAL };
+  for (const r of c.redirs) {
+    const fd = r.fd || "1";
+    if (r.op === "&>" || r.op === "&>>") fds[1] = fds[2] = toFile(r.target);
+    else if (r.op === ">&") fds[fd] = fds[r.target] ?? TERMINAL;
+    else if (r.op === ">" || r.op === ">>" || r.op === ">|") fds[fd] = toFile(r.target);
+  }
+  return fds[1] !== TERMINAL;
+}
+
+/** Files this command truncates and writes, which a later grep in it may read as its own log. */
+const writtenBy = (c) => c.redirs.filter((r) => (r.op === ">" || r.op === ">|") && toFile(r.target)).map((r) => r.target);
 
 /** A path a log lives at: a temp dir, a scratchpad, or a file this same command wrote. */
 function isLogPath(f, written) {
@@ -808,7 +876,9 @@ function isLogGrep(c, written) {
   const a = argvOf(c);
   if (a[0] !== "grep" || c.input) return false;
   const g = grepArgs(a.slice(1));
-  return !g.recursive && g.files.length > 0 && g.files.every((f) => isLogPath(f, written));
+  // A pattern that matches every line, or -v, turns the grep into a cat of the log.
+  const selective = !g.invert && !g.patternFile && g.patterns.every((p) => !/^\^?(\.\*?)?\$?$/.test(p));
+  return selective && !g.recursive && g.files.length > 0 && g.files.every((f) => isLogPath(f, written));
 }
 
 function lightPipeline(p, written, isLookup, isRun) {
@@ -817,9 +887,7 @@ function lightPipeline(p, written, isLookup, isRun) {
   const text = p.map((c) => c.words.map((w) => w.raw).join(" ")).join(" | ");
   if (isCoordination(first) && rest.every(isFilter)) return true;
   // A test or build run costs its runtime whatever it prints, so capping its output does not make it light.
-  // A leading head/tail reads a file rather than trimming output.
-  const bounded = boundsOutput(last) && !(p.length === 1 && /^(head|tail)$/.test(argvOf(last)[0]));
-  if (!isRun(text) && (bounded || last.redirs.some(isStdoutRedir))) return true;
+  if (!isRun(text) && (boundsOutput(last) || stdoutToFile(last))) return true;
   if (isLogGrep(first, written) && rest.every(isFilter)) return true;
   if (p.length === 1 && isAction(first)) return true;
   return !isLookup(text) && !nestedLookup(text, isLookup);
@@ -843,7 +911,7 @@ export function isLight(command, isLookup, isRun = () => false) {
   const written = new Set();
   return lx.pipelines.every((p) => {
     const ok = lightPipeline(p, written, isLookup, isRun);
-    for (const c of p) for (const r of c.redirs) if (isStdoutRedir(r)) written.add(r.target);
+    for (const c of p) for (const f of writtenBy(c)) written.add(f);
     return ok;
   });
 }

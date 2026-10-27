@@ -930,6 +930,34 @@ a_exempt O5 bO5 'cat big.log > copy.txt'
 a_exempt O6 bO6 'grep -hE "FAIL|PASS" /private/tmp/claude-501/p/s/scratchpad/run.log'
 a_exempt O7 bO7 'grep -c ok /tmp/suite.log && grep -n FAIL src/a.c | tail -n 5'
 a_ckpt N12 bN12 'head -50 src/a.c'
+# filter stages after a coordination command: stdin only, nothing that reads, runs or writes
+a_ckpt F1 bF1 'ah msg next --cwd /x | grep foo big.log'
+a_ckpt F2 bF2 'ah msg next --cwd /x | grep -r foo'
+a_ckpt F3 bF3 $'ah msg next --cwd /x | awk \'{system("cat big")}\' | grep y'
+a_ckpt F4 bF4 $'ah msg next --cwd /x | awk \'{while ((getline l < "big") > 0) print l}\' | grep y'
+a_ckpt F5 bF5 $'ah msg next --cwd /x | sed \'r big.log\' | grep y'
+a_ckpt F6 bF6 $'ah msg next --cwd /x | sed \'s/a/b/w out\' | grep y'
+a_ckpt F7 bF7 'ah msg next --cwd /x | sed -i s/a/b/ f | grep y'
+a_ckpt F8 bF8 $'ah msg next --cwd /x | sed \'1e cat big\' | grep y'
+# own-log greps: only a truncating write counts, and the grep must select lines
+a_ckpt G1 bG1 'node t.js >> run.log; grep FAIL run.log'
+a_ckpt G2 bG2 'grep -v zzz /tmp/run.log'
+a_ckpt G3 bG3 "grep '' /tmp/run.log"
+a_ckpt G4 bG4 'grep . /tmp/run.log'
+a_ckpt G5 bG5 "grep -e '.*' /tmp/run.log"
+# a last-stage head/tail with a file operand reads that file
+a_ckpt H1 bH1 'grep -rn foo src | tail -5 big.log'
+a_ckpt H2 bH2 'ah msg next --cwd /x | grep y | head -5 big.log'
+# git: an allow-list of compact format flags, a count, and -C only
+a_ckpt S1 bS1 'git log -5'
+a_ckpt S2 bS2 'git log --oneline -5 -p'
+a_ckpt S3 bS3 'git log --oneline -5 --name-only'
+a_ckpt S4 bS4 'git show --stat --patch HEAD'
+a_ckpt S5 bS5 'git -c core.pager=cat log --oneline -1'
+a_ckpt S6 bS6 'git -C /r -c x=y status | grep -n x'
+# redirections replay in order: stdout sent back to the terminal is not in a file
+a_ckpt D1 bD1 'grep -rn foo src > out 1>&2'
+a_ckpt D2 bD2 'grep -rn foo src > /dev/stdout'
 a_exempt O8 bO8 'OUT=/tmp/x.log; node t.js > "$OUT" 2>&1; grep -hE "fail|pass" "$OUT"'
 
 a_ckpt N1 bN1 'grep -rn foo src | head -61'
