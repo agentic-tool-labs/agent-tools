@@ -12,6 +12,7 @@
 # on every set.
 set -euo pipefail
 
+SELF=${0:A}   # here, not in a function: inside one, $0 is the function name
 HOSTS_FILE=/etc/hosts
 BEGIN="# >>> claude-ipv6 (managed; remove with: claude-ipv6 revert)"
 END="# <<< claude-ipv6"
@@ -28,12 +29,12 @@ strip_block() {   # print the hosts file without our block
 
 cmd_install() {
 	local dest="$HOME/.local/bin/claude-ipv6"
-	if [[ "${0:A}" == "${dest:A}" ]]; then
+	if [[ "$SELF" == "${dest:A}" ]]; then
 		echo "already installed at $dest"
 		return
 	fi
 	mkdir -p "${dest:h}"
-	cp "${0:A}" "$dest"
+	cp "$SELF" "$dest"
 	chmod +x "$dest"
 	echo "installed $dest"
 	[[ ":$PATH:" == *":${dest:h}:"* ]] || echo "${dest:h} is not on your PATH; add it to run claude-ipv6 by name"
