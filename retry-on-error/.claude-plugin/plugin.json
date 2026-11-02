@@ -1,0 +1,90 @@
+{
+  "name": "retry-on-error",
+  "version": "0.2.3",
+  "description": "Resumes a session after a turn dies on a transient API error or a stalled API request: waits a few seconds, then submits a short continue prompt.",
+  "author": {
+    "name": "Jim Cline"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "retry",
+    "api-error",
+    "resume",
+    "autonomous"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "description": "Global switch. Off: the mod never retries.",
+      "default": true
+    },
+    "maxAttempts": {
+      "type": "number",
+      "title": "Max attempts",
+      "description": "Consecutive auto-retries before giving up.",
+      "default": 3
+    },
+    "baseDelayMs": {
+      "type": "number",
+      "title": "First delay (ms)",
+      "description": "Wait before the first retry; each further retry doubles it.",
+      "default": 5000
+    },
+    "maxDelayMs": {
+      "type": "number",
+      "title": "Delay cap (ms)",
+      "description": "Longest backoff delay.",
+      "default": 60000
+    },
+    "rateLimitDelayMs": {
+      "type": "number",
+      "title": "Rate-limit delay (ms)",
+      "description": "Minimum wait after a rate_limit error.",
+      "default": 30000
+    },
+    "nudgeText": {
+      "type": "string",
+      "title": "Nudge text",
+      "description": "The prompt submitted on retry; <kind> is replaced with the error kind.",
+      "default": "The previous turn ended on an API error (<kind>). Continue the task from where it stopped; re-check any step with side effects before repeating it."
+    },
+    "retryMaxOutput": {
+      "type": "boolean",
+      "title": "Retry max_output_tokens",
+      "description": "Also continue after a turn that hit the output token limit.",
+      "default": false
+    },
+    "headless": {
+      "type": "boolean",
+      "title": "Act in headless sessions",
+      "description": "Also retry in claude -p and SDK sessions.",
+      "default": false
+    },
+    "notifyOnGiveUp": {
+      "type": "boolean",
+      "title": "Notify on give-up",
+      "description": "Send a native notification when the retry budget runs out.",
+      "default": true
+    },
+    "stallWatchdog": {
+      "type": "boolean",
+      "title": "Stall watchdog",
+      "description": "Abort and resume a model request whose stream has gone silent.",
+      "default": true
+    },
+    "stallNoticeMs": {
+      "type": "number",
+      "title": "Stall notice (ms)",
+      "description": "Silence before the status line says the API has stalled.",
+      "default": 30000
+    },
+    "stallAbortMs": {
+      "type": "number",
+      "title": "Stall abort (ms)",
+      "description": "Silence before the stalled request is aborted and resumed.",
+      "default": 300000
+    }
+  }
+}
