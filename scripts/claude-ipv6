@@ -2,6 +2,7 @@
 # claude-ipv6 — force Claude's connections onto IPv6 by pinning its hosts
 # to their IPv6 addresses in /etc/hosts, and put it back.
 #
+#   claude-ipv6 install  copy this script to ~/.local/bin
 #   claude-ipv6 set      pin the hosts (asks for sudo)
 #   claude-ipv6 revert   remove the pins: /etc/hosts as it was before
 #   claude-ipv6 status   show the pins and which family Claude is using
@@ -23,6 +24,19 @@ flush_dns() {
 
 strip_block() {   # print the hosts file without our block
 	awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$HOSTS_FILE"
+}
+
+cmd_install() {
+	local dest="$HOME/.local/bin/claude-ipv6"
+	if [[ "${0:A}" == "${dest:A}" ]]; then
+		echo "already installed at $dest"
+		return
+	fi
+	mkdir -p "${dest:h}"
+	cp "${0:A}" "$dest"
+	chmod +x "$dest"
+	echo "installed $dest"
+	[[ ":$PATH:" == *":${dest:h}:"* ]] || echo "${dest:h} is not on your PATH; add it to run claude-ipv6 by name"
 }
 
 cmd_set() {
@@ -77,8 +91,9 @@ cmd_status() {
 }
 
 case "${1:-}" in
+	install) cmd_install ;;
 	set) cmd_set ;;
 	revert) cmd_revert ;;
 	status) cmd_status ;;
-	*) echo "usage: claude-ipv6 set|revert|status"; exit 2 ;;
+	*) echo "usage: claude-ipv6 install|set|revert|status"; exit 2 ;;
 esac

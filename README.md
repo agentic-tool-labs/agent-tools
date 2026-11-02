@@ -27,11 +27,25 @@ anything from those, see [Moving from the old repos](#moving-from-the-old-repos)
 
 ## Scripts
 
-Standalone tools. Copy one onto your `PATH`; there is no plugin to install.
+Standalone tools, with no plugin to install.
 
 | Script | What it does |
 | --- | --- |
-| [claude-ipv6](./scripts/claude-ipv6) | macOS only. Forces Claude's connections onto IPv6 by pinning its hosts in `/etc/hosts`. Run `claude-ipv6 set`, `revert` or `status`. `set` and `revert` ask for sudo, and you restart Claude afterwards. |
+| [claude-ipv6](./scripts/claude-ipv6) | macOS only. Forces Claude's connections onto IPv6 by pinning its hosts in `/etc/hosts`. `set` and `revert` ask for sudo, and you restart Claude afterwards. |
+
+To install `claude-ipv6` to `~/.local/bin`, run this from a clone of this repo:
+
+```sh
+zsh scripts/claude-ipv6 install
+```
+
+Then use it:
+
+```sh
+claude-ipv6 set      # pin the hosts
+claude-ipv6 status   # show the pins and which family Claude is using
+claude-ipv6 revert   # remove the pins
+```
 
 ## Install
 
