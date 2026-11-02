@@ -26,6 +26,28 @@ anything from those, see [Moving from the old repos](#moving-from-the-old-repos)
 | [compaction-guard](./compaction-guard/README.md) | Restates your standing rules after every compaction, so the ones the summary dropped are back before the next turn. |
 | [retry-on-error](./retry-on-error/README.md) | Resumes a session a few seconds after a turn dies on a transient API error, instead of leaving it idle until someone types. |
 
+## Scripts
+
+Standalone tools, with no plugin to install.
+
+| Script | What it does |
+| --- | --- |
+| [claude-ipv6](./scripts/claude-ipv6) | macOS only. Forces Claude's connections onto IPv6 by pinning its hosts in `/etc/hosts`. `set` and `revert` ask for sudo, and you restart Claude afterwards. |
+
+To install `claude-ipv6` to `~/.local/bin`, run this from a clone of this repo:
+
+```sh
+zsh scripts/claude-ipv6 install
+```
+
+Then use it:
+
+```sh
+claude-ipv6 set      # pin the hosts
+claude-ipv6 status   # show the pins and which family Claude is using
+claude-ipv6 revert   # remove the pins
+```
+
 ## Install
 
 ### Claude Code

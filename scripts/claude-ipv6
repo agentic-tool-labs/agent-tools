@@ -1,0 +1,100 @@
+#!/bin/zsh
+# claude-ipv6 — force Claude's connections onto IPv6 by pinning its hosts
+# to their IPv6 addresses in /etc/hosts, and put it back.
+#
+#   claude-ipv6 install  copy this script to ~/.local/bin
+#   claude-ipv6 set      pin the hosts (asks for sudo)
+#   claude-ipv6 revert   remove the pins: /etc/hosts as it was before
+#   claude-ipv6 status   show the pins and which family Claude is using
+#
+# Only lines between the two marker comments are ever touched, so revert
+# restores the file exactly. A copy is also kept at /etc/hosts.claude-ipv6.bak
+# on every set.
+set -euo pipefail
+
+SELF=${0:A}   # here, not in a function: inside one, $0 is the function name
+HOSTS_FILE=/etc/hosts
+BEGIN="# >>> claude-ipv6 (managed; remove with: claude-ipv6 revert)"
+END="# <<< claude-ipv6"
+NAMES=(api.anthropic.com claude.ai)
+
+flush_dns() {
+	sudo dscacheutil -flushcache
+	sudo killall -HUP mDNSResponder 2>/dev/null || true
+}
+
+strip_block() {   # print the hosts file without our block
+	awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$HOSTS_FILE"
+}
+
+cmd_install() {
+	local dest="$HOME/.local/bin/claude-ipv6"
+	if [[ "$SELF" == "${dest:A}" ]]; then
+		echo "already installed at $dest"
+		return
+	fi
+	mkdir -p "${dest:h}"
+	cp "$SELF" "$dest"
+	chmod +x "$dest"
+	echo "installed $dest"
+	[[ ":$PATH:" == *":${dest:h}:"* ]] || echo "${dest:h} is not on your PATH; add it to run claude-ipv6 by name"
+}
+
+cmd_set() {
+	local lines=()
+	for n in $NAMES; do
+		local v6
+		v6=$(dig +short AAAA "$n" | grep ':' | head -1 || true)
+		if [[ -z "$v6" ]]; then
+			echo "skip $n: no IPv6 address published"
+			continue
+		fi
+		if ! curl -6 -sS -o /dev/null --max-time 8 "https://$n/" 2>/dev/null; then
+			echo "skip $n: $v6 not reachable over IPv6 from here"
+			continue
+		fi
+		lines+=("$v6 $n")
+		echo "pin  $n -> $v6"
+	done
+	if (( ${#lines} == 0 )); then
+		echo "nothing to pin; /etc/hosts unchanged"
+		exit 1
+	fi
+	sudo cp "$HOSTS_FILE" "$HOSTS_FILE.claude-ipv6.bak"
+	{ strip_block; echo "$BEGIN"; printf '%s\n' "${lines[@]}"; echo "$END"; } > /tmp/hosts.claude-ipv6.$$
+	sudo cp /tmp/hosts.claude-ipv6.$$ "$HOSTS_FILE"
+	rm -f /tmp/hosts.claude-ipv6.$$
+	flush_dns
+	echo "done. Restart Claude (app and CLI) so new connections use IPv6."
+}
+
+cmd_revert() {
+	if ! grep -qxF "$BEGIN" "$HOSTS_FILE"; then
+		echo "no claude-ipv6 pins in $HOSTS_FILE; nothing to revert"
+		return
+	fi
+	strip_block > /tmp/hosts.claude-ipv6.$$
+	sudo cp /tmp/hosts.claude-ipv6.$$ "$HOSTS_FILE"
+	rm -f /tmp/hosts.claude-ipv6.$$
+	flush_dns
+	echo "reverted. Restart Claude so new connections pick the default again."
+}
+
+cmd_status() {
+	if grep -qxF "$BEGIN" "$HOSTS_FILE"; then
+		echo "pins in $HOSTS_FILE:"
+		awk -v b="$BEGIN" -v e="$END" '$0==b{on=1;next} $0==e{on=0} on' "$HOSTS_FILE" | sed 's/^/  /'
+	else
+		echo "no pins (default: the system picks IPv4 or IPv6)"
+	fi
+	echo "Claude's live HTTPS connections:"
+	lsof -nP -iTCP:443 -sTCP:ESTABLISHED 2>/dev/null | awk '/^(Claude|claude|node)/ {print "  " $1, $5, $9}' || true
+}
+
+case "${1:-}" in
+	install) cmd_install ;;
+	set) cmd_set ;;
+	revert) cmd_revert ;;
+	status) cmd_status ;;
+	*) echo "usage: claude-ipv6 install|set|revert|status"; exit 2 ;;
+esac
