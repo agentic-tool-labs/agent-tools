@@ -90,6 +90,19 @@
 // ignores a lock older than MAX_AGE_MS so a crashed run can't silently block a
 // future session that reuses the ID.
 //
+// MOD MODE: the two one-time nudges (the first-GitHub-call stop and the assessing
+// gate's run-code nudge) are delivered by the mod in hooks/register.ts, which runs
+// this script as `--mod-nudge` and shows the answer as the tool's result instead
+// of a PreToolUse hook error. In that mode the script prints `{"nudge": text}`
+// for those two and nothing else: subagent grants, the destruction gate and the
+// outbound-git block stay with the hook entry. Each mod run refreshes the
+// session's beacon file; the hook entry skips the first-call stop only while the
+// beacon is under BEACON_TTL_MS old, so a mod that stopped answering hands it
+// back within that window. The assessing nudge never stands down: the mod's cwd
+// is the session's, which may differ from the hook payload's after a `cd`, and
+// the `.assessing` marker is looked up under that cwd. Whichever side runs first
+// records the command's hash in the marker, so the other passes it.
+//
 // Fallback: a bare `<cwd>/.git/code-critic.lock` (armed when the session-id env
 // var was unavailable) blocks ALL sessions — safe-but-blunt legacy behavior.
 //
@@ -159,6 +172,9 @@ const STOP_REASON =
   '(read, list, search, open, update, review-thread replies; it cannot merge). ' +
   'To run this yourself instead, re-run it unchanged; nothing will be held again ' +
   'this session.';
+const MOD_MODE = process.argv.includes('--mod-nudge');
+const BEACON_TTL_MS = 30_000;
+const BEACON_DIR = join(tmpdir(), 'github-pr-toolkit-mod-active');
 const STOP_NOTICE =
   'github-pr-toolkit: held this one GitHub call to suggest its worker agent. ' +
   'Nothing is broken; re-running it proceeds.';
@@ -269,6 +285,7 @@ const isToolkitMcp = /^mcp__plugin_github-pr-toolkit_github__/.test(tool);
 // without this grant a non-interactive worker's calls auto-deny. Any other
 // subagent falls through to the normal permission flow.
 if (input.agent_id) {
+  if (MOD_MODE) process.exit(0);
   const worker = /(^|:)(github-worker|critic-worker)$/.test(
     input.agent_type || ''
   );
@@ -343,6 +360,8 @@ if (input.agent_id) {
   process.exit(0);
 }
 
+if (MOD_MODE) writeBeacon(input.session_id);
+
 // A covered call: GitHub I/O by either transport, subject to the once-per-session
 // stop.
 //
@@ -376,7 +395,12 @@ const assessingMarker = [
   'code-critic.assessing',
 ].find((name) => name && lockActive(input.cwd, name));
 
-if (assessingMarker && tool === 'Bash' && runsCode(cmd) && !isPeerTransport(cmd)) {
+if (
+  assessingMarker &&
+  tool === 'Bash' &&
+  runsCode(cmd) &&
+  !isPeerTransport(cmd)
+) {
   const markerPath = join(input.cwd || process.cwd(), '.git', assessingMarker);
   const hash = createHash('sha1').update(cmd).digest('hex');
   let seen = '';
@@ -387,14 +411,18 @@ if (assessingMarker && tool === 'Bash' && runsCode(cmd) && !isPeerTransport(cmd)
     try {
       appendFileSync(markerPath, hash + '\n');
     } catch {}
-    process.stderr.write(
+    const message =
       'code-critic assessment gate (one-time nudge): the review is a STATIC pass ' +
-        'over the diff, and this command runs code. Verifying a finding by running ' +
-        'tests or code is an ACTION the user approves first — surface the finding ' +
-        'AS uncertain and ask. If this command is NOT self-verification (setup, ' +
-        'config, tooling the review needs), re-run it unchanged and it will go ' +
-        `through. Blocked once: \`${cmd}\``
-    );
+      'over the diff, and this command runs code. Verifying a finding by running ' +
+      'tests or code is an ACTION the user approves first — surface the finding ' +
+      'AS uncertain and ask. If this command is NOT self-verification (setup, ' +
+      'config, tooling the review needs), re-run it unchanged and it will go ' +
+      `through. Blocked once: \`${cmd}\``;
+    if (MOD_MODE) {
+      process.stdout.write(JSON.stringify({ nudge: message }));
+      process.exit(0);
+    }
+    process.stderr.write(message);
     process.exit(2);
   }
 }
@@ -415,6 +443,7 @@ const isOutboundGit =
   /(^|[\s;&|(])git\s+(push|commit|worktree|pull)\b/.test(cmd);
 
 if (isOutboundGit) {
+  if (MOD_MODE) process.exit(0); // the hook entry blocks it; the one-time stop stays unspent
   process.stderr.write(
     'code-critic guard: the main agent must not run remote-mutating git during a ' +
       'review. Delegate this to the `critic-worker` Haiku subagent via the Task ' +
@@ -439,11 +468,16 @@ process.exit(0);
 // until the OS clears its temp dir; prune by mtime here if that ever matters.
 function stopOnce(sessionId) {
   if (!sessionId) return;
+  if (!MOD_MODE && modActive(sessionId)) return;
   try {
     mkdirSync(STOP_DIR, { recursive: true });
     const name = createHash('sha256').update(String(sessionId)).digest('hex');
     writeFileSync(join(STOP_DIR, name), '', { flag: 'wx' });
   } catch {
+    return;
+  }
+  if (MOD_MODE) {
+    process.stdout.write(JSON.stringify({ nudge: STOP_REASON }));
     return;
   }
   process.stdout.write(
@@ -456,6 +490,29 @@ function stopOnce(sessionId) {
       },
     })
   );
+}
+
+function beaconFile(sessionId) {
+  return join(BEACON_DIR, createHash('sha256').update(String(sessionId)).digest('hex').slice(0, 32));
+}
+
+function writeBeacon(sessionId) {
+  if (!sessionId) return;
+  try {
+    mkdirSync(BEACON_DIR, { recursive: true });
+    writeFileSync(beaconFile(sessionId), String(Date.now()));
+  } catch {
+    // unwritable: the hook entry keeps nudging, which is the safe side
+  }
+}
+
+function modActive(sessionId) {
+  if (!sessionId) return false;
+  try {
+    return Date.now() - statSync(beaconFile(sessionId)).mtimeMs < BEACON_TTL_MS;
+  } catch {
+    return false;
+  }
 }
 
 // True if the command invokes `gh` for anything other than a local credential

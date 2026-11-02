@@ -425,6 +425,73 @@ for f in "$REPO"/github-pr-toolkit/agents/code-reviewer-*.md \
   fi
 done
 
+echo "=== mod mode: --mod-nudge answers the two nudges as {\"nudge\":…}; a fresh beacon silences the hook entry's own ==="
+mod_run() { MOD_OUT=$(printf '%s' "$1" | node "$GUARD" --mod-nudge 2>/dev/null); MOD_RC=$?; }
+mod_check() { # <desc> <shell condition over MOD_RC / MOD_OUT>
+  if eval "$2"; then pass=$((pass+1)); printf 'ok    (mod) %s\n' "$1"
+  else fail=$((fail+1)); printf 'FAIL  (mod) %s\n      -> rc=%s %s\n' "$1" "$MOD_RC" "${MOD_OUT:0:140}"; fi
+}
+is_nudge() { [ "$MOD_RC" = 0 ] && node -e 'const o=JSON.parse(process.argv[1]); process.exit(Object.keys(o).join()==="nudge"&&o.nudge.includes(process.argv[2])?0:1)' "$MOD_OUT" "$1"; }
+is_quiet() { [ "$MOD_RC" = 0 ] && [ -z "$MOD_OUT" ]; }
+
+mod_run "$(bash_input '"gh pr list"' mS1)"
+mod_check 'first gh call -> nudge with the redirect text' "is_nudge 'github-pr-toolkit:github-worker'"
+mod_check 'nudge text is the hook entry stop reason' "node -e 'process.exit(JSON.parse(process.argv[1]).nudge===process.argv[2]?0:1)' \"\$MOD_OUT\" \"\$STOP_REASON\""
+mod_run "$(bash_input '"gh pr list"' mS1)"
+mod_check 're-run of the same call passes' is_quiet
+mod_run "$(mcp_input mcp__plugin_github-pr-toolkit_github__list_pull_requests mS2)"
+mod_check 'first toolkit MCP call -> nudge' "is_nudge 'github-worker'"
+mod_run "$(mcp_input mcp__github__get_me mS2)"
+mod_check 'second covered call, same session, passes (one-shot is shared)' is_quiet
+mod_run "$(bash_input '"ls -la"' mS3)"
+mod_check 'a call that is not GitHub I/O passes' is_quiet
+mod_run "$(bash_input '"gh auth status"' mS3)"
+mod_check 'gh credential diagnostic passes' is_quiet
+mod_run '{"tool_name":"Bash","tool_input":{"command":"gh pr list"},"agent_id":"w1","agent_type":"github-pr-toolkit:github-worker","cwd":"'"$SANDBOX"'","session_id":"mS4"}'
+mod_check 'a subagent call is left to the hook entry' is_quiet
+expect stopped 'a subagent call did not spend the session one-shot' "$(bash_input '"gh pr list"' mS4)"
+
+# beacon: the mod's run silences the hook entry for that session only, and only while fresh
+mod_run "$(bash_input '"ls"' mB1)"
+expect silent  'with the session beacon the hook entry stays quiet on a covered call' "$(bash_input '"gh pr list"' mB1)"
+expect stopped 'another session has no beacon: the hook entry still stops it' "$(bash_input '"gh pr list"' mB2)"
+touch -t 200001010000 "$TMPDIR"/github-pr-toolkit-mod-active/*
+expect stopped 'a stale beacon hands the stop back to the hook entry' "$(bash_input '"gh pr list"' mB1)"
+
+# assessing nudge
+touch "$SANDBOX/.git/code-critic-mA1.assessing"
+mod_run "$(bash_input '"npm test"' mA1)"
+mod_check 'assessing: run-code command -> nudge' "is_nudge 'assessment gate'"
+mod_run "$(bash_input '"npm test"' mA1)"
+mod_check 'assessing: identical re-run passes' is_quiet
+mod_run "$(bash_input '"npm run lint"' mA1)"
+mod_check 'assessing: a different run-code command gets its own nudge' "is_nudge 'assessment gate'"
+mod_run "$(bash_input '"git diff"' mA1)"
+mod_check 'assessing: a non-runner passes' is_quiet
+rm -f "$SANDBOX/.git/code-critic-mA1.assessing"
+touch "$SANDBOX/.git/code-critic-mA2.assessing"
+mod_run "$(bash_input '"ls"' mA2)"
+check 2 'assessing: a fresh beacon does not silence the hook entry (the mod may have looked in another cwd)' "$(bash_input '"npm test"' mA2)"
+check 0 'assessing: the hook entry nudges once, the re-run passes' "$(bash_input '"npm test"' mA2)"
+rm -f "$SANDBOX/.git/code-critic-mA2.assessing"
+# mod cwd != hook cwd: the mod looks under a directory with no marker and stays quiet; the hook entry still nudges once
+touch "$SANDBOX/.git/code-critic-mA3.assessing"
+mkdir -p "$SANDBOX/elsewhere/.git"
+mod_run "$(printf '{"tool_name":"Bash","tool_input":{"command":"npm test"},"cwd":"%s","session_id":"mA3"}' "$SANDBOX/elsewhere")"
+mod_check 'assessing: marker under another cwd -> the mod stays quiet' is_quiet
+check 2 'assessing: hook entry (marker cwd) still fires with the fresh beacon' "$(bash_input '"npm test"' mA3)"
+check 0 'assessing: and only once' "$(bash_input '"npm test"' mA3)"
+rm -f "$SANDBOX/.git/code-critic-mA3.assessing"
+
+# hard gate stays with the hook entry, and does not spend the one-shot
+touch "$SANDBOX/.git/code-critic-mO1.lock"
+mod_run "$(bash_input '"git push origin x"' mO1)"
+mod_check 'armed: outbound git is left to the hook entry' is_quiet
+check 2 'armed: the hook entry still blocks outbound git' "$(bash_input '"git push origin x"' mO1)"
+mod_run "$(bash_input '"gh pr list"' mO1)"
+mod_check 'armed: the one-shot was not spent by the outbound-git call' "is_nudge 'github-worker'"
+rm -f "$SANDBOX/.git/code-critic-mO1.lock"
+
 echo
 printf 'pass=%d fail=%d\n' "$pass" "$fail"
 [ "$fail" = 0 ]
