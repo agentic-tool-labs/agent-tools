@@ -24,6 +24,7 @@ anything from those, see [Moving from the old repos](#moving-from-the-old-repos)
 | [idle-compactor](./idle-compactor/README.md) | Runs `/compact` when a session has gone idle, timed to land just before the prompt cache expires, or keeps the cache warm instead. |
 | [compaction-capture](./compaction-capture/README.md) | Saves each compaction summary to a markdown file, so what the session dropped is still on disk. |
 | [compaction-guard](./compaction-guard/README.md) | Restates your standing rules after every compaction, so the ones the summary dropped are back before the next turn. |
+| [retry-on-error](./retry-on-error/README.md) | Resumes a session a few seconds after a turn dies on a transient API error, instead of leaving it idle until someone types. |
 
 ## Install
 
@@ -42,6 +43,7 @@ Add the marketplace, then install whichever plugins you want:
 /plugin install idle-compactor@agent-tools
 /plugin install compaction-capture@agent-tools
 /plugin install compaction-guard@agent-tools
+/plugin install retry-on-error@agent-tools
 ```
 
 The same commands work from a terminal as

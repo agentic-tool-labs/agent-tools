@@ -140,6 +140,16 @@
       "author": {
         "name": "Jim Cline"
       }
+    },
+    {
+      "name": "retry-on-error",
+      "source": "./retry-on-error",
+      "version": "0.2.3",
+      "description": "Resumes a session after a turn dies on a transient API error or a stalled API request: waits a few seconds, then submits a short continue prompt.",
+      "license": "Apache-2.0",
+      "author": {
+        "name": "Jim Cline"
+      }
     }
   ]
 }
