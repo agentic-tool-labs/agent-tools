@@ -868,7 +868,7 @@ a_exempt E13 aE13 'herdr pane read w1:p2 --lines 40 | grep -n ERROR'
 a_exempt E14 aE14 'herdr pane send-keys w1:p2 Enter; sleep 2; herdr pane read w1:p2 --lines=60 | grep -c done'
 a_exempt E15 aE15 $'git add src/find.js && git commit -m "$(cat <<\'EOF\'\nfix grep\nEOF\n)"'
 
-a_ckpt K1 aK1 'git commit -m x && git log --oneline -20'
+a_ckpt K1 aK1 'git commit -m x && git log --oneline'
 a_ckpt K2 aK2 'echo "$(cat big.log)" >> f'
 a_ckpt K3 aK3 'git commit -m "$(git log -1 --format=%s)"'
 a_ckpt K4 aK4 "bash -c 'grep -r x .'"
@@ -883,7 +883,6 @@ a_ckpt K9b aK9b 'herdr pane read w1:p2 --lines 40 | grep -f pats.txt'
 a_ckpt K10a aK10a $'cat >> f <<\'EOF\'\nx\nEOF\ngrep -r secret .'
 a_ckpt K10b aK10b $'cat >> f <<\'EOF\'\nx\nEOF\n; grep -r secret .'
 a_ckpt K11 aK11 $'cat >> f <<EOF\n$(cat big.log)\nEOF'
-a_ckpt K12a aK12a 'cat big.log > copy.txt'
 a_ckpt K12b aK12b 'cat > out.txt < big.log'
 a_ckpt K13 aK13 'gh api -X POST graphql -F owner=find-org'
 a_ckpt K14 aK14 'git branch -r --contains abc | grep find'
@@ -909,6 +908,103 @@ check "A-L6: exempt call appends nothing" "[ \"\$(lines_of \"\$NUDGE\")\" = \"$L
 run_hook "$(bash_payload 'grep -rn foo src' aL6)"; check "A-L6: bypass 1 passes" is_allow
 run_hook "$(bash_payload 'grep -rn foo src' aL6)"; check "A-L6: bypass 2 passes" is_allow
 run_hook "$(bash_payload 'grep -rn foo src' aL6)"; check "A-L6: escalates at the same point" is_deny
+
+# ---- B: coordination commands and bounded output are not legwork. Same contract
+# as the E rows: allowed on a fresh turn, no streak state, one exempt audit line.
+ROWP=B
+a_exempt C1 bC1 'ah msg next --cwd /x | grep -v ack | head -8'
+a_exempt C2 bC2 '/Users/jimcline/.local/bin/ah roster list --cwd /x | grep -c member'
+a_exempt C3 bC3 '/opt/tools/bin/ah msg send x --cwd /y && git log --oneline -1'
+a_exempt C4 bC4 "herdr agent get w1:p2 | grep -o 'status=[a-z]*'"
+a_exempt C5 bC5 'bash ~/.claude/ah2-ops/ship.sh --branch x | grep -v noise'
+a_exempt C6 bC6 'git status && git rev-parse HEAD && git branch --show-current && git log -1 --format=%H'
+a_exempt C7 bC7 'git log -n 5 --format=%s && git -C /r merge-base main HEAD'
+a_exempt C8 bC8 'git worktree list | grep smoother'
+a_exempt C9 bC9 'git show --stat HEAD'
+a_exempt C10 bC10 'ah test run -- dotnet test x > log; grep summary log'
+a_exempt O1 bO1 'grep -rn foo src | head -60'
+a_exempt O2 bO2 'find . -name "*.mjs" | wc -l'
+a_exempt O3 bO3 'git diff main | grep -c "^+"'
+a_exempt O4 bO4 'grep -rn foo src > /tmp/hits.txt 2>&1'
+a_exempt O5 bO5 'cat big.log > copy.txt'
+a_exempt O6 bO6 'grep -hE "FAIL|PASS" /private/tmp/claude-501/p/s/scratchpad/run.log'
+a_exempt O7 bO7 'grep -c ok /tmp/suite.log && grep -n FAIL src/a.c | tail -n 5'
+a_ckpt N12 bN12 'head -50 src/a.c'
+# filter stages after a coordination command: stdin only, nothing that reads, runs or writes
+a_ckpt F1 bF1 'ah msg next --cwd /x | grep foo big.log'
+a_ckpt F2 bF2 'ah msg next --cwd /x | grep -r foo'
+a_ckpt F3 bF3 $'ah msg next --cwd /x | awk \'{system("cat big")}\' | grep y'
+a_ckpt F4 bF4 $'ah msg next --cwd /x | awk \'{while ((getline l < "big") > 0) print l}\' | grep y'
+a_ckpt F5 bF5 $'ah msg next --cwd /x | sed \'r big.log\' | grep y'
+a_ckpt F6 bF6 $'ah msg next --cwd /x | sed \'s/a/b/w out\' | grep y'
+a_ckpt F7 bF7 'ah msg next --cwd /x | sed -i s/a/b/ f | grep y'
+a_ckpt F8 bF8 $'ah msg next --cwd /x | sed \'1e cat big\' | grep y'
+# own-log greps: only a truncating write counts, and the grep must select lines
+a_ckpt G1 bG1 'node t.js >> run.log; grep FAIL run.log'
+a_ckpt G2 bG2 'grep -v zzz /tmp/run.log'
+a_ckpt G3 bG3 "grep '' /tmp/run.log"
+a_ckpt G4 bG4 'grep . /tmp/run.log'
+a_ckpt G5 bG5 "grep -e '.*' /tmp/run.log"
+# a last-stage head/tail with a file operand reads that file
+a_ckpt H1 bH1 'grep -rn foo src | tail -5 big.log'
+a_ckpt H2 bH2 'ah msg next --cwd /x | grep y | head -5 big.log'
+# git: an allow-list of compact format flags, a count, and -C only
+a_ckpt S1 bS1 'git log -5'
+a_ckpt S2 bS2 'git log --oneline -5 -p'
+a_ckpt S3 bS3 'git log --oneline -5 --name-only'
+a_ckpt S4 bS4 'git show --stat --patch HEAD'
+a_ckpt S5 bS5 'git -c core.pager=cat log --oneline -1'
+a_ckpt S6 bS6 'git -C /r -c x=y status | grep -n x'
+# redirections replay in order: stdout sent back to the terminal is not in a file
+a_ckpt D1 bD1 'grep -rn foo src > out 1>&2'
+a_ckpt D2 bD2 'grep -rn foo src > /dev/stdout'
+a_exempt O8 bO8 'OUT=/tmp/x.log; node t.js > "$OUT" 2>&1; grep -hE "fail|pass" "$OUT"'
+
+a_ckpt N1 bN1 'grep -rn foo src | head -61'
+a_ckpt N2 bN2 'grep -rn foo src 2>/dev/null'
+a_ckpt N3 bN3 'git log --oneline -61'
+a_ckpt N4 bN4 'git log -3 -p'
+a_ckpt N5 bN5 'git show HEAD'
+a_ckpt N6 bN6 'grep -n foo /tmp/../Users/x/src/a.c'
+a_ckpt N7 bN7 'grep -rc foo src'
+a_ckpt N8 bN8 'herdr pane read w1:p2 | grep x'
+a_ckpt N9 bN9 'ah msg next --cwd /x; cat big.log'
+a_ckpt N10 bN10 'tail -n +5 big.log'
+a_ckpt N11 bN11 'cat f > copy; cat copy'
+
+# B-W: the counter counts legwork only. Coordination and bounded calls between
+# two lookups neither advance the streak nor reset it.
+run_hook "$(bash_payload 'grep -rn foo src' bW)"; check "B-W: turn-start checkpoint" is_deny
+run_hook "$(bash_payload 'grep -rn foo src' bW)"; check "B-W: re-run passes (bypass 1)" is_allow
+BWN=$(lines_of "$NUDGE")
+for c in 'git status' 'ah msg next --cwd /x | head -8' 'git log --oneline -1' 'grep -rn bar src | wc -l'; do
+  run_hook "$(bash_payload "$c" bW)"; check "B-W: '$c' allowed" is_allow
+done
+check "B-W: the light calls appended nothing" "[ \"\$(lines_of \"\$NUDGE\")\" = \"$BWN\" ]"
+run_hook "$(bash_payload 'grep -rn baz src' bW)"; check "B-W: next lookup is bypass 2, not an escalation" is_allow
+run_hook "$(bash_payload 'grep -rn qux src' bW)"; check "B-W: the 3rd lookup escalates" is_deny
+
+# B-R: a re-run of a held call always proceeds. Calls held in a parallel batch
+# come back as a batch: here C is held, D and E (the batch's other calls)
+# spend the streak, and the re-run of C used to be the 3rd bypass and was held
+# a second time.
+rr() { run_hook "$(bash_payload "grep -rn $1 src" "$2")"; }
+rr A bR; check "B-R: A turn-start checkpoint" is_deny
+rr A bR; check "B-R: A re-run passes" is_allow
+rr B bR; check "B-R: B passes" is_allow
+rr C bR; check "B-R: C escalates" is_deny
+rr D bR; check "B-R: D passes" is_allow
+rr E bR; check "B-R: E passes" is_allow
+rr C bR; check "B-R: the identical re-run of C proceeds despite the count" is_allow
+check "B-R: the re-run is logged as one" "tail -1 \"\$TGLOG\" | grep -q '\"rerun\":true'"
+rr C bR; check "B-R: the pass is spent; C again is an ordinary 3rd+ lookup and is held" is_deny
+# A hold never re-run does not release the same call in a later turn.
+rr F bR1; check "B-R: F turn-start checkpoint" is_deny
+rr F bR2; check "B-R: F in the next turn is a fresh turn-start checkpoint" is_deny
+# Nor another session's identical command.
+run_hook "$(bash_payload 'grep -rn G src' bR3)"; check "B-R: G checkpointed" is_deny
+run_hook '{"tool_name":"Bash","prompt_id":"bR3","session_id":"sOther","tool_input":{"command":"grep -rn G src"}}'
+check "B-R: same command in another session gets its own checkpoint" is_deny
 run_hook '{"tool_name":"Bash","prompt_id":"aL7","session_id":"sB","tool_input":{"command":42}}'
 check "A-L7: non-string command fails open" is_allow
 
@@ -1032,11 +1128,11 @@ w_allow() { # <row> <prompt_id> <command>
   check "C-$1: no exempt audit line" "[ \"\$(exempt_count)\" = \"$x0\" ]"
 }
 w_allow W1 cW1 $'mkdir -p d && cat > d/f <<\'EOF\'\nhello\nEOF'
-a_ckpt W2 cW2 'mkdir d && cat big > d/f'
+a_exempt W2 cW2 'mkdir d && cat big > d/f'
 w_allow W3 cW3 $'mkdir -p d && cat <<\'EOF\' > d/f\nx\nEOF'
 w_allow W4 cW4 $'mkdir -p d; cat >> d/f <<EOF\n$HOME\nEOF'
 w_allow W5 cW5 $'mkdir -p d && cat - > d/f <<\'EOF\'\nx\nEOF'
-a_ckpt W6 cW6 $'mkdir -p d && cat big - > d/f <<\'EOF\'\nx\nEOF'
+a_exempt W6 cW6 $'mkdir -p d && cat big - > d/f <<\'EOF\'\nx\nEOF'
 a_ckpt W7 cW7 'mkdir -p d && cat > d/f < big'
 w_allow W8 cW8 'mkdir -p d && cat <<< "x" > d/f'
 a_ckpt W9 cW9 $'mkdir -p d && cat > d/f <<EOF\n$(cat big)\nEOF'
@@ -1103,7 +1199,7 @@ cls_row c2 r5a 'grep -rn foo src' bypass search
 check "R5-c2: same session, same sh" "row_has '\"sh\":\"$SH_B\"'"
 cls_row c3 r5b 'cat big.log' checkpoint view
 cls_row c4 r5c 'find . -name x' checkpoint find
-cls_row c5 r5d 'git log --oneline -20' checkpoint git-read
+cls_row c5 r5d 'git log --oneline' checkpoint git-read
 cls_row c6 r5e 'npm test 2>&1 | tail -40' checkpoint test
 cls_row c7 r5f 'make all' checkpoint build
 cls_row c8 r5g 'python3 gen.py && grep -n x out.txt' checkpoint script
@@ -1148,6 +1244,66 @@ check "R5-old: report exits 0 on an old log with junk lines" "[ $OLDRC -eq 0 ]"
 check "R5-old: metrics still printed" "printf '%s' \"\$OLDOUT\" | grep -q 'per-turn delegation metrics'"
 check "R5-old: no stack trace" "! printf '%s' \"\$OLDOUT\" | grep -qi 'TypeError\|at .*\.mjs'"
 check "R5-none: no log -> message, exit 0" "HOME='$SANDBOX/nohome' node '$PLUGIN/hooks/report.mjs' | grep -q 'No task-gopher audit log yet'"
+
+# ---- mod mode: --mod-checkpoint answers the strict checkpoint as {"checkpoint": ...}; a fresh beacon from it silences the hook entry's own
+run_mod() { OUT=$(printf '%s' "$1" | HOME="$FAKEHOME" node "$HOOK" --mod-checkpoint 2>/dev/null); RC=$?; }
+is_checkpoint() { [ $RC -eq 0 ] && printf '%s' "$OUT" | grep -q '^{"checkpoint":"' && ! printf '%s' "$OUT" | grep -q 'hookSpecificOutput'; }
+
+MOD_GREP='{"tool_name":"Grep","prompt_id":"tMOD","session_id":"sMOD","tool_input":{"pattern":"x"}}'
+run_mod "$MOD_GREP"
+check "mod: first Grep of turn -> checkpoint answer" is_checkpoint
+check "mod: checkpoint is trimmed to the first two sentences" "[ \${#OUT} -lt 420 ] && ! printf '%s' \"\$OUT\" | grep -q 'Re-run this exact call'"
+check "mod: checkpoint ends with the re-run line" "printf '%s' \"\$OUT\" | grep -q 'Re-run the same call to proceed'"
+run_mod "$MOD_GREP"
+check "mod: re-run of the same call passes (streak state is shared)" is_allow
+run_mod '{"tool_name":"Grep","prompt_id":"tMOD","session_id":"sMOD","agent_type":"task-gopher:task-gopher","tool_input":{"pattern":"x"}}'
+check "mod: a runner's own lookup is never checkpointed" is_allow
+run_mod '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"general-purpose","prompt":"x"}}'
+check "mod: a non-gopher dispatch is not relayed or answered" is_allow
+run_mod '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"x"}}'
+check "mod: the first smart-gopher dispatch of a prompt -> checkpoint answer" is_checkpoint
+check "mod: the gate message names the gate and the re-run" "printf '%s' \"\$OUT\" | grep -q '^{\"checkpoint\":\"smart-gopher gate' && printf '%s' \"\$OUT\" | grep -q 'RE-RUN the IDENTICAL dispatch'"
+NUDGE="$FAKEHOME/.claude/task-gopher.nudge"
+check "mod: a dispatch the smart gate holds does not clear the streak" "! grep -q 'sMOD||tMOD2' '$NUDGE'"
+run_hook '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"x"}}'
+check "mod: the hook entry passes a smart-gopher dispatch the mod already held" is_allow
+run_mod '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"y"}}'
+check "mod: a different smart-gopher prompt gets its own checkpoint" is_checkpoint
+run_hook '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMODX","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"x"}}'
+check "mod: with no beacon for the session the hook entry still holds the smart gate" is_deny
+run_mod '{"tool_name":"Agent","prompt_id":"tMOD2","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"x"}}'
+check "mod: once the gate is passed the retry clears the streak" "grep -q 'sMOD||tMOD2' '$NUDGE'"
+run_mod '{"tool_name":"Agent","prompt_id":"tMODV","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:task-gopher","prompt":"Now return the whole file hooks/x.mjs"}}'
+check "mod: a dispatch the verbatim gate will deny does not clear the streak" "! grep -q 'sMOD||tMODV' '$NUDGE'"
+run_mod '{"tool_name":"Agent","prompt_id":"tMODD","session_id":"sMOD","tool_input":{"subagent_type":"task-gopher:task-gopher","prompt":"grep -n TODO hooks/x.mjs and report file:line"}}'
+check "mod: an allowed gopher dispatch clears the streak" "grep -q 'sMOD||tMODD' '$NUDGE'"
+
+run_hook '{"tool_name":"Grep","prompt_id":"tB0","session_id":"sMODB","tool_input":{"pattern":"x"}}'
+check "mod: before the beacon the hook entry still checkpoints" is_deny
+run_mod '{"tool_name":"Grep","prompt_id":"tBM","session_id":"sMODB","tool_input":{"pattern":"x"}}'
+run_hook '{"tool_name":"Grep","prompt_id":"tB1","session_id":"sMODB","tool_input":{"pattern":"x"}}'
+check "mod: with the session's beacon the hook entry stays quiet" is_allow
+run_hook '{"tool_name":"Grep","prompt_id":"tB2","session_id":"sOTHER","tool_input":{"pattern":"x"}}'
+check "mod: another session's beacon does not silence this one" is_deny
+run_hook '{"tool_name":"Agent","prompt_id":"tB3","session_id":"sMODB","tool_input":{"subagent_type":"general-purpose","prompt":"do the thing"}}'
+check "mod: with the beacon the relay still runs in the hook entry" is_inject
+touch -t 200001010000 "$FAKEHOME"/.claude/task-gopher.mod-active/*
+run_hook '{"tool_name":"Grep","prompt_id":"tB4","session_id":"sMODB","tool_input":{"pattern":"x"}}'
+check "mod: a stale beacon hands the checkpoint back to the hook entry" is_deny
+run_mod '{"tool_name":"Bash","prompt_id":"tB5","session_id":"sMODB","tool_input":{"command":"echo hi"}}'
+run_hook '{"tool_name":"Grep","prompt_id":"tB6","session_id":"sMODB","tool_input":{"pattern":"x"}}'
+check "mod: a mod run refreshes a stale beacon" is_allow
+touch -t 200001010000 "$FAKEHOME"/.claude/task-gopher.mod-active/*
+run_hook '{"tool_name":"Agent","prompt_id":"tB7","session_id":"sMODB","tool_input":{"subagent_type":"task-gopher:smart-gopher","prompt":"z"}}'
+check "mod: a stale beacon hands the smart gate back to the hook entry" is_deny
+
+# ---- mod mode decides holds through the same path: light calls pass, and a batched re-run proceeds.
+mod_bash() { run_mod "$(printf '{"tool_name":"Bash","prompt_id":"%s","session_id":"sMODR","tool_input":{"command":"%s","description":"d"}}' "$2" "$1")"; }
+mod_bash 'git log --oneline -1 && ah msg next --cwd /x | head -8' tMR0; check "mod: light command passes" is_allow
+for x in A A B; do mod_bash "grep -rn $x src" tMR; done
+mod_bash 'grep -rn C src' tMR; check "mod: C escalates" "printf '%s' \"\$OUT\" | grep -q '\"checkpoint\"'"
+mod_bash 'grep -rn D src' tMR; mod_bash 'grep -rn E src' tMR
+mod_bash 'grep -rn C src' tMR; check "mod: the batched re-run of C proceeds" is_allow
 
 echo "----"
 echo "SUMMARY: $PASS passed, $FAIL failed"

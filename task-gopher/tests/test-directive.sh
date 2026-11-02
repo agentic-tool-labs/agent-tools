@@ -78,7 +78,7 @@ probe glob-tool Glob '{"pattern":"**/*.ts"}'
 probe read-tool Read '{"file_path":"/x/a.txt"}'
 probe grep-cmd Bash '{"command":"grep -rn foo src"}'
 probe find-cmd Bash '{"command":"find . -name x"}'
-probe git-log Bash '{"command":"git log --oneline -20"}'
+probe git-log Bash '{"command":"git log --oneline"}'
 probe npm-test Bash '{"command":"npm test"}'
 probe make-all Bash '{"command":"make all"}'
 probe cat-file Bash '{"command":"cat big.log"}'
@@ -172,6 +172,20 @@ check "can fail: a first Read still denied is rejected" "! g1_probe '$SANDBOX/m-
 
 mutate m-g1b pretooluse-nudge.mjs 'if (tool === "Read" && (!seen || afterDispatch)) {' 'if (!seen || afterDispatch) {'
 check "can fail: a first Bash grep passed is rejected" "! g1_probe '$SANDBOX/m-g1b/hooks'"
+
+# ---- re-run probe: a held call's identical re-run proceeds even when a parallel
+# batch spent the streak first (A held, A, B, C held, D, E, then C again).
+rerun_probe() { # <hooks dir> -> exit 0 iff the re-run of C is allowed
+  local d="$1" hh="$SANDBOX/rrhome.$RANDOM" x last
+  new_home "$hh"
+  for x in A A B C D E C; do
+    last=$(printf '{"tool_name":"Bash","prompt_id":"p1","session_id":"sR","tool_input":{"command":"grep -rn %s src"}}' "$x" | HOME="$hh" node "$d/pretooluse-nudge.mjs" 2>/dev/null)
+  done
+  [ -z "$last" ]
+}
+check "re-run probe accepts the shipped hook" "rerun_probe '$PLUGIN/hooks'"
+mutate m-rerun pretooluse-nudge.mjs 'if (lines.lastIndexOf(held) > lines.lastIndexOf(held + PASSED)) {' 'if (false) {'
+check "can fail: without the held-call pass, the batched re-run is held again" "! rerun_probe '$SANDBOX/m-rerun/hooks'"
 
 # the probe itself must accept the shipped copy of the same file the mutants came from
 check "G1 probe still accepts an unmutated copy" "rm -rf '$SANDBOX/m-ok' && mkdir -p '$SANDBOX/m-ok' && cp -R '$PLUGIN/hooks' '$SANDBOX/m-ok/hooks' && g1_probe '$SANDBOX/m-ok/hooks'"
