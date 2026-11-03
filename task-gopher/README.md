@@ -283,10 +283,10 @@ field. (Checked against the CLI: the payload is `session_id`,
 `low|medium|high`, not a capability tier. Hooks get no "reasoning index".) So a
 hook can't read the tier. Instead:
 
-- The directive reaches the main session through the injection hooks, and
+- The directive reaches the main session through the mod, and
   reaches subagents through the relay (see
-  [Reaching subagents](#reaching-subagents-the-relay); `SessionStart` and
-  `UserPromptSubmit` never fire for subagents). task-gopher itself is skipped
+  [Reaching subagents](#reaching-subagents-the-relay); the mod's prompt events
+  never fire for subagents). task-gopher itself is skipped
   by name through `agent_type`, so the runner that could recurse never sees the
   directive by either route.
 - The directive opens with a tier gate: if you're Haiku-tier, ignore it and do
@@ -368,7 +368,7 @@ more than just doing the work.
 ## Reaching subagents: the relay
 
 The directive says it applies to subagents too, but Claude Code's
-`SessionStart` and `UserPromptSubmit` hooks never fire for subagents (a
+prompt events, the ones the directive arrives on, never fire for subagents (a
 subagent isn't a session). A subagent gets its own agent file, the CLAUDE.md
 hierarchy, and the dispatch prompt, and that's all. Left alone, a Sonnet-tier
 subagent would never see the directive.
@@ -586,9 +586,11 @@ recent bypasses (last 4) — what was run directly:
   smallest report that fully answers, stop and report instead of deciding,
   never delegate onward, check a named branch before running, and never
   truncate silently.
-- `hooks/` holds the hooks. `SessionStart` (startup, resume, clear, and
-  compact) injects the full directive. `UserPromptSubmit` injects a one-line
-  reminder each turn. `PreToolUse` runs the subagent relay whenever the plugin
+- `hooks/` holds the hooks. The mod (`register.ts`) injects the full directive
+  on any prompt whose conversation does not hold it (startup, resume, clear,
+  compact) and straight after a compaction, plus a one-line reminder each turn;
+  `sessionstart.mjs` and `userpromptsubmit.mjs` hold the text and its gates.
+  `PreToolUse` runs the subagent relay whenever the plugin
   is on, the per-request smart-gopher gate, and, in strict mode, the escalating
   retrieval checkpoint. All three write to the audit log, and `report.mjs`
   renders it. Every hook does nothing when the plugin is off, and nothing inside

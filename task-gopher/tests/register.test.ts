@@ -1,11 +1,18 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+
+// What says the main loop's agent type: the --agent variable, then the agent setting.
+const agentSources = (on: any, { env, setting }: { env?: string; setting?: string } = {}) => {
+  on('env.get', () => ({ value: env }))
+  on('settings.read', () => ({ value: setting ? { agent: setting } : {} }))
+}
 
 // `process.run` stands in for pretooluse-nudge.mjs, whose real decisions tests/test-relay-gate.sh covers. It answers
 // a checkpoint once per (prompt_id, tool) for a Grep or a grep Bash, and records every payload the mod feeds it.
-const setup = async ($: any, on: any, sessionId: string) => {
+const setup = async ($: any, on: any, sessionId: string, agent?: { env?: string; setting?: string }) => {
   const runs: { flag: string; input: any }[] = []
   const seen = new Set<string>()
 
+  agentSources(on, agent)
   on('session.id', () => ({ value: sessionId }))
   on('session.cwd', () => ({ value: '/tmp' }))
   on('agent.list', () => ({ value: [] }))
@@ -95,11 +102,109 @@ test('the mod feeds the script the turn, session and tool input', async ($, on) 
 })
 
 test('an --agent main loop sends its agent type; a plain session sends none', async ($, on) => {
-  on('classic.SessionStart', () => ({}))
-  const runs = await setup($, on, 'sAgent')
-  await $.classic.SessionStart({ source: 'startup', agent_type: 'task-gopher:task-gopher' })
+  const runs = await setup($, on, 'sAgent', { env: 'task-gopher:task-gopher' })
   await $.turn.start({ text: 'go', turnId: 't1' })
   await $.tool.call({ tool: 'Grep', pattern: 'x' })
 
   expect(runs.find(r => r.flag === '--mod-checkpoint')!.input.agent_type).toBe('task-gopher:task-gopher')
+})
+
+test('the agent setting names the main loop when no --agent did', async ($, on) => {
+  const runs = await setup($, on, 'sAgentSetting', { setting: 'ah:reviewer' })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call({ tool: 'Grep', pattern: 'x' })
+
+  expect(runs.find(r => r.flag === '--mod-checkpoint')!.input.agent_type).toBe('ah:reviewer')
+})
+
+// `process.run` stands in for the two directive scripts, whose gates tests/test-userpromptsubmit.sh covers. `transcript`
+// is what the conversation holds; the test's own prompt.submit hook sits beneath the mod and records what reached it.
+const DIRECTIVE = '[task-gopher: ON] PURPOSE: keep tool output out of your context; the rest'
+const TICK = '[task-gopher: ON] one line'
+const inject = ($: any, on: any, { silent = false, broken = false, transcript = '', env = undefined as string | undefined } = {}) => {
+  const seen: { context?: readonly string[]; inputs: any[] } = { inputs: [] }
+  agentSources(on, { env })
+  on('session.messages', () => ({ value: [{ role: 'user', content: transcript }] }))
+  on('process.run', (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+    seen.inputs.push(JSON.parse(e.init?.stdin ?? '{}'))
+    const additionalContext = e.argv[1].endsWith('sessionstart.mjs') ? DIRECTIVE : TICK
+    const stdout = broken ? 'not json' : silent ? '' : JSON.stringify({ hookSpecificOutput: { additionalContext } })
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('prompt.submit', (_: unknown, e: { text: string; context?: readonly string[] }) => {
+    seen.context = e.context
+    return { text: e.text }
+  })
+  return seen
+}
+
+test('a conversation without the directive gets it, ahead of the reminder', async ($, on) => {
+  const seen = inject($, on)
+  await $.prompt.submit({ text: 'go' })
+  expect(seen.context).toEqual([DIRECTIVE, TICK])
+})
+
+test('a conversation holding the directive gets the reminder alone', async ($, on) => {
+  const seen = inject($, on, { transcript: `<system-reminder>${DIRECTIVE}</system-reminder>` })
+  await $.prompt.submit({ text: 'go' })
+  expect(seen.context).toEqual([TICK])
+})
+
+test('a conversation holding only the reminder still gets the directive', async ($, on) => {
+  const seen = inject($, on, { transcript: `<system-reminder>${TICK}</system-reminder>` })
+  await $.prompt.submit({ text: 'go' })
+  expect(seen.context).toEqual([DIRECTIVE, TICK])
+})
+
+test('scripts that stay silent (OFF, a gopher, a role) add nothing', async ($, on) => {
+  const seen = inject($, on, { silent: true })
+  await $.prompt.submit({ text: 'go' })
+  expect(seen.context).toBeUndefined()
+})
+
+test('the scripts are told the main loop agent type', async ($, on) => {
+  const seen = inject($, on, { silent: true, env: 'ah:architect' })
+  await $.prompt.submit({ text: 'go' })
+  expect(seen.inputs.map(i => i.agent_type)).toEqual(['ah:architect', 'ah:architect'])
+})
+
+test('a script that fails never blocks the prompt', async ($, on) => {
+  const seen = inject($, on, { broken: true })
+  await $.prompt.submit({ text: 'go' })
+  expect(seen.context).toBeUndefined()
+})
+
+// Raises one row as the engine would; true when the row as stored carries the directive.
+const row = async ($: any, on: any, input: object, silent = false) => {
+  const rows = mock.session(on)
+  inject($, on, { silent })
+  await $.session.append({
+    message: { type: 'user', role: 'user', isMeta: true, content: [{ type: 'text', text: 'summary' }] },
+    door: 'compaction',
+    origin: { kind: 'engine' },
+    uuid: '00000000-0000-4000-8000-000000000001',
+    ...input,
+  })
+  return JSON.stringify(rows.appended().at(-1)!.message).includes('PURPOSE')
+}
+
+test('the summary row of a main-loop compaction carries the directive', async ($, on) => {
+  expect(await row($, on, {})).toBe(true)
+})
+
+test('the summary row with the scripts silent is left alone', async ($, on) => {
+  expect(await row($, on, {}, true)).toBe(false)
+})
+
+test('a subagent compacting its own transcript is left alone', async ($, on) => {
+  expect(await row($, on, { agentId: 'a1' })).toBe(false)
+})
+
+test('the compaction notice, which no request carries, is left alone', async ($, on) => {
+  const message = { type: 'system', name: 'compact_boundary', content: [{ type: 'text', text: 'notice' }] }
+  expect(await row($, on, { message })).toBe(false)
+})
+
+test('a row from any other door is left alone', async ($, on) => {
+  expect(await row($, on, { door: 'attachment' })).toBe(false)
 })

@@ -85,7 +85,7 @@ Pick the ONE case matching the argument and run its command with the Bash tool:
 Run the single matching command and report the resulting state to the user in one line.
 
 If the result includes **ON**, also adopt this behavior immediately for the rest
-of the session (the SessionStart hook re-establishes it in future sessions):
+of the session (the mod's prompt hook re-establishes it in future sessions):
 
 Legwork (reading files to learn what is in them, searching, git history, test
 and build runs, scripts that print data) goes to `task-gopher:task-gopher` when

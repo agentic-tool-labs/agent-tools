@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * task-gopher — SessionStart context injection.
+ * task-gopher — the full directive and its gates, run by the mod (register.ts).
  *
- * Injects the full delegation directive when the plugin is ON, so a fresh,
+ * Answers with the full delegation directive when the plugin is ON, so a fresh,
  * resumed, or post-compaction session starts already knowing to dispatch
- * tool-heavy work to task-gopher. MAIN SESSION ONLY: SessionStart never fires
+ * tool-heavy work to task-gopher. MAIN SESSION ONLY: the mod's events never fire
  * for subagents — they receive the directive via the relay gate in
  * pretooluse-nudge.mjs instead. The directive's own tier gate means only
  * Sonnet-tier-or-higher agents act on it. Silent when OFF, and silent inside
