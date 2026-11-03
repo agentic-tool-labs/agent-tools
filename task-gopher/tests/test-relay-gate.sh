@@ -72,7 +72,7 @@ check "on: Plan exempt" is_allow
 
 # ---- hierarchy roles: each role's md already carries the delegation rule, so
 # relaying it again pays for the same text twice.
-for ROLE in ah:architect ah:implementor ah:orchestrator ah:reviewer ah:ultra-advisor ah:task-runner; do
+for ROLE in ah:architect ah:implementor ah:orchestrator ah:reviewer ah:ultra-advisor ah:task-runner ah2:reviewer ah2:role-added-later; do
   run_hook "$(payload "$DISPATCH_NOSENT" t2 "$ROLE")"
   check "on: $ROLE exempt from the relay" is_allow
   check "on: $ROLE not rewritten" "! printf '%s' \"\$OUT\" | grep -q 'updatedInput'"
@@ -83,6 +83,8 @@ check "hierarchy exemption logged as builtin" \
 # Sibling positive: the exemption must not have widened to everything.
 run_hook "$(payload "$DISPATCH_NOSENT" t2 general-purpose)"
 check "on: general-purpose still stamped (exemption is not over-broad)" is_inject
+run_hook "$(payload "$DISPATCH_NOSENT" t2 ah2x:foo)"
+check "on: ah2x:foo still stamped (the prefix is the plugin's, whole)" is_inject
 
 INSIDE_GOPHER='{"tool_name":"Agent","prompt_id":"t2","agent_type":"task-gopher:task-gopher","tool_input":{"subagent_type":"general-purpose","prompt":"x"}}'
 run_hook "$INSIDE_GOPHER"

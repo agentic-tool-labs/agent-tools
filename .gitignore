@@ -9,3 +9,6 @@ node_modules/
 # Local session state: settings, rosters, hierarchy messages, and compaction
 # captures, which are conversation content and must not reach the public remote.
 .claude/
+
+# Written by Claude Code when it loads task-gopher's mod from a plugin folder.
+task-gopher/tsconfig.json

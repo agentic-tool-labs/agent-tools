@@ -140,16 +140,16 @@ export async function readHookInput() {
  * The one thing the hooks CAN do reliably is skip either gopher itself by name
  * (`agent_type` carries the subagent's name), so no gate ever fires inside a
  * recursion-prone runner. Substring match tolerates the plugin-scoped form
- * (e.g. "task-gopher:task-gopher"). Note the injection hooks (SessionStart,
- * UserPromptSubmit) only ever run for the MAIN session — they never fire for
- * subagents. Subagents receive the directive solely via the relay gate in
+ * (e.g. "task-gopher:task-gopher"). Note the mod injects on prompt.submit, which
+ * only ever fires for the MAIN session, and its session.append hook is guarded by
+ * agentId. Subagents receive the directive solely via the relay gate in
  * pretooluse-nudge.mjs, which makes parents copy it into dispatch prompts.
  *
  * TODO(hard-gate): the tier gate is currently SOFT — the directive asks each
  * agent to self-exclude if it is Haiku-tier, which the hook cannot enforce
  * because no model/tier field exists in the hook payload (as of Claude Code
  * v2.1.211). If a future version adds one (e.g. `model` or a capability tier
- * to the SessionStart/UserPromptSubmit payload), convert this to a HARD gate:
+ * to what the mod's events carry), convert this to a HARD gate:
  * read the field here and suppress injection for any Haiku-tier agent, so the
  * gate no longer relies on the model recognizing its own tier. Re-check the
  * payload shape in the CLI (function `Uf`, the base hook-input builder) when
@@ -196,22 +196,17 @@ export function isGopherAgent(input) {
 /**
  * agent-hierarchy roles. Each one's own md already carries the delegation rule,
  * so paying for the directive again — relayed into a dispatch, injected into a
- * `--agent ah:<role>` session at start and on every compact, or reminded each
- * turn — buys nothing. Exact names, not an `ah:` prefix test: the set is small
- * and a prefix rule would silently swallow future non-role `ah:` agents.
+ * `--agent ah:<role>` session at start and after a compaction, or reminded each
+ * turn — buys nothing. By plugin prefix (`ah:`, `ah2:`), not a list of names, so
+ * a role added to the plugin cannot miss its exemption.
  */
-export const AH_ROLE_AGENTS = new Set([
-  "ah:architect",
-  "ah:implementor",
-  "ah:orchestrator",
-  "ah:reviewer",
-  "ah:ultra-advisor",
-  "ah:task-runner",
-]);
+export function isHierarchyRole(name) {
+  return typeof name === "string" && /^ah2?:./.test(name);
+}
 
 /** Is this hook firing inside a `--agent ah:<role>` session? Reads `agent_type`. */
 export function isHierarchyRoleAgent(input) {
-  return AH_ROLE_AGENTS.has(input && input.agent_type);
+  return isHierarchyRole(input && input.agent_type);
 }
 
 /**

@@ -61,11 +61,19 @@ check "on: SessionStart silent in an --agent ah:<role> session" is_silent
 run "$SS" "$OTHER"
 check "on: SessionStart still injects for a non-hierarchy agent_type" is_injected
 
-# Every role in the set, both hooks — the exemption is membership, not a prefix.
-for ROLE_NAME in ah:architect ah:implementor ah:orchestrator ah:reviewer ah:ultra-advisor ah:task-runner; do
+# Both hooks — the exemption is the plugin prefix, so a role no list names still matches.
+for ROLE_NAME in ah:architect ah:implementor ah:orchestrator ah:reviewer ah:ultra-advisor ah:task-runner \
+    ah2:architect ah2:reviewer ah2:backlog-groomer ah2:role-added-later; do
   P="{\"session_id\":\"s1\",\"cwd\":\"/tmp\",\"agent_type\":\"$ROLE_NAME\"}"
   run "$UPS" "$P"; check "on: UPS silent for $ROLE_NAME" is_silent
   run "$SS" "$P";  check "on: SessionStart silent for $ROLE_NAME" is_silent
+done
+
+# The nearest names that are not the hierarchy's plugin must still get both.
+for NAME in ah2x:foo ahx:foo ah3:foo my-ah2:foo ah2 ah2: ; do
+  P="{\"session_id\":\"s1\",\"cwd\":\"/tmp\",\"agent_type\":\"$NAME\"}"
+  run "$UPS" "$P"; check "on: UPS injects for $NAME" is_injected
+  run "$SS" "$P";  check "on: SessionStart injects for $NAME" is_injected
 done
 
 echo "----"

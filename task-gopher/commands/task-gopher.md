@@ -16,7 +16,7 @@ task-gopher uses these files under `~/.claude/`:
   whose definition file declares a `tools:` list without `Agent`/`Task`; this file
   covers the ones it cannot read, notably SDK-defined agents that have no file on
   disk. Exempting an agent that CAN dispatch just means it stops being told to.
-  The six `ah:` hierarchy roles are exempt built in, without this file: each
+  The `ah:` and `ah2:` hierarchy roles are exempt built in, without this file: each
   role's own md already carries the delegation rule.
 
 Verbatim-read gate: a dispatch to either runner whose order asks for a whole
@@ -85,7 +85,7 @@ Pick the ONE case matching the argument and run its command with the Bash tool:
 Run the single matching command and report the resulting state to the user in one line.
 
 If the result includes **ON**, also adopt this behavior immediately for the rest
-of the session (the SessionStart hook re-establishes it in future sessions):
+of the session (the mod's prompt hook re-establishes it in future sessions):
 
 Legwork (reading files to learn what is in them, searching, git history, test
 and build runs, scripts that print data) goes to `task-gopher:task-gopher` when
