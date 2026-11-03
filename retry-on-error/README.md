@@ -62,9 +62,10 @@ Set them in `/config`, or under `pluginConfigs["retry-on-error"].options` in set
 
 ## Limits
 
-- The turn-end error carries no HTTP status, only an error kind and free text.
+- Where an organization manages Claude Code, `classic.*` hooks pass over plugins you install, so `StopFailure` never arrives and `/plugins` lists it as not running. The mod then hears only that the turn ended on an error, not why, and retries every failure under the kind `api_error`, within `maxAttempts`. That means no 30 s rate-limit wait, and up to `maxAttempts` futile nudges on an error that will not clear, such as a billing or authentication failure.
+- The error kind comes from `StopFailure`, which carries no HTTP status, only an error kind and free text. The turn's end carries neither.
 - There is no event for "Waiting for API response" or for Claude Code's own internal retries, and no way to tune those. A mod cannot see the engine's retry countdown or state, so the watchdog infers a stall from stream silence alone, measured to about a second. A response that is legitimately silent for longer than `stallAbortMs` (for example a long server-side tool call, which streams only engine chunks) would be aborted and resumed too; raise `stallAbortMs` if that bites.
 - Whether "Connection lost mid-response" arrives in the error details or the last assistant message is not documented, so the mod checks both.
-- The order of the two signals for a failed turn (`StopFailure` and the turn's end) is not guaranteed. The mod pairs them within 2 s, so one failure gives one retry. If only the turn's end arrives, the mod waits those 2 s for the more precise signal before acting on the turn's text.
+- The order of the two signals for a failed turn (`StopFailure` and the turn's end) is not guaranteed. One failure gives one retry either way. If the turn's end arrives first, the mod waits 2 s for `StopFailure` before retrying under `api_error`, and a `StopFailure` later than that still replaces the pending retry's kind and delay, or calls it off.
 - A mod reload while a retry is pending drops that retry; the status line clears, so you can see it happened.
 - With the agent-hierarchy (`ah`) plugin also installed, this mod resumes first (seconds); ah's slower mail-based resume then finds the session already recovered.
