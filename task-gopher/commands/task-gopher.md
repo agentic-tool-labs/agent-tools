@@ -16,7 +16,7 @@ task-gopher uses these files under `~/.claude/`:
   whose definition file declares a `tools:` list without `Agent`/`Task`; this file
   covers the ones it cannot read, notably SDK-defined agents that have no file on
   disk. Exempting an agent that CAN dispatch just means it stops being told to.
-  The six `ah:` hierarchy roles are exempt built in, without this file: each
+  The `ah:` and `ah2:` hierarchy roles are exempt built in, without this file: each
   role's own md already carries the delegation rule.
 
 Verbatim-read gate: a dispatch to either runner whose order asks for a whole

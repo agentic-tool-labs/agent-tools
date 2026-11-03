@@ -114,7 +114,7 @@ import {
   isEnabled,
   isStrict,
   readRelayExempt,
-  AH_ROLE_AGENTS,
+  isHierarchyRole,
   verbatimDenyMessage,
   verbatimReadHit,
 } from "./directive.mjs";
@@ -138,7 +138,6 @@ const RELAY_EXEMPT = new Set([
   "Plan",
   "statusline-setup",
   "output-style-setup",
-  ...AH_ROLE_AGENTS,
 ]);
 
 /**
@@ -147,7 +146,7 @@ const RELAY_EXEMPT = new Set([
  * definition off disk.
  */
 function relaySkipReason(subagentType, cwd) {
-  if (RELAY_EXEMPT.has(subagentType)) return "builtin";
+  if (RELAY_EXEMPT.has(subagentType) || isHierarchyRole(subagentType)) return "builtin";
   if (readRelayExempt().includes(subagentType)) return "user-exempt";
   if (cannotDispatch(subagentType, cwd)) return "no-dispatch-tool";
   return "";

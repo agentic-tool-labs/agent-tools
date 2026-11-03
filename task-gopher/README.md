@@ -401,7 +401,7 @@ needed):
   sentinel further down doesn't count. The directive also opens with an escape
   clause for agents that have no tools.
 - The gate also skips agents whose definition file lists `tools:` without
-  `Agent` or `Task`, and the six `ah:` hierarchy roles, whose own agent files
+  `Agent` or `Task`, and the `ah:` and `ah2:` hierarchy roles, whose own agent files
   already carry the delegation rule.
 
 Some agents have no definition file the gate can read, notably SDK-defined
@@ -598,6 +598,10 @@ recent bypasses (last 4) — what was run directly:
   [Who may delegate](#who-may-delegate-the-tier-gate) and
   [Reaching subagents](#reaching-subagents-the-relay).
 - `commands/task-gopher.md` is the `/task-gopher` slash command.
+- `tests/` holds the suites: `claude plugin test` runs `register.test.ts`, and
+  each `test-*.sh` runs with bash. `test-mod-injection.sh` drives a real `claude`
+  against a mock API, and is what fails if the undocumented `CLAUDE_CODE_AGENT`
+  variable, the mod's source for an `--agent` session's type, stops being set.
 
 ## Works well with output-discipline
 

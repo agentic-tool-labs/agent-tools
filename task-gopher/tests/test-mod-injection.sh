@@ -92,11 +92,15 @@ check "gopher subagent: a subagent request was made" "$([ -n "$SUB" ] && echo ye
 check "gopher subagent: neither directive nor reminder" "$(copies "${SUB:-1}") $(ticks "${SUB:-1}")" "0 0"
 
 # ---- an --agent session of a gopher or a hierarchy role gets neither; another agent still does
-ROLE='{"ah:architect":{"description":"role","prompt":"role"},"plain-agent":{"description":"plain","prompt":"plain"}}'
+ROLE='{"ah:architect":{"description":"role","prompt":"role"},"ah2:architect":{"description":"role","prompt":"role"},"ah2x:foo":{"description":"plain","prompt":"plain"},"plain-agent":{"description":"plain","prompt":"plain"}}'
 run "$PLUGIN" "" -p hi --agent task-gopher:task-gopher
 check "--agent gopher: neither" "$(copies -1) $(ticks -1)" "0 0"
 run "$PLUGIN" "" -p hi --agents "$ROLE" --agent ah:architect
 check "--agent hierarchy role: neither" "$(copies -1) $(ticks -1)" "0 0"
+run "$PLUGIN" "" -p hi --agents "$ROLE" --agent ah2:architect
+check "--agent ah2 role: neither" "$(copies -1) $(ticks -1)" "0 0"
+run "$PLUGIN" "" -p hi --agents "$ROLE" --agent ah2x:foo
+check "--agent ah2x:foo, not the hierarchy's plugin: injected" "$(copies -1) $(ticks -1)" "1 1"
 run "$PLUGIN" "" -p hi --agents "$ROLE" --agent plain-agent
 check "--agent of any other type: injected (nearest input that must still match)" "$(copies -1) $(ticks -1)" "1 1"
 echo '{"agent":"task-gopher:task-gopher"}' > "$SANDBOX/agent-settings.json"

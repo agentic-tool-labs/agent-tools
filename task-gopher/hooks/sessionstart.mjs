@@ -4,8 +4,9 @@
  *
  * Answers with the full delegation directive when the plugin is ON, so a fresh,
  * resumed, or post-compaction session starts already knowing to dispatch
- * tool-heavy work to task-gopher. MAIN SESSION ONLY: the mod's events never fire
- * for subagents — they receive the directive via the relay gate in
+ * tool-heavy work to task-gopher. MAIN SESSION ONLY: prompt.submit never fires for
+ * subagents and the mod's session.append hook skips them — they receive the
+ * directive via the relay gate in
  * pretooluse-nudge.mjs instead. The directive's own tier gate means only
  * Sonnet-tier-or-higher agents act on it. Silent when OFF, and silent inside
  * either gopher.
