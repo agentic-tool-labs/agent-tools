@@ -87,14 +87,101 @@ test('2. StopFailure and turn.complete(error) for one turn retry once, in either
   expect(seen.nudges.length).toBe(2)
 })
 
-test('2b. turn.complete(error) alone still retries when no StopFailure follows', async ($, on) => {
+test('2b. turn.complete(error) alone, its answer empty as a real failure has it, retries once under the generic kind', async ($, on) => {
   const { clock, seen } = world(on)
   await start($)
-  await turnEnd($, 'error', 'API Error: Connection lost mid-response')
+  await turnEnd($, 'error')
   await clock.advance(2000 + 4999)
   expect(seen.nudges.length).toBe(0)
   await clock.advance(1)
   expect(seen.nudges.length).toBe(1)
+  expect(seen.nudges[0]).toContain('(api_error)')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(1)
+})
+
+test('2c. with no StopFailure at all, each failed turn retries and the budget still ends it', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  for (const n of [1, 2, 3]) {
+    await turnStart($, `t${n}`)
+    await turnEnd($, 'error')
+    await clock.advance(120_000)
+    expect(seen.nudges.length).toBe(n)
+  }
+  await turnStart($, 't4')
+  await turnEnd($, 'error')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(3)
+  expect(seen.statuses.at(-1)).toBe('retry-on-error: gave up after 3 attempts (api_error)')
+})
+
+test('2d. a StopFailure past the wait upgrades the armed generic retry: its kind, its delay, one nudge', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  await turnEnd($, 'error')
+  await clock.advance(3000)
+  expect(seen.statuses.at(-1)).toMatch(/\(api_error\)/)
+  await fail($, 'rate_limit')
+  await clock.advance(29_999)
+  expect(seen.nudges.length).toBe(0)
+  await clock.advance(1)
+  expect(seen.nudges.length).toBe(1)
+  expect(seen.nudges[0]).toContain('(rate_limit)')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(1)
+})
+
+test('2e. a late StopFailure of a kind that never retries calls off the armed generic retry', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  await turnEnd($, 'error')
+  await clock.advance(3000)
+  await fail($, 'billing_error')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(0)
+  expect(seen.toasts.at(-1)).toBe("retry-on-error: won't retry (billing_error)")
+})
+
+test('2f. a turn end past the wait does not override the StopFailure before it', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  await fail($, 'billing_error')
+  await clock.advance(3000)
+  await turnEnd($, 'error')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(0)
+
+  await turnStart($)
+  await fail($, 'rate_limit')
+  await clock.advance(3000)
+  await turnEnd($, 'error')
+  await clock.advance(26_999)
+  expect(seen.nudges.length).toBe(0)
+  await clock.advance(1)
+  expect(seen.nudges.length).toBe(1)
+  expect(seen.nudges[0]).toContain('(rate_limit)')
+})
+
+test('2g. the last turn\'s StopFailure does not silence the next turn\'s failure', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  await fail($, 'billing_error')
+  await turnStart($)
+  await turnEnd($, 'error')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(1)
+  expect(seen.nudges[0]).toContain('(api_error)')
+})
+
+test('2h. a subagent\'s failed turn, or a main turn that ended any other way, is no failure', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  await $.turn.complete({ reason: 'error', answer: '', durationMs: 1, isAborted: false, turnId: 't1', agentId: 'a1' })
+  await turnEnd($, 'answer', 'done')
+  await turnEnd($, 'aborted')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(0)
 })
 
 test('3. auth, billing and bad-request errors never submit, and each toasts', async ($, on) => {

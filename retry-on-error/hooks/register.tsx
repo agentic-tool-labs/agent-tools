@@ -16,11 +16,14 @@ const NUDGED = { plugin: 'retry-on-error', key: 'nudged' } as const
 // True while the stall notice shows; the Retry now band draws from it.
 const stalled = atom({ plugin: 'retry-on-error', key: 'stalled' } as const, false)
 
-const RETRYABLE = new Set(['server_error', 'overloaded', 'rate_limit', 'stalled'])
+// The kind of a failed turn when only turn.complete(error) reports it, which
+// says that the turn failed and not why. Where an organization manages Claude
+// Code, classic.* hooks pass over a user-installed plugin, so this is all it hears.
+const GENERIC = 'api_error'
+const RETRYABLE = new Set(['server_error', 'overloaded', 'rate_limit', 'stalled', GENERIC])
 const TRANSIENT = /connection lost|mid-response|ECONNRESET|socket hang up|stream (closed|ended)|timed? ?out|5\d\d/i
-// StopFailure and turn.complete(error) both report one failed turn, in an
-// order nobody guarantees; StopFailure carries no turnId, so a time window
-// pairs them.
+// turn.complete(error) is the trigger; classic.StopFailure, where it runs, only
+// names the kind. A turn end that comes first waits this long for it.
 const PAIR_MS = 2000
 
 function readOptions(options: PluginOptions) {
@@ -47,7 +50,9 @@ let tick: Timer | undefined
 // A turn.complete(error) that arrived first waits here for its StopFailure,
 // which carries the precise error kind.
 let fallback: Timer | undefined
-let lastStopFailureAt = -Infinity
+// True once this turn's StopFailure arrived, so its turn end adds nothing,
+// however late. StopFailure carries no turnId; the next turn.start clears it.
+let classified = false
 
 // The main loop's open model request, watched for stream silence. Chunks only
 // bump a counter so the stream path never waits on a $ call; the 1 s watch
@@ -178,6 +183,8 @@ async function handle($: Engine, f: Failure) {
   await $.state.set(LAST, last)
 
   if (!isRetryable(f)) {
+    // A StopFailure later than PAIR_MS finds the generic retry already armed.
+    cancel($)
     $.ui.toast(
       f.kind === 'unknown'
         ? `turn failed (unknown): ${f.details ?? f.message ?? 'no details'}`
@@ -233,7 +240,7 @@ export const register: Register = (on, options) => {
     if (e.agent_id === undefined) {
       await guarded($, async () => {
         if (!(await inScope($)) || selfAborted !== undefined) return
-        lastStopFailureAt = await $.clock.now()
+        classified = true
         fallback?.cancel()
         fallback = undefined
         await handle($, { kind: e.error, details: e.error_details, message: e.last_assistant_message })
@@ -251,11 +258,11 @@ export const register: Register = (on, options) => {
         else if (e.reason === 'aborted') cancel($)
         else if (e.reason === 'error') {
           if (!(await inScope($))) return
-          if ((await $.clock.now()) - lastStopFailureAt <= PAIR_MS) return
+          if (classified) return
           fallback?.cancel()
           fallback = $.clock.after(PAIR_MS, () => {
             fallback = undefined
-            void guarded($, () => handle($, { kind: 'unknown', message: e.answer, turnId: e.turnId }))
+            void guarded($, () => handle($, { kind: GENERIC, turnId: e.turnId }))
           })
         }
       })
@@ -265,6 +272,7 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
+      classified = false
       await guarded($, async () => {
         if (await nudgeOut($)) await $.state.set(NUDGED, false)
       })
