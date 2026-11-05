@@ -5,6 +5,11 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.130.0]
+
+### Added
+- Beta: herdr desktop. A session in a herdr desktop terminal (herdr core sets `HC_TERMINAL_ID`, not `HERDR_ENV`) now uses the herdr transport. Its calls go to `hc` and `herdr-app`, and the TUI's calls are unchanged. Members spawn into split panes, or run hidden when no app window is open. Moving a pane always lands it at the right edge of the target tab. The pane title can't be set; `pane zoom` and a wait for a given status aren't supported yet.
+
 ## [0.129.0]
 
 ### Added

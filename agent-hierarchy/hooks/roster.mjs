@@ -156,6 +156,7 @@
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import { guardShellCommand, muxExec } from "./lib-mux.mjs";
+import { herdrAppPresent, herdrExec, herdrFlavour, herdrFlavourFromEnv, herdrSelfPane } from "./lib-herdr.mjs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -2404,7 +2405,8 @@ function removeConfigMember(name, key = rosterArg, { sideEffect = false } = {}) 
 }
 
 function detectTransport() {
-  if (process.env.HERDR_ENV === "1") return "herdr";
+  // HERDR_ENV=1 (the TUI) or a herdr core terminal: both are the "herdr" transport; the flavour says which.
+  if (herdrFlavourFromEnv()) return "herdr";
   try {
     muxExec("tmux", ["list-sessions"], { stdio: "ignore" });
     return "tmux";
@@ -2702,6 +2704,23 @@ function spawnShape(member, transport, agent = null) {
     : [];
   const launchArgs = [...mappedArgs, ...(nativeArgs || [])];
   const claudeCmd = `claude ${agentFlags.join(" ")}`;
+  // herdr-desktop spec §3.2: under herdr core the launch is the command line itself. launchMember sends it
+  // through the translator as `agent start`: typed into the split pane's shell, or `hc run` with no app
+  // window. ponytail: a non-claude kind's binary is taken to be its kind name, as `herdr agent start --kind`
+  // resolves it today; give KIND_HARNESS a binary field if a kind ever differs.
+  if (transport === "herdr" && herdrFlavour() === "core") return {
+    transport,
+    kind,
+    args: nativeArgs ? [...nativeArgs] : null,
+    layout: [],
+    // §3.2 rev 3: core's own PATH has no node, so a member's node hooks would fail; it gets this process's PATH.
+    launch: [`env PATH=${shQuote(process.env.PATH || "")} ${isClaude ? claudeCmd : [kind, ...launchArgs.map(shQuote)].join(" ")}`],
+    launch_cwd: cwd,
+    target_placeholder: null,
+    target_from: null,
+    target_source: { kind: "json", path: ".result.pane.pane_id" },
+    core_launch: true,
+  };
   if (transport === "herdr") return {
     transport,
     kind,
@@ -2905,19 +2924,29 @@ function effectiveMode(mode, paneCount) {
  * is an ordinary candidate at every call, first in candidate order for
  * tie-breaking. Exists so the rule is unit-tested and the orchestrator never
  * improvises it.
+ *
+ * Under herdr core (herdr-desktop spec §5.1) `positions` is false: panes have sizes but no positions, so the
+ * band rules, which need the root box, are skipped for the aspect rule. A candidate with `size_known: false`
+ * makes that decision "right", into the largest known pane, else the tab's last pane. With `positions` absent
+ * or true, nothing changes.
  */
-function nextSplit({ mode, paneCount, self, created, geometry }) {
+function nextSplit({ mode, paneCount, self, created, geometry, positions }) {
   const byId = new Map(geometry.map((g) => [g.pane_id, g.rect]));
+  const unknownSize = new Set(positions === false ? geometry.filter((g) => g.size_known === false).map((g) => g.pane_id) : []);
   let target = null;
   let bestArea = -1;
   for (const id of [self, ...created]) {
     const rect = byId.get(id);
     if (!rect) fail(`next-split: pane ${JSON.stringify(id)} is not present in the reported geometry`);
+    if (unknownSize.has(id)) continue;
     const area = rect.width * rect.height;
     if (area > bestArea) {
       bestArea = area;
       target = id;
     }
+  }
+  if ([self, ...created].some((id) => unknownSize.has(id))) {
+    return { target: target ?? geometry[geometry.length - 1].pane_id, direction: "right" };
   }
   const rect = byId.get(target);
 
@@ -2937,6 +2966,8 @@ function nextSplit({ mode, paneCount, self, created, geometry }) {
   let direction;
   if (effectiveMode(mode, paneCount) === "columns") {
     direction = "right";
+  } else if (positions === false) {
+    direction = rect.width > rect.height * 2 ? "right" : "down";
   } else if (rootWidth > 0 && rootHeight > 0 && rect.height * 2 * bands > rootHeight * 3) {
     direction = "down"; // spans >1.5 bands
   } else if (rootWidth > 0 && rootHeight > 0 && rect.width * 2 * cols > rootWidth * 3) {
@@ -2957,7 +2988,7 @@ function herdrCall(args, opts = {}) {
   const timeout = opts.timeoutMs || Number(process.env.AH_HERDR_TIMEOUT_MS || 10000);
   let stdout;
   try {
-    stdout = muxExec("herdr", args, { encoding: "utf8", timeout, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    stdout = herdrExec(args, { encoding: "utf8", timeout, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     // Spec 0043 §1.6: `herdr agent get` on a missing name exits 1 and writes its error as JSON
     // on STDOUT, not stderr — so the failure path has to be inspectable, not just thrown. Kept
@@ -3341,6 +3372,7 @@ function runLayoutLoop({ mode, paneCount, self, splitCwd, seedPanes = [], layout
       self,
       created: [...liveSeed, ...panes],
       geometry,
+      positions: geomResult.result.layout.positions,
     });
     let splitResult;
     try {
@@ -3915,6 +3947,7 @@ async function launchMember(member, transport) {
     writeFileSync(instructionsPath(member.name), si.text);
   }
   const trust = harness && harness.trust ? harness.trust(cwd) : null;
+  if (transport === "herdr" && member.spawn.core_launch) return launchCoreMember(member, harness, trust);
   const template = member.spawn.launch[0];
   const cmd = member.spawn.target_placeholder && member.transport_id != null ? template.split(member.spawn.target_placeholder).join(member.transport_id) : template;
   let attempt = await runShell(cmd, { cwd: member.spawn.launch_cwd });
@@ -3981,6 +4014,30 @@ async function launchMember(member, transport) {
 }
 
 /**
+ * A herdr core launch (herdr-desktop spec §3.2): `agent start` through the translator, into the pane the split
+ * made (`transport_id`), or, with no app window, a hidden `hc run` whose address becomes `transport_id`. No
+ * retry: a second start into the same shell would type the line twice.
+ */
+async function launchCoreMember(member, harness, trust) {
+  const where = member.transport_id ? ["--pane", member.transport_id] : ["--cwd", member.spawn.launch_cwd];
+  const res = herdrCall(["agent", "start", member.name, ...where, "--", member.spawn.launch[0]], { allowFailure: true });
+  if (!res.ok) {
+    const detail = (res.stderr && res.stderr.trim()) || (res.stdout && res.stdout.trim()) || "launch failed";
+    const closed = member.transport_id ? closeOrphanPane(member) : {};
+    return { ...member, launch_status: "failed", launch_result: { code: herdrErrorCode(res), detail, ...closed }, retried: false, error: detail };
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(res.stdout);
+  } catch {
+    /* the translator always prints JSON; a null launch_result is reported as is */
+  }
+  const address = parsed && parsed.result && parsed.result.pane && parsed.result.pane.pane_id;
+  const result = { ...member, transport_id: address || member.transport_id, launch_status: "ready", launch_result: parsed, retried: false };
+  return harness && (harness.prompts || harness.composer) ? checkStartupScreen(result, trust) : result;
+}
+
+/**
  * Per-member layout+launch+retry (spec 0009 §6.3 step 5): place `peerMembers.length` panes via the
  * transport, assign each member's `transport_id`, then launch+retry each with `launchMember`.
  * Mutates `peerMembers` in place (`transport_id`); returns launch results aligned to `peerMembers`.
@@ -3997,18 +4054,25 @@ async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, calle
   for (const m of refused) m.transport_id = null;
 
   let panes = [];
+  // herdr core with no app window (herdr-desktop spec §3.2): nothing to place; each member is a hidden
+  // `hc run` and its address comes back from the launch.
+  let hidden = false;
   if (transport === "herdr" && peerMembers.length > 0) {
+    const core = herdrFlavour() === "core";
     if (!herdrOnPath()) {
-      fail("transport is herdr (HERDR_ENV=1) but no `herdr` binary is on PATH — cannot place panes. Install herdr, or unset HERDR_ENV to use tmux/terminal.");
+      fail(core ? "transport is herdr core (HC_TERMINAL_ID is set) but no `hc` binary is on PATH — cannot start members." : "transport is herdr (HERDR_ENV=1) but no `herdr` binary is on PATH — cannot place panes. Install herdr, or unset HERDR_ENV to use tmux/terminal.");
     }
     // A placement anchor (a stream spawn) replaces the caller's pane and current tab: `root` is an
     // empty pane to launch into as-is, `seed` a pane whose tab the split loop works in.
     const anchor = layoutOpts.anchor || null;
     if (anchor && anchor.root) {
       panes = [anchor.root];
+    } else if (core && !anchor && !herdrAppPresent()) {
+      hidden = true;
+      panes = peerMembers.map(() => null);
     } else {
-      const self = anchor ? anchor.seed : process.env.HERDR_PANE_ID;
-      if (!self) fail(`${callerLabel} needs HERDR_PANE_ID in the environment`);
+      const self = anchor ? anchor.seed : herdrSelfPane();
+      if (!self) fail(`${callerLabel} needs ${core ? "HC_TERMINAL_ID" : "HERDR_PANE_ID"} in the environment`);
       ({ panes } = runLayoutLoop({ mode, paneCount: peerMembers.length, self, splitCwd, seedPanes: layoutOpts.seedPanes || [], ...(anchor ? { layoutArgs: ["--pane", self] } : {}) }));
     }
   } else if (transport === "tmux") {
@@ -4025,7 +4089,7 @@ async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, calle
 
   // [correction] spec 0003 §6.2: N layout commands must yield N distinct, non-empty target ids —
   // asserted before any launch fires, so a bad layout cannot become N claude processes in the wrong places.
-  if (transport !== "terminal" && peerMembers.length > 0) {
+  if (transport !== "terminal" && !hidden && peerMembers.length > 0) {
     if (panes.length !== peerMembers.length || panes.some((p) => !p) || new Set(panes).size !== panes.length) {
       fail(`${callerLabel}: layout produced ${JSON.stringify(panes)} for ${peerMembers.length} peer member(s) — expected that many distinct, non-empty target ids`);
     }
@@ -5712,7 +5776,7 @@ try {
       if (opts.next === true && opts.apply === true) fail("--next and --apply are mutually exclusive");
       if (detectTransport() !== "herdr") fail("layout-splits requires the herdr transport");
       if (!herdrOnPath()) {
-        fail("transport is herdr (HERDR_ENV=1) but no `herdr` binary is on PATH — cannot place panes. Install herdr, or unset HERDR_ENV to use tmux/terminal.");
+        fail(herdrFlavour() === "core" ? "transport is herdr core (HC_TERMINAL_ID is set) but no `hc` binary is on PATH — cannot place panes." : "transport is herdr (HERDR_ENV=1) but no `herdr` binary is on PATH — cannot place panes. Install herdr, or unset HERDR_ENV to use tmux/terminal.");
       }
 
       const splitCwd = typeof opts.cwd === "string" ? opts.cwd : process.cwd();
@@ -5736,8 +5800,8 @@ try {
       const paneCountRaw = opts["pane-count"];
       const paneCount = typeof paneCountRaw === "string" ? Number(paneCountRaw) : fail("layout-splits needs --pane-count <N>");
       if (!Number.isInteger(paneCount) || paneCount < 0) fail(`--pane-count must be a non-negative integer, got ${JSON.stringify(paneCountRaw)}`);
-      const self = typeof opts.self === "string" ? opts.self : process.env.HERDR_PANE_ID;
-      if (!self) fail("layout-splits needs --self <pane-id> (or HERDR_PANE_ID in the environment)");
+      const self = typeof opts.self === "string" ? opts.self : herdrSelfPane();
+      if (!self) fail(`layout-splits needs --self <pane-id> (or ${herdrFlavour() === "core" ? "HC_TERMINAL_ID" : "HERDR_PANE_ID"} in the environment)`);
 
       if (opts.next === true) {
         const created = typeof opts.created === "string" ? JSON.parse(opts.created) : fail("layout-splits --next needs --created <json array>");
@@ -5748,7 +5812,7 @@ try {
           fail(err.message);
         }
         const geometry = geomResult.result.layout.panes;
-        const decision = nextSplit({ mode, paneCount, self, created, geometry });
+        const decision = nextSplit({ mode, paneCount, self, created, geometry, positions: geomResult.result.layout.positions });
         const targetRect = geometry.find((g) => g.pane_id === decision.target).rect;
         out({
           index: created.length + 1,

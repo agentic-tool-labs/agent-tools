@@ -15,7 +15,7 @@ import { accessSync, appendFileSync, constants, realpathSync, statSync } from "n
 import { basename, delimiter, join, sep } from "node:path";
 
 /** Binaries a test must never reach for real. One list, used by `muxExec` and `guardShellCommand`. */
-export const GUARDED_BINARIES = ["herdr", "tmux", "claude", "codex"];
+export const GUARDED_BINARIES = ["herdr", "hc", "herdr-app", "tmux", "claude", "codex"];
 
 function resolveOnPath(binary, pathVar) {
   if (binary.includes("/")) {

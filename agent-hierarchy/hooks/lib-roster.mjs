@@ -21,6 +21,7 @@ import { homedir } from "node:os";
 
 import { checkoutRoot, CLASSES, declaredTier, isTeamAliasShape, isValidTeamAlias, KIND_DEFAULT, KIND_RE, mainHierarchyDir, registryRoles, resolveKind, roleClass, routeHasPane, suggestTeamAlias } from "./lib-config.mjs";
 import { appendSessionPid, statusChanged } from "./lib-status.mjs";
+import { herdrBinary } from "./lib-herdr.mjs";
 
 // Spec 0043 §1.1/§1.5: `kind`/`route`-shape helpers are DEFINED in lib-config.mjs (the leaf) and
 // re-exported here so the member schema still reads as one module. Defining them here instead
@@ -135,17 +136,18 @@ export const teamFileHome = (p) => (basename(p) === "team.json" ? dirname(p) : b
 // ---------------------------------------------------------------- herdr transport presence (spec 0010 §2.4)
 
 /**
- * True when an executable named `herdr` is on PATH. Pure `fs` — never spawns
+ * True when the flavour's herdr binary (`herdr`, or `hc` under herdr core) is on PATH. Pure `fs` — never spawns
  * a process, because this runs on every SessionStart including `compact`.
  * No caching: a stale cached "missing" answer is worse than re-checking.
  */
 export function herdrOnPath() {
   const pathEnv = process.env.PATH;
   if (typeof pathEnv !== "string" || !pathEnv) return false;
+  const binary = herdrBinary();
   for (const entry of pathEnv.split(delimiter)) {
     if (!entry) continue;
     try {
-      accessSync(join(entry, "herdr"), constants.X_OK);
+      accessSync(join(entry, binary), constants.X_OK);
       return true;
     } catch {
       // not here, or not executable — try the next PATH entry
