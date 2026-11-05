@@ -157,7 +157,7 @@ import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSyn
 import { execFile, execFileSync } from "node:child_process";
 import { guardShellCommand, muxExec } from "./lib-mux.mjs";
 import { herdrAppPresent, herdrExec, herdrFlavour, herdrFlavourFromEnv, herdrSelfPane } from "./lib-herdr.mjs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -4016,15 +4016,23 @@ async function launchMember(member, transport) {
 /**
  * A herdr core launch: `agent start` through the translator, into the pane the split
  * made (`transport_id`), or, with no app window, a hidden `hc run` whose address becomes `transport_id`. No
- * retry: a second start into the same shell would type the line twice.
+ * retry: a second start into the same shell would type the line twice. The start carries a one-off spawn
+ * nonce (`ah.spawn=<16 hex>` on the terminal), returned as `spawn_nonce` for the member's record. A name another
+ * live terminal holds (one core serves every repo) is refused `name-in-use`, as under the TUI.
  */
 async function launchCoreMember(member, harness, trust) {
   const where = member.transport_id ? ["--pane", member.transport_id] : ["--cwd", member.spawn.launch_cwd];
-  const res = herdrCall(["agent", "start", member.name, ...where, "--", member.spawn.launch[0]], { allowFailure: true });
+  const spawn_nonce = randomBytes(8).toString("hex");
+  const res = herdrCall(["agent", "start", member.name, ...where, "--spawn-nonce", spawn_nonce, "--", member.spawn.launch[0]], { allowFailure: true });
   if (!res.ok) {
     const detail = (res.stderr && res.stderr.trim()) || (res.stdout && res.stdout.trim()) || "launch failed";
+    const code = herdrErrorCode(res);
+    if (code === "agent_name_taken") {
+      const closed = member.transport_id ? closeOrphanPane(member, { nameHeldElsewhere: true }) : {};
+      return { ...member, launch_status: "failed", launch_result: { reason: "refused", refused: "name-in-use", name: member.name, code, detail, ...closed }, retried: false, error: detail };
+    }
     const closed = member.transport_id ? closeOrphanPane(member) : {};
-    return { ...member, launch_status: "failed", launch_result: { code: herdrErrorCode(res), detail, ...closed }, retried: false, error: detail };
+    return { ...member, launch_status: "failed", launch_result: { code, detail, ...closed }, retried: false, error: detail };
   }
   let parsed = null;
   try {
@@ -4033,7 +4041,7 @@ async function launchCoreMember(member, harness, trust) {
     /* the translator always prints JSON; a null launch_result is reported as is */
   }
   const address = parsed && parsed.result && parsed.result.pane && parsed.result.pane.pane_id;
-  const result = { ...member, transport_id: address || member.transport_id, launch_status: "ready", launch_result: parsed, retried: false };
+  const result = { ...member, transport_id: address || member.transport_id, spawn_nonce, launch_status: "ready", launch_result: parsed, retried: false };
   return harness && (harness.prompts || harness.composer) ? checkStartupScreen(result, trust) : result;
 }
 
@@ -5355,7 +5363,7 @@ async function spawnOneCore(role, callerLabel, adHocMember = null) {
     fail([`${callerLabel}: launching ${member.name} failed`, launched.error, ...extra].filter(Boolean).join(" — "));
   }
 
-  const newRecord = { role: member.role, name: member.name, ...(member.renamed_from ? { renamed_from: member.renamed_from } : {}), route: memberRoute, model: member.model, effort: member.effort, autoMode: member.autoMode, transport_id: launched.transport_id, expected_root: realCwd(planEntry.spawn.launch_cwd || cwd) };
+  const newRecord = { role: member.role, name: member.name, ...(member.renamed_from ? { renamed_from: member.renamed_from } : {}), route: memberRoute, model: member.model, effort: member.effort, autoMode: member.autoMode, transport_id: launched.transport_id, ...(launched.spawn_nonce ? { spawn_nonce: launched.spawn_nonce } : {}), expected_root: realCwd(planEntry.spawn.launch_cwd || cwd) };
   // §1.1: written only when it is not the default, so claude-kind team.json rows are unchanged.
   if (resolveKind(member) !== KIND_DEFAULT) newRecord.kind = resolveKind(member);
   if (memberArgs(member)) newRecord.args = [...memberArgs(member)];

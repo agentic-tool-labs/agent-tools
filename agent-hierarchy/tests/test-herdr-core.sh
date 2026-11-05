@@ -38,7 +38,7 @@ const flag = (f) => (args.indexOf(f) >= 0 ? args[args.indexOf(f) + 1] : undefine
 const term = (a) => S.terminals[a];
 const shown = () => S.world.spaces.flatMap((s) => s.tabs.flatMap((t) => t.terminals.map((x) => ({ ...x, tab: t, space: s }))));
 let next = Object.keys(S.terminals).length + 10;
-const newTerminal = (labels = {}) => { const a = `t${next++}`; S.terminals[a] = { address: a, state: "live", labels, cwd: "/w", cols: 80, rows: 24, status: null, screen: "" }; return a; };
+const newTerminal = (labels = {}, created_ms) => { const a = `t${next++}`; S.clock = (S.clock || 100) + 1; S.terminals[a] = { address: a, state: "live", labels, cwd: "/w", cols: 80, rows: 24, status: null, screen: "", created_ms: created_ms || S.clock }; return a; };
 const adopt = (a) => {
   const l = term(a).labels;
   if (S.noAdopt || !l["herdr.space"] || !l["herdr.tab"]) return;
@@ -81,6 +81,8 @@ if (bin === "hc") {
     const labels = {};
     for (let i = 0; i < args.length; i++) if (args[i] === "--label") { const [k, ...v] = args[i + 1].split("="); labels[k] = v.join("="); }
     if (S.runFails) hcFail("spawn", 1);
+    // race: another repo's spawn of the same name lands at the same moment, before ("earlier") or after this one.
+    if (S.race) S.rival = newTerminal({ "ah.name": labels["ah.name"], "ah.spawn": "rival" }, S.race === "earlier" ? 1 : 1e12);
     const a = newTerminal(labels);
     if (S.runNoAddress) { save(); console.log("started"); process.exit(0); }
     out({ address: a, state: "live" });
@@ -103,13 +105,17 @@ if (bin === "herdr-app") {
   if (action === "terminal.park") {
     for (const s of S.world.spaces) for (const tb of s.tabs) tb.terminals = tb.terminals.filter((x) => x.terminal !== p.terminal);
     if (!S.parkNeverLands) { term(p.terminal).labels["herdr.space"] = ""; term(p.terminal).labels["herdr.tab"] = ""; }
+    if (S.parkFailsButLands) { save(); console.log(JSON.stringify({ error: "park call failed" })); process.exit(1); }
     out({ pending: true });
   }
   if (action === "terminal.keep") {
     // Shows a parked terminal again: beside the focused pane (right|down), in a new tab of the shown space (tab),
-    // or with no place where it was. Refused while the park has not landed.
+    // or with no place where it was. A placed keep is refused while the park has not landed; a plain keep on a
+    // terminal that still has its pane is a no-op (as seen live).
     if (S.failKeepPlace && p.place) { save(); console.log(JSON.stringify({ error: "keep failed" })); process.exit(1); }
+    if (S.failPlainKeep && !p.place) { save(); console.log(JSON.stringify({ error: "plain keep failed" })); process.exit(1); }
     const l = term(p.terminal).labels;
+    if (l["herdr.space"] && !p.place) out({ pane: `p-${p.terminal}` });
     if (l["herdr.space"]) { save(); console.log(JSON.stringify({ error: "not parked" })); process.exit(1); }
     if (!S.noKeepLand || !p.place) {
       const sp = S.world.spaces.find((s) => s.id === S.status.space);
@@ -236,14 +242,22 @@ reset; patch 'S.noApp=true'; translate "$CORE_ENV" '["tab","create","--label","s
 check "core: tab create with no app window is a named refusal" 'echo "$OUT" | grep -q "\"code\":\"unsupported\"" && ! has "tab.new"'
 
 # ---- spawn through the translator ----
-reset; translate "$CORE_ENV" '["agent","start","a9","--pane","t2","--","env PATH=/x claude --agent ah:x"]'
-check "core: agent start into a pane types the line, then labels ah.name" 'has "hc [\"send\",\"--json\",\"t2\",\"env PATH=/x claude --agent ah:x\"]" && has "hc [\"label\",\"--json\",\"t2\",\"ah.name=a9\"]" && [ "$(grep -n "\"send\"" "$LOG" | cut -d: -f1)" -lt "$(grep -n "\"label\"" "$LOG" | cut -d: -f1)" ]'
+reset; translate "$CORE_ENV" '["agent","start","a9","--pane","t2","--spawn-nonce","00112233aabbccdd","--","env PATH=/x claude --agent ah:x"]'
+check "core: agent start into a pane labels ah.name and the given spawn nonce, then types the line" 'has "hc [\"send\",\"--json\",\"t2\",\"env PATH=/x claude --agent ah:x\"]" && has "hc [\"label\",\"--json\",\"t2\",\"ah.name=a9\",\"ah.spawn=00112233aabbccdd\"]" && [ "$(grep -n "\"label\"" "$LOG" | cut -d: -f1)" -lt "$(grep -n "\"send\"" "$LOG" | cut -d: -f1)" ]'
 reset; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","env PATH=/x claude --agent ah:x"]'
-check "core: agent start with no pane is a hidden hc run with no parent, --json before --, the line through sh -c" 'has "hc [\"run\",\"--json\",\"--bg\",\"--no-parent\",\"--label\",\"ah.name=a9\",\"--cwd\",\"/w\",\"--\",\"sh\",\"-c\",\"env PATH=/x claude --agent ah:x\"]" && echo "$OUT" | grep -q "\"pane_id\":\"t1[0-9]\""'
+check "core: agent start with no pane is a hidden hc run with no parent, a 16-hex nonce, --json before --, the line through sh -c" 'grep -qE "^hc \[\"run\",\"--json\",\"--bg\",\"--no-parent\",\"--label\",\"ah.name=a9\",\"--label\",\"ah.spawn=[0-9a-f]{16}\",\"--cwd\",\"/w\",\"--\",\"sh\",\"-c\",\"env PATH=/x claude --agent ah:x\"\]" "$LOG" && echo "$OUT" | grep -q "\"pane_id\":\"t1[0-9]\""'
 OUT=$(env -i $CORE_ENV hc run --bg -- sh -c x --json 2>&1; echo "rc=$?")
 check "fake (negative): hc refuses --json after --, as it hands it to the program" 'echo "$OUT" | grep -q "rc=2"'
-reset; patch 'S.runNoAddress=true'; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","claude"]'
-check "core: an hc run reply with no address finds the started terminal by ah.name and kills it" 'echo "$OUT" | grep -q "\"code\":\"hc_failed\"" && echo "$OUT" | grep -q "was killed" && has "hc [\"kill\",\"--json\",\"t1"'
+reset; translate "$CORE_ENV" '["agent","start","a1","--cwd","/w","--","claude"]'
+check "core: a start whose name another live terminal holds is agent_name_taken; nothing labelled or run" 'echo "$OUT" | grep -q "\"code\":\"agent_name_taken\"" && ! has "hc [\"run\"" && ! has "hc [\"label\""'
+reset; patch 'S.terminals.t2.state="finished";S.lsShowsFinished=true'; translate "$CORE_ENV" '["agent","start","a1","--cwd","/w","--","claude"]'
+check "core (negative): a finished terminal holding the name does not block the start" 'echo "$OUT" | grep -q "\"pane_id\":\"t1[0-9a-z]\""'
+reset; patch 'S.race="earlier"'; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","claude"]'
+check "core: two starts at once, the other earlier: this one clears its own label, is killed by address, agent_name_taken; the other untouched" 'echo "$OUT" | grep -q "\"code\":\"agent_name_taken\"" && node -e "const S=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));const r=S.terminals[S.rival];const m=Object.values(S.terminals).find(t=>t.labels[\"ah.spawn\"]&&t.labels[\"ah.spawn\"]!==\"rival\");process.exit(r.state===\"live\"&&r.labels[\"ah.name\"]===\"a9\"&&m.state===\"finished\"&&m.labels[\"ah.name\"]===\"\"?0:1)" "$STATE"'
+reset; patch 'S.race="later"'; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","claude"]'
+check "core (negative): two starts at once, this one earlier: it keeps the name and the other is not touched" 'echo "$OUT" | grep -q "\"pane_id\"" && ! has "hc [\"kill\"" && ! grep -qF "\"ah.name=\"]" "$LOG"'
+reset; patch 'S.runNoAddress=true;S.race="earlier"'; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","claude"]'
+check "core: an hc run reply with no address kills the terminal found by its nonce, never the other holder of the name" 'echo "$OUT" | grep -q "\"code\":\"hc_failed\"" && echo "$OUT" | grep -q "was killed" && grep -qE "^hc \[\"ls\",\"--json\",\"--label\",\"ah.spawn=[0-9a-f]{16}\"\]" "$LOG" && node -e "const S=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(S.terminals[S.rival].state===\"live\"?0:1)" "$STATE"'
 reset; patch 'S.runNoAddress=true;S.failKill=true'; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","claude"]'
 check "core: an unusable hc run reply whose kill fails reports the orphan by address" 'echo "$OUT" | grep -q "is an orphan: .hc kill t1[0-9]"'
 reset; patch 'S.runFails=true'; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","claude"]'
@@ -274,7 +288,13 @@ check "core: a placed keep not seen by the deadline: one plain keep more, change
 reset; patch 'S.failKeepPlace=true'; translate "$CORE_ENV" '["pane","move","t2","--tab","tb2","--split","down"]'
 check "core: a failure mid-way (the placed keep) restores the view and shows the terminal again" 'echo "$OUT" | grep -q "\"changed\":\"false\"" && [ "$(view)" = "sp1 tb1 p1" ] && has "\"terminal.keep\",\"{\\\"terminal\\\":\\\"t2\\\"}\"" && [ -n "$(at)" ]'
 reset; patch 'S.failLabel=true'; translate "$CORE_ENV" '["pane","move","t2","--new-workspace"]'
-check "core: a failed relabel after the park calls terminal.keep, changed:false" 'echo "$OUT" | grep -q "\"changed\":\"false\"" && has "\"terminal.keep\""'
+check "core: a failed relabel after the park calls terminal.keep, changed:false with the why" 'echo "$OUT" | grep -q "\"changed\":\"false\"" && echo "$OUT" | grep -q "\"why\":\"hc label" && has "\"terminal.keep\""'
+reset; patch 'S.parkFailsButLands=true'; translate "$CORE_ENV" '["pane","move","t2","--tab","tb2","--split","down"]'
+check "core: a park call that fails but lands still gets the plain keep, so the terminal is shown again" 'echo "$OUT" | grep -q "\"changed\":\"false\"" && echo "$OUT" | grep -q "\"why\":\"herdr-app do terminal.park" && has "\"terminal.keep\",\"{\\\"terminal\\\":\\\"t2\\\"}\"" && [ -n "$(at)" ]'
+reset; patch 'S.failKeepPlace=true;S.failPlainKeep=true'; translate "$CORE_ENV" '["pane","move","t2","--tab","tb2","--split","down"]'
+check "core: a failed plain keep reports the terminal as orphaned with the keep command as the remedy" 'echo "$OUT" | grep -q "\"orphaned_transport_id\":\"t2\"" && echo "$OUT" | grep -q "herdr-app do terminal.keep" && [ "$(view)" = "sp1 tb1 p1" ]'
+reset; translate "$CORE_ENV" '["pane","move","t2","--tab","tb2"]'
+check "core (negative): a move that lands reports no orphan and no why" '! echo "$OUT" | grep -q "orphaned_transport_id\|\"why\""'
 
 # ---- hc missing under core: the exec failure, never herdr ----
 reset; OUT=$(env -i HOME="$SANDBOX/home" PATH="$NODE_DIR" FAKE_STATE="$STATE" FAKE_LOG="$LOG" HC_TERMINAL_ID=t1 node --input-type=module -e '
@@ -307,6 +327,10 @@ TEAM_FILE="$PROJ/.claude/hierarchy/teams/proj.json"
 reset; setup_roster
 OUT=$(env -i $CORE_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --cwd "$PROJ" 2>&1)
 check "spawn-one under core with the app: split, launch line typed with the spawner PATH, address stored" 'grep -q "pane.split" "$LOG" && grep -qF "\"send\",\"--json\",\"t1" "$LOG" && grep -F "\"send\"" "$LOG" | grep -qF "env PATH='"'"'$SANDBOX/bin:$NODE_DIR'"'"' claude --agent" && node -e "const t=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(/^t[0-9]+$/.test(t.members[0].transport_id)&&t.transport===\"herdr\"&&!(\"herdr_flavour\" in t)?0:1)" "$TEAM_FILE"'
+check "spawn-one under core: the record carries the spawn nonce the terminal is labelled with" 'N=$(node -e "console.log(JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\")).members[0].spawn_nonce||\"\")" "$TEAM_FILE") && echo "$N" | grep -qE "^[0-9a-f]{16}$" && grep -qF "\"ah.spawn=$N\"" "$LOG"'
+reset; setup_roster; patch 'S.terminals.t3.labels["ah.name"]="proj-reviewer"'
+OUT=$(env -i $CORE_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --cwd "$PROJ" 2>&1)
+check "spawn-one under core: a name another repo holds live is refused name-in-use; its pane closed, the holder untouched" 'echo "$OUT" | grep -q "name-in-use" && ! grep -F "hc [\"send\"" "$LOG" | grep -q "claude --agent" && grep -qE "^hc \[\"kill\",\"--json\",\"t1[0-9]\"\]" "$LOG" && ! grep -qF "\"kill\",\"--json\",\"t3\"" "$LOG" && node -e "const S=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(S.terminals.t3.state===\"live\"?0:1)" "$STATE"'
 reset; setup_roster; patch 'S.noApp=true'
 OUT=$(env -i $CORE_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --cwd "$PROJ" 2>&1)
 check "spawn-one under core with no app: one hidden hc run labelled ah.name, its address stored" 'grep -qF "hc [\"run\",\"--json\",\"--bg\",\"--no-parent\",\"--label\",\"ah.name=" "$LOG" && grep -qF "\"--\",\"sh\",\"-c\",\"env PATH=" "$LOG" && ! grep -q "pane.split" "$LOG" && node -e "const t=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(/^t[0-9]+$/.test(t.members[0].transport_id)?0:1)" "$TEAM_FILE"'

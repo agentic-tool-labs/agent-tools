@@ -304,47 +304,85 @@ function translate(args, o) {
 }
 
 /**
- * `agent start <name> [--pane <address>] [--cwd <dir>] -- <launch line>`. Into a split pane's shell: type the
- * line with `hc send`, then label the terminal `ah.name=<name>`. With no pane (no app window): a hidden
- * `hc run --bg --no-parent --label ah.name=<name> --cwd <dir> -- sh -c <line>`. `--no-parent`, because hc's
- * default parent is the caller's terminal and a child ends with its parent. A reply with no usable address
- * leaves whatever it started behind: it is found by its label and killed, or reported as an orphan.
+ * `agent start <name> [--pane <address>] [--cwd <dir>] [--spawn-nonce <hex>] -- <launch line>`. One core
+ * serves every repo, so names can clash across repos, and core labels enforce nothing: the translator gives the
+ * TUI's refusal, `agent_name_taken`.
+ * - Pre-check: a live terminal already labelled `ah.name=<name>` refuses the start; nothing is labelled or run.
+ * - Into a split pane: label it `ah.name=<name>` and `ah.spawn=<nonce>`, post-check, then type the line.
+ * - No pane (no app window): a hidden `hc run --bg --no-parent --label ah.name=<name> --label ah.spawn=<nonce>
+ *   -- sh -c <line>`, then the post-check. `--no-parent`, because hc's default parent is the caller's terminal
+ *   and a child ends with its parent.
+ * - Post-check: two or more live holders (two spawns at once) → the earliest `created_ms`, then the lowest
+ *   address, keeps the name; a loser removes its own label (a hidden loser is killed by its address) and is
+ *   refused.
+ * A hidden start whose reply has no usable address is found by its nonce, never by the name, and killed, or
+ * reported as an orphan.
  */
 function startAgent(args, o) {
   const name = args[2];
   const sep = args.indexOf("--");
   const line = sep >= 0 ? args.slice(sep + 1).join(" ") : "";
   if (!line) throw tuiError("invalid_params", "agent start: no launch line after --");
-  const pane = flagValue(args.slice(0, sep), "--pane");
+  const pre = args.slice(0, sep);
+  const holders = () => (hc(["ls", "--label", `ah.name=${name}`], o).terminals || []).filter((t) => t.state === undefined || t.state === "live").map((t) => t.address);
+  const before = holders();
+  if (before.length) throw tuiError("agent_name_taken", `agent start: ah.name=${name} is already live (${before.join(", ")})`);
+  const nonce = `ah.spawn=${flagValue(pre, "--spawn-nonce") || randomBytes(8).toString("hex")}`;
+  /** Two spawns at once: the earliest holder keeps the name; `mine` loses → its label goes and it is refused. */
+  const postCheck = (mine, onLose) => {
+    const h = holders();
+    if (h.length < 2) return;
+    const created = (a) => {
+      try {
+        const c = Number(hc(["get", a], o).created_ms);
+        return Number.isFinite(c) ? c : Infinity;
+      } catch {
+        return Infinity;
+      }
+    };
+    const byAddr = (x, y) => x.length - y.length || (x < y ? -1 : x > y ? 1 : 0);
+    const winner = h.map((a) => ({ a, c: created(a) })).sort((x, y) => x.c - y.c || byAddr(x.a, y.a))[0].a;
+    if (winner === mine) return;
+    quietly(() => hc(["label", mine, "ah.name="], o));
+    if (onLose) quietly(() => onLose());
+    throw tuiError("agent_name_taken", `agent start: ah.name=${name} was taken at the same moment by ${winner}`);
+  };
+  const pane = flagValue(pre, "--pane");
   if (pane) {
+    hc(["label", pane, `ah.name=${name}`, nonce], o);
+    postCheck(pane);
     hc(["send", pane, line], o);
-    hc(["label", pane, `ah.name=${name}`], o);
     return { result: { agent: { name, pane_id: pane }, pane: { pane_id: pane } } };
   }
-  const cwd = flagValue(args.slice(0, sep), "--cwd");
+  const cwd = flagValue(pre, "--cwd");
   let address = null;
   let why = null;
   try {
-    address = hc(["run", "--bg", "--no-parent", "--label", `ah.name=${name}`, ...(cwd ? ["--cwd", cwd] : []), "--", "sh", "-c", line], o).address || null;
+    address = hc(["run", "--bg", "--no-parent", "--label", `ah.name=${name}`, "--label", nonce, ...(cwd ? ["--cwd", cwd] : []), "--", "sh", "-c", line], o).address || null;
     if (!address) why = "hc run printed no address";
   } catch (err) {
     why = err.message;
   }
-  if (address) return { result: { agent: { name, pane_id: address }, pane: { pane_id: address } } };
-  let started = null;
-  try {
-    started = lookup(name, o);
-  } catch {
-    // nothing labelled with the name is live: nothing was left behind
+  if (address) {
+    postCheck(address, () => hc(["kill", address], o));
+    return { result: { agent: { name, pane_id: address }, pane: { pane_id: address } } };
   }
-  if (!started) throw tuiError("hc_failed", `agent start ${name}: ${why}`);
-  let killed = true;
+  let started = [];
   try {
-    hc(["kill", started], o);
+    started = (hc(["ls", "--label", nonce], o).terminals || []).filter((t) => t.state === undefined || t.state === "live").map((t) => t.address);
   } catch {
-    killed = false;
+    // unreadable: nothing is killed on a guess
   }
-  throw tuiError("hc_failed", killed ? `agent start ${name}: ${why}; the terminal it started (${started}) was killed` : `agent start ${name}: ${why}; terminal ${started} (ah.name=${name}) is an orphan: \`hc kill ${started}\``);
+  if (started.length === 0) throw tuiError("hc_failed", `agent start ${name}: ${why}`);
+  const left = started.filter((a) => {
+    try {
+      hc(["kill", a], o);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  throw tuiError("hc_failed", left.length === 0 ? `agent start ${name}: ${why}; the terminal it started (${started.join(", ")}) was killed` : `agent start ${name}: ${why}; terminal ${left.join(", ")} (${nonce}) is an orphan: \`hc kill ${left.join(" ")}\``);
 }
 
 /** `hc kill`, with or without the app: the app's pane goes with the terminal. */
@@ -428,8 +466,8 @@ function quietly(fn) {
 /**
  * Move a pane: park the terminal, wait for the park to land (its `herdr.space` label goes), then give it a pane
  * again. `--tab X --split D` shows X and runs `terminal.keep --place D` beside X's focused pane; `--new-tab`
- * shows the space and runs `terminal.keep --place tab`; both restore the user's space, tab and focused pane in a
- * finally. `--new-workspace` relabels into minted `sp`/`tb` ids, which the app adopts without moving focus.
+ * shows the space and runs `terminal.keep --place tab`; both then restore the user's space, tab and focused pane,
+ * whatever happened. `--new-workspace` relabels into minted `sp`/`tb` ids, which the app adopts without moving focus.
  * Not seen in place by the deadline (`AH_HC_ADOPT_WAIT_MS`), or any failure after the park: `terminal.keep`
  * with no place shows the terminal again, and the reply is `changed:"false"`.
  */
@@ -459,14 +497,13 @@ function movePane(args, o) {
     throw tuiError("invalid_params", "pane move: one of --tab, --new-tab, --new-workspace");
   }
   const deadline = Date.now() + Number(process.env.AH_HC_ADOPT_WAIT_MS || 5000);
-  let parked = false;
   let adopted = null;
+  let result;
   try {
     appDo("terminal.park", { terminal: address }, o);
-    parked = true;
     // Park is asynchronous; a label or keep before it lands is undone or refused.
     const landed = pollUntil(() => !(hc(["get", address], o).labels || {})["herdr.space"], deadline);
-    if (!landed) return { result: { changed: "false" } };
+    if (!landed) throw new Error("the park was not seen to land by the deadline");
     if (relabel) {
       hc(["label", address, `herdr.space=${space}`, `herdr.tab=${tab}`], o);
     } else {
@@ -475,20 +512,29 @@ function movePane(args, o) {
       appDo("terminal.keep", { terminal: address, place }, o);
     }
     adopted = pollUntil(() => shownTerminals(appWorld(o)).find((t) => t.terminal === address && t.space === space && (!tab || t.tab === tab)), deadline);
-    if (!adopted) return { result: { changed: "false" } };
-    return { result: { changed: "true", pane: { pane_id: address, tab_id: adopted.tab, workspace_id: adopted.space } } };
-  } catch {
-    return { result: { changed: "false" } };
-  } finally {
-    if (parked && !adopted) quietly(() => appDo("terminal.keep", { terminal: address }, o));
-    if (!relabel) {
-      quietly(() => appDo("space.select", { id: status.space }, o));
-      quietly(() => appDo("tab.select", { id: status.tab }, o));
-      quietly(() => {
-        if (status.focused_pane && shownTerminals(appWorld(o)).some((t) => t.pane === status.focused_pane)) appDo("pane.focus", { pane: status.focused_pane }, o);
-      });
+    if (!adopted) throw new Error("the terminal was not seen in place by the deadline");
+    result = { changed: "true", pane: { pane_id: address, tab_id: adopted.tab, workspace_id: adopted.space } };
+  } catch (err) {
+    result = { changed: "false", why: err.message };
+  }
+  // Any miss gets a plain keep, even when the park call itself failed: a park can land although its call
+  // failed. A plain keep on a terminal that is already shown leaves it where it is.
+  if (!adopted) {
+    try {
+      appDo("terminal.keep", { terminal: address }, o);
+    } catch (err) {
+      result.orphaned_transport_id = address;
+      result.remedy = `${address} may have no pane (${err.message}); show it with \`herdr-app do terminal.keep '${JSON.stringify({ terminal: address })}'\``;
     }
   }
+  if (!relabel) {
+    quietly(() => appDo("space.select", { id: status.space }, o));
+    quietly(() => appDo("tab.select", { id: status.tab }, o));
+    quietly(() => {
+      if (status.focused_pane && shownTerminals(appWorld(o)).some((t) => t.pane === status.focused_pane)) appDo("pane.focus", { pane: status.focused_pane }, o);
+    });
+  }
+  return { result };
 }
 
 /** tab.new in the caller's space with a shell root pane; --no-focus selects the old space and tab again. */
