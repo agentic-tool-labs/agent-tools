@@ -64,6 +64,7 @@ import {
 } from "./lib-hier.mjs";
 import { appendDecision, decisionLogPath, decisionSummary, knownRun, openRunAnchor, readDecisionInput, readDecisions } from "./lib-decisions.mjs";
 import { DEFAULT_TEAM_ARG, memberTeam, ownedTeams, readTeam, resolveMemberTeam, teamArgName, teamFileHome, teamListText, teamMemberByName, teamPath, teamsWithMember } from "./lib-roster.mjs";
+import { herdrSelfPane } from "./lib-herdr.mjs";
 
 const BOOL_FLAGS = new Set(["plain", "json", "open", "closed", "all", "summary"]);
 
@@ -162,7 +163,7 @@ function resolveTeamArg() {
   // A session that owns no team: the team it was launched into, else the live team holding its pane.
   try {
     const dir = hierarchyDir(cwd);
-    const member = memberTeam(dir, [dir, mainHierarchyDir(cwd)], process.env.HERDR_PANE_ID || process.env.TMUX_PANE || null);
+    const member = memberTeam(dir, [dir, mainHierarchyDir(cwd)], herdrSelfPane() || process.env.TMUX_PANE || null);
     if (member) {
       teamHome = member.home;
       return member.teamName;

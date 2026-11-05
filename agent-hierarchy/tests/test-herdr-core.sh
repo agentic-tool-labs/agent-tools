@@ -348,6 +348,10 @@ check "move under core: a move that did not happen reports moved:false with the 
 patch 'S.failKeepPlace=false;S.failPlainKeep=false'
 OUT=$(env -i $CORE_ENV node "$H/roster.mjs" move proj-reviewer --tab tb2 --split down --cwd "$PROJ" 2>&1)
 check "move under core (negative): a move that lands reports no reason or orphan" '! echo "$OUT" | grep -q "orphaned_transport_id\|\"moved\": false"'
+OUT=$(env -i $CORE_ENV node "$H/roster.mjs" resync --bind '{"proj-reviewer":"t1"}' --dry-run --cwd "$PROJ" 2>&1)
+check "resync under core: binding a member to the caller's own terminal (HC_TERMINAL_ID) is refused" 'echo "$OUT" | grep -q "is the caller.s own pane"'
+OUT=$(env -i $CORE_ENV node "$H/roster.mjs" resync --bind '{"proj-reviewer":"t3"}' --dry-run --cwd "$PROJ" 2>&1)
+check "resync under core (negative): binding to another terminal is not refused as the caller's own" '! echo "$OUT" | grep -q "caller.s own pane"'
 reset; setup_roster; patch 'S.terminals.t3.labels["ah.name"]="proj-reviewer"'
 OUT=$(env -i $CORE_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --cwd "$PROJ" 2>&1)
 check "spawn-one under core: a name another repo holds live is refused name-in-use; its pane closed, the holder untouched" 'echo "$OUT" | grep -q "name-in-use" && ! grep -F "hc [\"send\"" "$LOG" | grep -q "claude --agent" && grep -qE "^hc \[\"kill\",\"--json\",\"t1[0-9]\"\]" "$LOG" && ! grep -qF "\"kill\",\"--json\",\"t3\"" "$LOG" && node -e "const S=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(S.terminals.t3.state===\"live\"?0:1)" "$STATE"'

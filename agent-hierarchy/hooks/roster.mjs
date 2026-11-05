@@ -3452,7 +3452,7 @@ function ownOrchestratorPid() {
 /** The pane this session sits in: the transport's own env first, then what SessionStart
     recorded for it (`record` is the session's peers.jsonl row, or null). */
 function sessionPaneId(record) {
-  return process.env.HERDR_PANE_ID || (record && record.pane_id) || process.env.TMUX_PANE || null;
+  return herdrSelfPane() || (record && record.pane_id) || process.env.TMUX_PANE || null;
 }
 
 /**
@@ -4307,7 +4307,7 @@ function herdrArmApplies(dir, scope) {
 function herdrArmMatches(dir, scope) {
   const q = herdrArmApplies(dir, scope) ? herdrArmQuery() : { ok: false, reason: "team transport is not herdr", agents: [] };
   const prefix = scopePrefix(scope);
-  const selfPane = process.env.HERDR_PANE_ID || null;
+  const selfPane = herdrSelfPane();
   const myRoot = findGitRoot(realCwd(cwd)) || null;
   const myCheckout = checkoutRoot(realCwd(cwd)) || null;
   // Without --team a session is also named for the repo's own checkout, which differs from the
@@ -6449,7 +6449,7 @@ try {
         }
         if (!bind || typeof bind !== "object" || Array.isArray(bind)) fail("resync: --bind must be a JSON object mapping member name to pane id");
       }
-      const result = resyncMembers(team, { dir, teamCwd: findGitRoot(cwd) || cwd, selfPaneId: process.env.HERDR_PANE_ID || null, bind });
+      const result = resyncMembers(team, { dir, teamCwd: findGitRoot(cwd) || cwd, selfPaneId: herdrSelfPane(), bind });
       if (!result.query_ok) fail(result.query_error);
       if (result.bind_error) fail(result.bind_error);
       const dryRun = opts["dry-run"] === true;
@@ -7289,7 +7289,7 @@ try {
         pid: myPid,
         ppid: process.ppid,
         cwd: observed,
-        pane_id: process.env.HERDR_PANE_ID || existing.pane_id || null,
+        pane_id: herdrSelfPane() || existing.pane_id || null,
         tab_id: process.env.HERDR_TAB_ID || existing.tab_id || null,
         workspace_id: process.env.HERDR_WORKSPACE_ID || existing.workspace_id || null,
       };

@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 // way — a top-level use on either side would risk the top-level-await deadlock class documented
 // in lib-roster.mjs's header.
 import { legacyTeamPrefix, listTeamNames, memberTeam, ownedTeams, readTeam, teamArgName, ROSTER_LAYOUT_VALUES, teamRosterEntry, teamRosterKey } from "./lib-roster.mjs";
+import { herdrSelfPane } from "./lib-herdr.mjs";
 import { normalizeSessionId } from "./lib-gate.mjs";
 import { readSessionRole } from "./lib-session-role.mjs";
 
@@ -1408,7 +1409,7 @@ function resolveTeamScope(cwd, opts) {
       return { name: owned[0], home: dir, via: sessionId && orch.session_id === sessionId ? "session" : "pid", owned };
     }
     // A session that owns no team: the team it was launched into, else the live team holding its pane.
-    const member = memberTeam(dir, [dir, mainHierarchyDir(cwd)], process.env.HERDR_PANE_ID || process.env.TMUX_PANE || null);
+    const member = memberTeam(dir, [dir, mainHierarchyDir(cwd)], herdrSelfPane() || process.env.TMUX_PANE || null);
     if (member) return { name: member.teamName, home: member.home, via: member.via, owned: [] };
   } catch {
     // fail-open to default — see doc comment above.
