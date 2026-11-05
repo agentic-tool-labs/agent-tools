@@ -174,37 +174,37 @@ test('a script that fails never blocks the prompt', async ($, on) => {
   expect(seen.context).toBeUndefined()
 })
 
-// Raises one row as the engine would; true when the row as stored carries the directive.
-const row = async ($: any, on: any, input: object, silent = false) => {
+// Two main-loop requests, `counts` messages each; what the mod appended as rows of its own.
+const steps = async ($: any, on: any, counts: number[], { transcript = '', agentId = undefined as string | undefined, silent = false } = {}) => {
   const rows = mock.session(on)
-  inject($, on, { silent })
-  await $.session.append({
-    message: { type: 'user', role: 'user', isMeta: true, content: [{ type: 'text', text: 'summary' }] },
-    door: 'compaction',
-    origin: { kind: 'engine' },
-    uuid: '00000000-0000-4000-8000-000000000001',
-    ...input,
+  inject($, on, { transcript, silent })
+  on('turn.step', async function* (_: unknown, e: { turnId: string; index: number }) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null, id: 'r' }
   })
-  return JSON.stringify(rows.appended().at(-1)!.message).includes('PURPOSE')
+  for (const [index, messageCount] of counts.entries()) {
+    for await (const _ of $.turn.step({ turnId: 't1', index, model: 'm', messageCount, ...(agentId && { agentId }) })) {
+      // no chunks
+    }
+  }
+  return rows.appended().filter((r: any) => JSON.stringify(r.message).includes('PURPOSE'))
 }
 
-test('the summary row of a main-loop compaction carries the directive', async ($, on) => {
-  expect(await row($, on, {})).toBe(true)
+test('a request after a compaction (fewer messages) gets the directive as a row', async ($, on) => {
+  expect((await steps($, on, [40, 3])).length).toBe(1)
 })
 
-test('the summary row with the scripts silent is left alone', async ($, on) => {
-  expect(await row($, on, {}, true)).toBe(false)
+test('after a compaction, a conversation that already holds the directive gets no second copy', async ($, on) => {
+  expect((await steps($, on, [40, 3], { transcript: `<system-reminder>${DIRECTIVE}</system-reminder>` })).length).toBe(0)
 })
 
-test('a subagent compacting its own transcript is left alone', async ($, on) => {
-  expect(await row($, on, { agentId: 'a1' })).toBe(false)
+test('after a compaction, scripts that stay silent (OFF, a gopher, a role) add nothing', async ($, on) => {
+  expect((await steps($, on, [40, 3], { silent: true })).length).toBe(0)
 })
 
-test('the compaction notice, which no request carries, is left alone', async ($, on) => {
-  const message = { type: 'system', name: 'compact_boundary', content: [{ type: 'text', text: 'notice' }] }
-  expect(await row($, on, { message })).toBe(false)
+test('a request that carries as many messages or more is left alone', async ($, on) => {
+  expect((await steps($, on, [3, 3, 5])).length).toBe(0)
 })
 
-test('a row from any other door is left alone', async ($, on) => {
-  expect(await row($, on, { door: 'attachment' })).toBe(false)
+test('a subagent request that shrinks is left alone', async ($, on) => {
+  expect((await steps($, on, [40, 3], { agentId: 'a1' })).length).toBe(0)
 })
