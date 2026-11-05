@@ -318,6 +318,23 @@ if (input.agent_id) {
     if (worker) recordWorktreeAdds(cmd, input.cwd, input.session_id);
   }
 
+  // Issue writes: the plugin's MCP endpoint (/x/pull_requests) carries no issue
+  // tools, so `gh issue create|comment` is github-worker's only path to them.
+  // Granted only as one plain command, nothing chained or substituted.
+  if (tool === 'Bash' && /(^|:)github-worker$/.test(input.agent_type || '') && isIssueWriteGh(cmd)) {
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          permissionDecisionReason:
+            'github-pr-toolkit github-worker — gh issue create/comment, which the MCP endpoint does not carry',
+        },
+      })
+    );
+    process.exit(0);
+  }
+
   if (isToolkitMcp && worker) {
     process.stdout.write(
       JSON.stringify({
@@ -847,6 +864,16 @@ function destructiveDenial(command, cwd) {
 // the file-writing escape hatches (sed -i, `>`/`>>` redirection) are refused
 // too. A false denial just means the reviewer works from Read/Grep instead;
 // a false allow would be silent unprompted mutation. Err toward denial.
+// Exactly one `gh issue create` or `gh issue comment` command: no operator, no
+// substitution, no redirection, no escape, no env prefix, no wrapper.
+function isIssueWriteGh(command) {
+  if (/[`$<>\\]/.test(command)) return false;
+  const toks = tokenize(command);
+  if (toks.some((t) => t.op)) return false;
+  return toks.length >= 3 && toks[0].v === 'gh' && !toks[0].quoted && toks[1].v === 'issue'
+    && (toks[2].v === 'create' || toks[2].v === 'comment');
+}
+
 function isReviewerSafeBash(command) {
   const REVIEWER_HEADS = new Set([
     'git', 'ls', 'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'fd',
