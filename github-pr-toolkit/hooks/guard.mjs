@@ -656,11 +656,16 @@ function tokenize(text) {
   const toks = [];
   let cur = '';
   let quoted = false;
+  // Whether the token holds a character the shell expands OUTSIDE quotes (tilde,
+  // glob, brace). Decided per character: a token quoted in part still expands
+  // its unquoted part.
+  let unquotedSpecial = false;
   let q = null;
   const push = () => {
-    if (cur !== '' || quoted) toks.push({ v: cur, quoted });
+    if (cur !== '' || quoted) toks.push({ v: cur, quoted, unquotedSpecial });
     cur = '';
     quoted = false;
+    unquotedSpecial = false;
   };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -687,6 +692,7 @@ function tokenize(text) {
       toks.push({ v: c, op: true });
       continue;
     }
+    if ('~*?[]{}'.includes(c)) unquotedSpecial = true;
     cur += c;
   }
   push();
@@ -879,7 +885,7 @@ function isIssueWriteGh(command) {
   };
   if (/[`$<>\\]/.test(command)) return false;
   const toks = tokenize(command);
-  if (toks.some((t) => t.op || (!t.quoted && /[~*?[{]/.test(t.v)))) return false;
+  if (toks.some((t) => t.op || t.unquotedSpecial)) return false;
   if (toks.length < 3 || toks[0].quoted || toks[0].v !== 'gh' || toks[1].v !== 'issue') return false;
   const verb = toks[2].v;
   const flags = ISSUE_FLAGS[verb];
@@ -889,7 +895,7 @@ function isIssueWriteGh(command) {
     const t = toks[i].v;
     if (t.startsWith('-')) {
       const value = toks[i + 1];
-      if (!flags.has(t) || !value || value.v.startsWith('-')) return false;
+      if (!flags.has(t) || !value || value.v === '' || value.v.startsWith('-')) return false;
       i++;
     } else if (verb === 'comment' && positionals === 0 && /^[0-9]+$/.test(t)) {
       positionals++;
