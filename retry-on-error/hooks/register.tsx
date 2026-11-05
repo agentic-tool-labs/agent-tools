@@ -231,6 +231,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     interactive = e.isInteractive
     await guarded($, async () => {
+      // A new session has seen no StopFailure yet, whatever $.state carried over.
+      await $.state.set(SEEN_STOP_FAILURE, false)
       await $.command.register({
         name: 'retry-on-error',
         description: 'Auto-retry after API errors: on, off, status, or now (retry a stalled request)',

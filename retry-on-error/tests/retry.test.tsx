@@ -180,6 +180,31 @@ test('2g. once a StopFailure has been seen, a failed turn with none is not retri
   expect(seen.nudges.length).toBe(1)
 })
 
+test('2g2. once a StopFailure has been seen, a StopFailure past the wait still retries its turn once', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  await fail($, 'billing_error')
+  await turnStart($)
+  await turnEnd($, 'error')
+  await clock.advance(2500)
+  await fail($, 'server_error')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(1)
+  expect(seen.nudges[0]).toContain('(server_error)')
+})
+
+test('2g3. a new session starts with no StopFailure seen', async ($, on) => {
+  const { clock, seen } = world(on)
+  await start($)
+  await fail($, 'billing_error')
+  await start($)
+  await turnStart($)
+  await turnEnd($, 'error')
+  await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(1)
+  expect(seen.nudges[0]).toContain('(api_error)')
+})
+
 test('2h. a subagent\'s failed turn, or a main turn that ended any other way, is no failure', async ($, on) => {
   const { clock, seen } = world(on)
   await start($)
