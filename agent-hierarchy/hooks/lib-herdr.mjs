@@ -299,7 +299,7 @@ function translate(args, o) {
 /**
  * `agent start <name> [--pane <address>] [--cwd <dir>] -- <launch line>`. Into a split pane's shell: type the
  * line with `hc send`, then label the terminal `ah.name=<name>`. With no pane (no app window):
- * `hc run --bg --label ah.name=<name> --cwd <dir> -- <line>`, a hidden member (§3.2).
+ * `hc run --bg --no-parent --label ah.name=<name> --cwd <dir> -- <line>`, a hidden member (§3.2).
  */
 function startAgent(args, o) {
   const name = args[2];
@@ -313,7 +313,8 @@ function startAgent(args, o) {
     hc(["label", pane, `ah.name=${name}`], o);
   } else {
     const cwd = flagValue(args.slice(0, sep), "--cwd");
-    address = hc(["run", "--bg", "--label", `ah.name=${name}`, ...(cwd ? ["--cwd", cwd] : []), "--", line], o).address;
+    // --no-parent (§3.2 rev 5): hc's default parent is the caller's terminal, and a child ends with its parent.
+    address = hc(["run", "--bg", "--no-parent", "--label", `ah.name=${name}`, ...(cwd ? ["--cwd", cwd] : []), "--", line], o).address;
     if (!address) throw tuiError("hc_failed", "hc run printed no address");
   }
   return { result: { agent: { name, pane_id: address }, pane: { pane_id: address } } };

@@ -216,7 +216,7 @@ check "core: tab create with no app window is a named refusal" 'echo "$OUT" | gr
 reset; translate "$CORE_ENV" '["agent","start","a9","--pane","t2","--","env PATH=/x claude --agent ah:x"]'
 check "core: agent start into a pane types the line, then labels ah.name" 'has "hc [\"send\",\"t2\",\"env PATH=/x claude --agent ah:x\",\"--json\"]" && has "hc [\"label\",\"t2\",\"ah.name=a9\",\"--json\"]" && [ "$(grep -n "\"send\"" "$LOG" | cut -d: -f1)" -lt "$(grep -n "\"label\"" "$LOG" | cut -d: -f1)" ]'
 reset; translate "$CORE_ENV" '["agent","start","a9","--cwd","/w","--","claude"]'
-check "core: agent start with no pane is a hidden hc run labelled ah.name" 'has "hc [\"run\",\"--bg\",\"--label\",\"ah.name=a9\",\"--cwd\",\"/w\",\"--\",\"claude\",\"--json\"]" && echo "$OUT" | grep -q "\"pane_id\":\"t1[0-9]\""'
+check "core: agent start with no pane is a hidden hc run with no parent, labelled ah.name" 'has "hc [\"run\",\"--bg\",\"--no-parent\",\"--label\",\"ah.name=a9\",\"--cwd\",\"/w\",\"--\",\"claude\",\"--json\"]" && echo "$OUT" | grep -q "\"pane_id\":\"t1[0-9]\""'
 
 # ---- §5.2 move ----
 reset; translate "$CORE_ENV" '["pane","move","t2","--tab","tb2","--split","down"]'
@@ -262,7 +262,7 @@ OUT=$(env -i $CORE_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --c
 check "spawn-one under core with the app: split, launch line typed with the spawner PATH, address stored" 'grep -q "pane.split" "$LOG" && grep -qF "\"send\",\"t1" "$LOG" && grep -F "\"send\"" "$LOG" | grep -qF "env PATH='"'"'$SANDBOX/bin:$NODE_DIR'"'"' claude --agent" && node -e "const t=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(/^t[0-9]+$/.test(t.members[0].transport_id)&&t.transport===\"herdr\"&&!(\"herdr_flavour\" in t)?0:1)" "$TEAM_FILE"'
 reset; setup_roster; patch 'S.noApp=true'
 OUT=$(env -i $CORE_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --cwd "$PROJ" 2>&1)
-check "spawn-one under core with no app: one hidden hc run labelled ah.name, its address stored" 'grep -qF "hc [\"run\",\"--bg\",\"--label\",\"ah.name=" "$LOG" && ! grep -q "pane.split" "$LOG" && node -e "const t=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(/^t[0-9]+$/.test(t.members[0].transport_id)?0:1)" "$TEAM_FILE"'
+check "spawn-one under core with no app: one hidden hc run labelled ah.name, its address stored" 'grep -qF "hc [\"run\",\"--bg\",\"--no-parent\",\"--label\",\"ah.name=" "$LOG" && ! grep -q "pane.split" "$LOG" && node -e "const t=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(/^t[0-9]+$/.test(t.members[0].transport_id)?0:1)" "$TEAM_FILE"'
 reset; setup_roster
 OUT=$(env -i $TUI_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --dry-run --cwd "$PROJ" 2>&1)
 check "spawn-one under tui (negative): the launch line is herdr agent start, with no PATH prefix" 'echo "$OUT" | grep -q "herdr agent start" && ! echo "$OUT" | grep -q "env PATH="'
