@@ -6520,12 +6520,20 @@ try {
         out({ moved: false, dry_run: true, command: commandString });
         break;
       }
+      let moveReply;
       try {
-        herdrCall(herdrArgs);
+        moveReply = herdrCall(herdrArgs);
       } catch (err) {
         fail(err.message);
       }
-      // Ignore the move response body entirely (spec 0008 §2/§5.4 step 7) — re-query instead.
+      // Under herdr core a move that did not happen says so in its reply (why, and a terminal it may have left
+      // without a pane); that is passed to the user, and nothing is re-queried or rewritten.
+      const coreMove = herdrFlavour() === "core" && moveReply && moveReply.result;
+      if (coreMove && coreMove.changed === "false") {
+        out({ moved: false, member: { role: member.role, name: member.name }, command: commandString, reason: coreMove.why || "the move did not happen", ...(coreMove.orphaned_transport_id ? { orphaned_transport_id: coreMove.orphaned_transport_id, remedy: coreMove.remedy } : {}) });
+        break;
+      }
+      // Otherwise ignore the move response body entirely (spec 0008 §2/§5.4 step 7) — re-query instead.
       const result = resyncMembers(team);
       if (!result.query_ok) {
         // spec 0008 §7.5: the pane already moved, so a query failure is reported at exit 0, never fail() —

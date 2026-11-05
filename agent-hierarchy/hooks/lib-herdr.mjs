@@ -312,9 +312,10 @@ function translate(args, o) {
  * - No pane (no app window): a hidden `hc run --bg --no-parent --label ah.name=<name> --label ah.spawn=<nonce>
  *   -- sh -c <line>`, then the post-check. `--no-parent`, because hc's default parent is the caller's terminal
  *   and a child ends with its parent.
- * - Post-check: two or more live holders (two spawns at once) → the earliest `created_ms`, then the lowest
- *   address, keeps the name; a loser removes its own label (a hidden loser is killed by its address) and is
- *   refused.
+ * - Post-check: any other live holder (two spawns at once) → this start yields: it removes its own label (a
+ *   hidden one is killed by its address) and is refused. Two starts that each see the other are both refused,
+ *   never both kept. A post-check that cannot be read keeps the start (the pre-check passed) and says so in the
+ *   reply's `name_check`.
  * A hidden start whose reply has no usable address is found by its nonce, never by the name, and killed, or
  * reported as an orphan.
  */
@@ -328,31 +329,33 @@ function startAgent(args, o) {
   const before = holders();
   if (before.length) throw tuiError("agent_name_taken", `agent start: ah.name=${name} is already live (${before.join(", ")})`);
   const nonce = `ah.spawn=${flagValue(pre, "--spawn-nonce") || randomBytes(8).toString("hex")}`;
-  /** Two spawns at once: the earliest holder keeps the name; `mine` loses → its label goes and it is refused. */
-  const postCheck = (mine, onLose) => {
-    const h = holders();
-    if (h.length < 2) return;
-    const created = (a) => {
-      try {
-        const c = Number(hc(["get", a], o).created_ms);
-        return Number.isFinite(c) ? c : Infinity;
-      } catch {
-        return Infinity;
-      }
-    };
-    const byAddr = (x, y) => x.length - y.length || (x < y ? -1 : x > y ? 1 : 0);
-    const winner = h.map((a) => ({ a, c: created(a) })).sort((x, y) => x.c - y.c || byAddr(x.a, y.a))[0].a;
-    if (winner === mine) return;
+  /** Two spawns at once: any other live holder → `mine` yields, its label goes and it is refused. Returns the
+   * reply's `name_check` note when the check could not be read. */
+  const postCheck = (mine, kill) => {
+    let others;
+    try {
+      others = holders().filter((a) => a !== mine);
+    } catch (err) {
+      return { name_check: `post-check unreadable, start kept (the pre-check passed): ${err.message}` };
+    }
+    if (others.length === 0) return {};
     quietly(() => hc(["label", mine, "ah.name="], o));
-    if (onLose) quietly(() => onLose());
-    throw tuiError("agent_name_taken", `agent start: ah.name=${name} was taken at the same moment by ${winner}`);
+    let left = "";
+    if (kill) {
+      try {
+        hc(["kill", mine], o);
+      } catch {
+        left = `; its terminal ${mine} could not be killed: \`hc kill ${mine}\``;
+      }
+    }
+    throw tuiError("agent_name_taken", `agent start: ah.name=${name} was taken at the same moment by ${others.join(", ")}${left}`);
   };
   const pane = flagValue(pre, "--pane");
   if (pane) {
     hc(["label", pane, `ah.name=${name}`, nonce], o);
-    postCheck(pane);
+    const note = postCheck(pane, false);
     hc(["send", pane, line], o);
-    return { result: { agent: { name, pane_id: pane }, pane: { pane_id: pane } } };
+    return { result: { agent: { name, pane_id: pane }, pane: { pane_id: pane }, ...note } };
   }
   const cwd = flagValue(pre, "--cwd");
   let address = null;
@@ -364,8 +367,8 @@ function startAgent(args, o) {
     why = err.message;
   }
   if (address) {
-    postCheck(address, () => hc(["kill", address], o));
-    return { result: { agent: { name, pane_id: address }, pane: { pane_id: address } } };
+    const note = postCheck(address, true);
+    return { result: { agent: { name, pane_id: address }, pane: { pane_id: address }, ...note } };
   }
   let started = [];
   try {
@@ -520,11 +523,25 @@ function movePane(args, o) {
   // Any miss gets a plain keep, even when the park call itself failed: a park can land although its call
   // failed. A plain keep on a terminal that is already shown leaves it where it is.
   if (!adopted) {
+    let problem = null;
     try {
       appDo("terminal.keep", { terminal: address }, o);
+      // The keep is asynchronous too: a terminal not shown shortly after (`AH_HC_KEEP_WAIT_MS`) is reported.
+      const keepDeadline = Date.now() + Number(process.env.AH_HC_KEEP_WAIT_MS || 1000);
+      const shown = (() => {
+        try {
+          return pollUntil(() => shownTerminals(appWorld(o)).some((t) => t.terminal === address), keepDeadline);
+        } catch {
+          return null;
+        }
+      })();
+      if (!shown) problem = "it was not seen shown after terminal.keep";
     } catch (err) {
+      problem = err.message;
+    }
+    if (problem) {
       result.orphaned_transport_id = address;
-      result.remedy = `${address} may have no pane (${err.message}); show it with \`herdr-app do terminal.keep '${JSON.stringify({ terminal: address })}'\``;
+      result.remedy = `${address} may have no pane (${problem}); show it with \`herdr-app do terminal.keep '${JSON.stringify({ terminal: address })}'\``;
     }
   }
   if (!relabel) {
