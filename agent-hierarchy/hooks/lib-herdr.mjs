@@ -2,24 +2,23 @@
  * agent-hierarchy — which herdr a session runs under, and the one translator from the herdr TUI calls ah makes
  * to herdr core (`hc`) and the herdr desktop app (`herdr-app`).
  *
- * Spec: agent-hierarchy-v2 docs/specs/herdr-desktop.md, revision 2, Phase 3. The transport string stays
- * "herdr" for both; the flavour is `tui` or `core`. Under `tui` the translator is `muxExec("herdr", ...)`,
- * unchanged. Under `core` each TUI argv becomes `hc` / `herdr-app` calls, and the reply is shaped like the
- * TUI's, so callers parse it as they always have. A failure is thrown shaped like a failed TUI call: exit 1
- * with `{"error":{"code","message"}}` on stdout.
+ * The transport string stays "herdr" for both; the flavour is `tui` or `core`. Under `tui` the translator is
+ * `muxExec("herdr", ...)`, unchanged. Under `core` each TUI argv becomes `hc` / `herdr-app` calls, and the reply
+ * is shaped like the TUI's, so callers parse it as they always have. A failure is thrown shaped like a failed TUI
+ * call: exit 1 with `{"error":{"code","message"}}` on stdout.
  */
 
 import { randomBytes } from "node:crypto";
 import { muxExec } from "./lib-mux.mjs";
 
-/** `tui` when HERDR_ENV=1, else `core` when HC_TERMINAL_ID is non-empty, else null (not herdr). §2. */
+/** `tui` when HERDR_ENV=1, else `core` when HC_TERMINAL_ID is non-empty, else null (not herdr). */
 export function herdrFlavourFromEnv(env = process.env) {
   if (env.HERDR_ENV === "1") return "tui";
   if (typeof env.HC_TERMINAL_ID === "string" && env.HC_TERMINAL_ID !== "") return "core";
   return null;
 }
 
-/** The flavour for a herdr call. v1 has no daemon, so it is the env's alone; nothing is stored on the team (§2, rev 4). */
+/** The flavour for a herdr call. v1 has no daemon, so it is the env's alone; nothing is stored on the team. */
 export function herdrFlavour() {
   return herdrFlavourFromEnv() || "tui";
 }
@@ -75,9 +74,12 @@ function run(bin, args, o) {
   }
 }
 
-/** One `hc` call with `--json`. hc writes `{"error":{"kind","message","hint"}}` on stderr (CORE cli.rs:207-219). */
+/**
+ * One `hc <subcommand> --json ...` call. `--json` goes right after the subcommand, so it never lands after a
+ * `--` where it would be handed to the program. hc writes `{"error":{"kind","message","hint"}}` on stderr.
+ */
 function hc(args, o, { notFound = "not_found" } = {}) {
-  const r = run("hc", [...args, "--json"], o);
+  const r = run("hc", [args[0], "--json", ...args.slice(1)], o);
   if (!r.ok) {
     let e = null;
     try {
@@ -91,11 +93,11 @@ function hc(args, o, { notFound = "not_found" } = {}) {
   try {
     return JSON.parse(r.stdout);
   } catch {
-    throw tuiError("hc_failed", `hc ${args[0]} produced unparseable output`);
+    throw tuiError("hc_unusable", `hc ${args[0]} produced unparseable output`);
   }
 }
 
-/** One `herdr-app` call. It prints its JSON reply on stdout and exits 1 on `{error}`, 2 with no window (APP control.rs:73-128). */
+/** One `herdr-app` call. It prints its JSON reply on stdout and exits 1 on `{error}`, 2 when no window answers. */
 function app(args, o) {
   const r = run("herdr-app", args, o);
   let reply = null;
@@ -115,7 +117,7 @@ const appDo = (action, payload, o) => app(["do", action, JSON.stringify(payload)
 const appStatus = (o) => app(["status"], o);
 const appWorld = (o) => app(["ls"], o);
 
-/** Every terminal the window shows: `{terminal, pane, tab, space}` (APP window.rs:3746-3786). */
+/** Every terminal the window shows: `{terminal, pane, tab, space}`, from `herdr-app ls`. */
 function shownTerminals(world) {
   const out = [];
   for (const s of (world && world.spaces) || []) {
@@ -135,9 +137,8 @@ function needApp(verb, o) {
 }
 
 /**
- * The live terminal labelled `ah.name=<name>` (§3.1). None: `agent_not_found`. More than one: never picks
- * one. ponytail: the clash is reported as `agent_name_ambiguous`, not `agent_not_found`, so ah's
- * three-valued logic reads it as indeterminate (as §3.3 says) rather than not-live.
+ * The live terminal labelled `ah.name=<name>`. None: `agent_not_found`. More than one: never picks one, and
+ * reports `agent_name_ambiguous`, which ah's three-valued liveness reads as indeterminate, never as not-live.
  */
 function lookup(name, o) {
   const rows = (hc(["ls", "--label", `ah.name=${name}`], o).terminals || []).filter((t) => t.state === undefined || t.state === "live");
@@ -146,7 +147,7 @@ function lookup(name, o) {
   return rows[0].address;
 }
 
-/** TUI `agent_status` for a core record (§3.3): the reported state, `unknown` when none was reported. */
+/** TUI `agent_status` for a core record: the reported state, `unknown` when none was reported. */
 function mappedStatus(state) {
   return typeof state === "string" && state ? state : "unknown";
 }
@@ -158,7 +159,7 @@ function liveRecord(address, o) {
   return rec;
 }
 
-/** TUI `agent_type` for a core record (§3.3): `status.app`, with `claude-code` → `claude`; null when none was reported. */
+/** TUI `agent_type` for a core record: `status.app`, with `claude-code` → `claude`; null when none was reported. */
 function agentType(rec) {
   const appName = rec.status && typeof rec.status.app === "string" && rec.status.app ? rec.status.app : null;
   return appName === "claude-code" ? "claude" : appName;
@@ -172,16 +173,22 @@ function agentReply(address, o) {
 
 /**
  * TUI `agent list` rows for every live terminal: `name` from its `ah.name` label, `pane_id` = its address, the
- * tab and space from the app's labels. ponytail: one `hc get` per terminal (`hc ls` rows carry no labels); one
+ * tab and space from the app's labels. A terminal whose `hc get` fails (it ended between the list and the get)
+ * is left out, as not found. ponytail: one `hc get` per terminal (`hc ls` rows carry no labels); one
  * `terminal.list` with labels if a team ever grows past a handful of terminals.
  */
 function agentRows(o) {
   return (hc(["ls"], o).terminals || [])
     .filter((t) => t.state === undefined || t.state === "live")
-    .map((t) => {
-      const rec = hc(["get", t.address], o);
+    .flatMap((t) => {
+      let rec;
+      try {
+        rec = hc(["get", t.address], o);
+      } catch {
+        return [];
+      }
       const labels = rec.labels || {};
-      return { name: labels["ah.name"] || null, pane_id: t.address, tab_id: labels["herdr.tab"] || null, workspace_id: labels["herdr.space"] || null, cwd: rec.cwd || null, agent_status: mappedStatus(rec.status && rec.status.state), agent_type: agentType(rec) };
+      return [{ name: labels["ah.name"] || null, pane_id: t.address, tab_id: labels["herdr.tab"] || null, workspace_id: labels["herdr.space"] || null, cwd: rec.cwd || null, agent_status: mappedStatus(rec.status && rec.status.state), agent_type: agentType(rec) }];
     });
 }
 
@@ -192,7 +199,7 @@ function flagValue(args, flag) {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
 }
 
-/** `hc read` reply text. Visible screen = `--lines 0`; history = `--lines N` (§5). `--json` keeps hc's own notes out of the text. */
+/** `hc read` reply text. Visible screen = `--lines 0`; history = `--lines N`. `--json` keeps hc's own notes out of the text. */
 function readText(address, args, o) {
   const lines = args.includes("--source") && flagValue(args, "--source") === "visible" ? 0 : Number(flagValue(args, "--lines") || 0);
   const r = hc(["read", address, "--lines", String(lines)], o, { notFound: "agent_not_found" });
@@ -202,7 +209,7 @@ function readText(address, args, o) {
 const KEY_NAMES = { Enter: "enter", Return: "enter", Escape: "esc", Esc: "esc", Tab: "tab", Space: "space", BSpace: "backspace", Backspace: "backspace", Up: "up", Down: "down", Left: "left", Right: "right", Home: "home", End: "end", PageUp: "pageup", PageDown: "pagedown", Delete: "delete" };
 const CORE_KEYS = new Set(Object.values(KEY_NAMES).concat(["esc"]));
 
-/** TUI key name → hc key name (CORE keys.rs:20-75). An unmapped key fails. */
+/** TUI key name → hc key name. An unmapped key fails. */
 export function coreKey(key) {
   if (KEY_NAMES[key]) return KEY_NAMES[key];
   if (CORE_KEYS.has(key)) return key;
@@ -269,7 +276,7 @@ function translate(args, o) {
     case "pane close":
       return json(closePane(args[2], o));
     case "pane rename":
-      // §5.3: the pane title cannot be set under core; success with no change.
+      // The pane title cannot be set under core: success with no change.
       return json({ result: {} });
     case "pane layout":
       return json(paneLayout(args, o));
@@ -298,8 +305,10 @@ function translate(args, o) {
 
 /**
  * `agent start <name> [--pane <address>] [--cwd <dir>] -- <launch line>`. Into a split pane's shell: type the
- * line with `hc send`, then label the terminal `ah.name=<name>`. With no pane (no app window):
- * `hc run --bg --no-parent --label ah.name=<name> --cwd <dir> -- <line>`, a hidden member (§3.2).
+ * line with `hc send`, then label the terminal `ah.name=<name>`. With no pane (no app window): a hidden
+ * `hc run --bg --no-parent --label ah.name=<name> --cwd <dir> -- sh -c <line>`. `--no-parent`, because hc's
+ * default parent is the caller's terminal and a child ends with its parent. A reply with no usable address
+ * leaves whatever it started behind: it is found by its label and killed, or reported as an orphan.
  */
 function startAgent(args, o) {
   const name = args[2];
@@ -307,33 +316,52 @@ function startAgent(args, o) {
   const line = sep >= 0 ? args.slice(sep + 1).join(" ") : "";
   if (!line) throw tuiError("invalid_params", "agent start: no launch line after --");
   const pane = flagValue(args.slice(0, sep), "--pane");
-  let address = pane;
   if (pane) {
     hc(["send", pane, line], o);
     hc(["label", pane, `ah.name=${name}`], o);
-  } else {
-    const cwd = flagValue(args.slice(0, sep), "--cwd");
-    // --no-parent (§3.2 rev 5): hc's default parent is the caller's terminal, and a child ends with its parent.
-    address = hc(["run", "--bg", "--no-parent", "--label", `ah.name=${name}`, ...(cwd ? ["--cwd", cwd] : []), "--", line], o).address;
-    if (!address) throw tuiError("hc_failed", "hc run printed no address");
+    return { result: { agent: { name, pane_id: pane }, pane: { pane_id: pane } } };
   }
-  return { result: { agent: { name, pane_id: address }, pane: { pane_id: address } } };
+  const cwd = flagValue(args.slice(0, sep), "--cwd");
+  let address = null;
+  let why = null;
+  try {
+    address = hc(["run", "--bg", "--no-parent", "--label", `ah.name=${name}`, ...(cwd ? ["--cwd", cwd] : []), "--", "sh", "-c", line], o).address || null;
+    if (!address) why = "hc run printed no address";
+  } catch (err) {
+    why = err.message;
+  }
+  if (address) return { result: { agent: { name, pane_id: address }, pane: { pane_id: address } } };
+  let started = null;
+  try {
+    started = lookup(name, o);
+  } catch {
+    // nothing labelled with the name is live: nothing was left behind
+  }
+  if (!started) throw tuiError("hc_failed", `agent start ${name}: ${why}`);
+  let killed = true;
+  try {
+    hc(["kill", started], o);
+  } catch {
+    killed = false;
+  }
+  throw tuiError("hc_failed", killed ? `agent start ${name}: ${why}; the terminal it started (${started}) was killed` : `agent start ${name}: ${why}; terminal ${started} (ah.name=${name}) is an orphan: \`hc kill ${started}\``);
 }
 
-/** `hc kill`, with or without the app: the app's pane goes with the terminal (§5, E-4). */
+/** `hc kill`, with or without the app: the app's pane goes with the terminal. */
 function closePane(address, o) {
   hc(["kill", address], o, { notFound: "pane_not_found" });
   return { result: {} };
 }
 
-/** Core's default terminal size, which a terminal adopted into a tab that is not shown keeps until it is shown (§5.1, E-8). */
+/** Core's default terminal size, which a terminal adopted into a tab that is not shown keeps until it is shown. */
 const DEFAULT_COLS = 200;
 const DEFAULT_ROWS = 120;
 
 /**
- * §5.1: the panes of the target's tab (the caller's for `--current`), each sized by its terminal's cols × rows
- * at the origin, with `positions:false` so the split rule takes its aspect path. `zoomed` is left out: the
- * app's status `zoom` is the window's font zoom, not a pane zoom (APP window.rs:3727).
+ * The panes of the target's tab (the caller's for `--current`), each sized by its terminal's cols × rows at the
+ * origin, with `positions:false` so the split rule takes its aspect path. A pane at core's default size is
+ * `size_known:false`. `zoomed` is always false: the app's status `zoom` is the window's font zoom, and no
+ * command reports a pane zoom.
  */
 function paneLayout(args, o) {
   const status = needApp("pane layout", o);
@@ -351,10 +379,10 @@ function paneLayout(args, o) {
       return { pane_id: t.terminal, rect: { x: 0, y: 0, width, height }, ...(width === DEFAULT_COLS && height === DEFAULT_ROWS ? { size_known: false } : {}) };
     });
   const focused = shown.find((t) => t.pane === status.focused_pane);
-  return { result: { layout: { panes, positions: false, tab_id: tab, focused_pane_id: focused ? focused.terminal : null } } };
+  return { result: { layout: { panes, positions: false, tab_id: tab, zoomed: false, focused_pane_id: focused ? focused.terminal : null } } };
 }
 
-/** §3.2, app present: split the target's app pane, cd the new shell when --cwd differs, give focus back for --no-focus. */
+/** App present: split the target's app pane, cd the new shell when --cwd differs, give focus back for --no-focus. */
 function splitPane(args, o) {
   const status = needApp("pane split", o);
   const target = flagValue(args, "--pane");
@@ -385,57 +413,85 @@ function paneList(args, o) {
   return { result: { panes: ws ? rows.filter((r) => r.workspace_id === ws) : rows } };
 }
 
-/** A fresh tab (`tb`) or space (`sp`) id in the app's own format, 32 lowercase hex (§5.2, E-10). */
+/** A fresh tab (`tb`) or space (`sp`) id in the app's own format, 32 lowercase hex. */
 const mintId = (prefix) => `${prefix}${randomBytes(16).toString("hex")}`;
 
+/** Best effort: an app call during cleanup must never hide the result it is cleaning up after. */
+function quietly(fn) {
+  try {
+    fn();
+  } catch {
+    // cleanup only
+  }
+}
+
 /**
- * §5.2: park, wait for the blanked space label, relabel, wait for adoption. Adoption always lands right of the
- * tab's last pane, so `--split` is accepted and not honoured. Past the deadline (`AH_HC_ADOPT_WAIT_MS`), the
- * terminal is shown again with terminal.keep and the reply says `changed:"false"`.
+ * Move a pane: park the terminal, wait for the park to land (its `herdr.space` label goes), then give it a pane
+ * again. `--tab X --split D` shows X and runs `terminal.keep --place D` beside X's focused pane; `--new-tab`
+ * shows the space and runs `terminal.keep --place tab`; both restore the user's space, tab and focused pane in a
+ * finally. `--new-workspace` relabels into minted `sp`/`tb` ids, which the app adopts without moving focus.
+ * Not seen in place by the deadline (`AH_HC_ADOPT_WAIT_MS`), or any failure after the park: `terminal.keep`
+ * with no place shows the terminal again, and the reply is `changed:"false"`.
  */
 function movePane(args, o) {
-  needApp("pane move", o);
+  const status = needApp("pane move", o);
   const address = args[2];
-  const before = shownTerminals(appWorld(o));
-  const here = before.find((t) => t.terminal === address);
+  const world = appWorld(o);
+  const here = shownTerminals(world).find((t) => t.terminal === address);
+  const relabel = args.includes("--new-workspace");
   let space;
   let tab = null;
+  let place;
   if (args.includes("--tab")) {
     tab = flagValue(args, "--tab");
-    const dest = (appWorld(o).spaces || []).find((s) => (s.tabs || []).some((t) => t.id === tab));
+    const dest = (world.spaces || []).find((s) => (s.tabs || []).some((t) => t.id === tab));
     if (!dest) throw tuiError("tab_not_found", `pane move: no tab ${tab}`);
     space = dest.id;
+    place = flagValue(args, "--split") === "down" ? "down" : "right";
   } else if (args.includes("--new-tab")) {
     space = flagValue(args, "--workspace") || (here && here.space);
     if (!space) throw tuiError("pane_not_found", `pane move: ${address} is in no space`);
-    tab = mintId("tb");
-  } else if (args.includes("--new-workspace")) {
+    place = "tab";
+  } else if (relabel) {
     space = mintId("sp");
     tab = mintId("tb");
   } else {
     throw tuiError("invalid_params", "pane move: one of --tab, --new-tab, --new-workspace");
   }
-  // §5.2: 5 s; E-10 measured adoption at 0.3-0.5 s.
   const deadline = Date.now() + Number(process.env.AH_HC_ADOPT_WAIT_MS || 5000);
-  appDo("terminal.park", { terminal: address }, o);
-  // Park is asynchronous; a label written before it lands would be blanked by it.
-  const parked = pollUntil(() => {
-    const labels = hc(["get", address], o).labels || {};
-    return !labels["herdr.space"];
-  }, deadline);
+  let parked = false;
   let adopted = null;
-  if (parked) {
-    hc(["label", address, `herdr.space=${space}`, `herdr.tab=${tab}`], o);
-    adopted = pollUntil(() => shownTerminals(appWorld(o)).find((t) => t.terminal === address && t.space === space && t.tab === tab), deadline);
-  }
-  if (!adopted) {
-    appDo("terminal.keep", { terminal: address }, o);
+  try {
+    appDo("terminal.park", { terminal: address }, o);
+    parked = true;
+    // Park is asynchronous; a label or keep before it lands is undone or refused.
+    const landed = pollUntil(() => !(hc(["get", address], o).labels || {})["herdr.space"], deadline);
+    if (!landed) return { result: { changed: "false" } };
+    if (relabel) {
+      hc(["label", address, `herdr.space=${space}`, `herdr.tab=${tab}`], o);
+    } else {
+      appDo("space.select", { id: space }, o);
+      if (place !== "tab") appDo("tab.select", { id: tab }, o);
+      appDo("terminal.keep", { terminal: address, place }, o);
+    }
+    adopted = pollUntil(() => shownTerminals(appWorld(o)).find((t) => t.terminal === address && t.space === space && (!tab || t.tab === tab)), deadline);
+    if (!adopted) return { result: { changed: "false" } };
+    return { result: { changed: "true", pane: { pane_id: address, tab_id: adopted.tab, workspace_id: adopted.space } } };
+  } catch {
     return { result: { changed: "false" } };
+  } finally {
+    if (parked && !adopted) quietly(() => appDo("terminal.keep", { terminal: address }, o));
+    if (!relabel) {
+      quietly(() => appDo("space.select", { id: status.space }, o));
+      quietly(() => appDo("tab.select", { id: status.tab }, o));
+      quietly(() => {
+        if (status.focused_pane && shownTerminals(appWorld(o)).some((t) => t.pane === status.focused_pane)) appDo("pane.focus", { pane: status.focused_pane }, o);
+      });
+    }
   }
-  return { result: { changed: "true", pane: { pane_id: address, tab_id: adopted.tab, workspace_id: adopted.space } } };
 }
 
-/** §5.4: tab.new in the caller's space with a shell root pane; --no-focus selects the old space and tab again. */
+/** tab.new in the caller's space with a shell root pane; --no-focus selects the old space and tab again. */
 function createTab(args, o) {
   const status = needApp("tab create", o);
   let space = flagValue(args, "--workspace");

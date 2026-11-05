@@ -139,7 +139,7 @@ try {
         // the role scan safe-refuses to no `team` field at all when it is ambiguous. A session that
         // resolves to no team is a legitimate non-peer session, not a mismatch: detection skips
         // entirely, silently, same reasoning as an absent expected_root.
-        // Under herdr core the pane id is the terminal address, HC_TERMINAL_ID (herdr-desktop spec §2).
+        // Under herdr core the pane id is the terminal address, HC_TERMINAL_ID.
         const paneId = herdrSelfPane() || process.env.TMUX_PANE || null;
         const resolved = attributeSessionTeam(dir, role, { paneId, homes: [dir, mainHierarchyDir(cwd)] });
         const team = resolved && resolved.team;

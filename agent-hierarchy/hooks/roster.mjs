@@ -2704,7 +2704,7 @@ function spawnShape(member, transport, agent = null) {
     : [];
   const launchArgs = [...mappedArgs, ...(nativeArgs || [])];
   const claudeCmd = `claude ${agentFlags.join(" ")}`;
-  // herdr-desktop spec §3.2: under herdr core the launch is the command line itself. launchMember sends it
+  // Under herdr core the launch is the command line itself. launchMember sends it
   // through the translator as `agent start`: typed into the split pane's shell, or `hc run` with no app
   // window. ponytail: a non-claude kind's binary is taken to be its kind name, as `herdr agent start --kind`
   // resolves it today; give KIND_HARNESS a binary field if a kind ever differs.
@@ -2713,7 +2713,7 @@ function spawnShape(member, transport, agent = null) {
     kind,
     args: nativeArgs ? [...nativeArgs] : null,
     layout: [],
-    // §3.2 rev 3: core's own PATH has no node, so a member's node hooks would fail; it gets this process's PATH.
+    // Core's own PATH has no node, so a member's node hooks would fail; it gets this process's PATH.
     launch: [`env PATH=${shQuote(process.env.PATH || "")} ${isClaude ? claudeCmd : [kind, ...launchArgs.map(shQuote)].join(" ")}`],
     launch_cwd: cwd,
     target_placeholder: null,
@@ -2925,7 +2925,7 @@ function effectiveMode(mode, paneCount) {
  * tie-breaking. Exists so the rule is unit-tested and the orchestrator never
  * improvises it.
  *
- * Under herdr core (herdr-desktop spec §5.1) `positions` is false: panes have sizes but no positions, so the
+ * Under herdr core `positions` is false: panes have sizes but no positions, so the
  * band rules, which need the root box, are skipped for the aspect rule. A candidate with `size_known: false`
  * makes that decision "right", into the largest known pane, else the tab's last pane. With `positions` absent
  * or true, nothing changes.
@@ -4014,7 +4014,7 @@ async function launchMember(member, transport) {
 }
 
 /**
- * A herdr core launch (herdr-desktop spec §3.2): `agent start` through the translator, into the pane the split
+ * A herdr core launch: `agent start` through the translator, into the pane the split
  * made (`transport_id`), or, with no app window, a hidden `hc run` whose address becomes `transport_id`. No
  * retry: a second start into the same shell would type the line twice.
  */
@@ -4054,7 +4054,7 @@ async function layoutAndLaunch(dir, allMembers, transport, mode, splitCwd, calle
   for (const m of refused) m.transport_id = null;
 
   let panes = [];
-  // herdr core with no app window (herdr-desktop spec §3.2): nothing to place; each member is a hidden
+  // herdr core with no app window: nothing to place; each member is a hidden
   // `hc run` and its address comes back from the launch.
   let hidden = false;
   if (transport === "herdr" && peerMembers.length > 0) {
