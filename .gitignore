@@ -10,5 +10,6 @@ node_modules/
 # captures, which are conversation content and must not reach the public remote.
 .claude/
 
-# Written by Claude Code when it loads task-gopher's mod from a plugin folder.
+# Written by Claude Code when it loads a plugin's mod from its folder.
 task-gopher/tsconfig.json
+retry-on-error/tsconfig.json

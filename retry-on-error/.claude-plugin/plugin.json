@@ -1,6 +1,6 @@
 {
   "name": "retry-on-error",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Resumes a session after a turn dies on a transient API error or a stalled API request: waits a few seconds, then submits a short continue prompt.",
   "author": {
     "name": "Jim Cline"
