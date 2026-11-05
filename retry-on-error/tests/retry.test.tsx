@@ -163,15 +163,21 @@ test('2f. a turn end past the wait does not override the StopFailure before it',
   expect(seen.nudges[0]).toContain('(rate_limit)')
 })
 
-test('2g. the last turn\'s StopFailure does not silence the next turn\'s failure', async ($, on) => {
+test('2g. once a StopFailure has been seen, a failed turn with none is not retried; with none ever seen (2c) it is', async ($, on) => {
   const { clock, seen } = world(on)
   await start($)
   await fail($, 'billing_error')
   await turnStart($)
   await turnEnd($, 'error')
   await clock.advance(120_000)
+  expect(seen.nudges.length).toBe(0)
+  expect(seen.toasts.at(-1)).toBe('turn failed (unknown): no details')
+
+  // the next turn's StopFailure still retries as before
+  await turnStart($, 't3')
+  await fail($, 'server_error')
+  await clock.advance(5000)
   expect(seen.nudges.length).toBe(1)
-  expect(seen.nudges[0]).toContain('(api_error)')
 })
 
 test('2h. a subagent\'s failed turn, or a main turn that ended any other way, is no failure', async ($, on) => {

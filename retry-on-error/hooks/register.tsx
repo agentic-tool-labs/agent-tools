@@ -13,6 +13,10 @@ const LAST = { plugin: 'retry-on-error', key: 'last' } as const
 // report arriving in between belongs to the failure that nudge already
 // answered. Kept in $.state so it holds across a hot reload.
 const NUDGED = { plugin: 'retry-on-error', key: 'nudged' } as const
+// True once this session has seen a StopFailure, so classic hooks reach the mod:
+// a failed turn with none is then one StopFailure does not report (a blocking
+// limit, a model error), and it is not retried. In $.state to survive a reload.
+const SEEN_STOP_FAILURE = { plugin: 'retry-on-error', key: 'seenStopFailure' } as const
 // True while the stall notice shows; the Retry now band draws from it.
 const stalled = atom({ plugin: 'retry-on-error', key: 'stalled' } as const, false)
 
@@ -239,6 +243,7 @@ export const register: Register = (on, options) => {
     // agent_type is also set on the main thread under --agent; agent_id only in a subagent.
     if (e.agent_id === undefined) {
       await guarded($, async () => {
+        await $.state.set(SEEN_STOP_FAILURE, true)
         if (!(await inScope($)) || selfAborted !== undefined) return
         classified = true
         fallback?.cancel()
@@ -262,7 +267,10 @@ export const register: Register = (on, options) => {
           fallback?.cancel()
           fallback = $.clock.after(PAIR_MS, () => {
             fallback = undefined
-            void guarded($, () => handle($, { kind: GENERIC, turnId: e.turnId }))
+            void guarded($, async () => {
+              const seen = (await $.state.get(SEEN_STOP_FAILURE)).value === true
+              await handle($, { kind: seen ? 'unknown' : GENERIC, turnId: e.turnId })
+            })
           })
         }
       })
