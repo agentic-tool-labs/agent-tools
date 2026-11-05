@@ -692,7 +692,8 @@ function tokenize(text) {
       toks.push({ v: c, op: true });
       continue;
     }
-    if ('~*?[]{}'.includes(c)) unquotedSpecial = true;
+    // `=` opening a word is zsh's EQUALS expansion (`=cmd` becomes a path).
+    if ('~*?[]{}'.includes(c) || (c === '=' && cur === '' && !quoted)) unquotedSpecial = true;
     cur += c;
   }
   push();
@@ -884,6 +885,8 @@ function isIssueWriteGh(command) {
     comment: new Set(['-R', '--repo', '-b', '--body']),
   };
   if (/[`$<>\\]/.test(command)) return false;
+  // Whitespace other than ASCII splits words here but not in the shell, or the reverse.
+  if (/(?![ \t\n\r\f\v])\s/u.test(command)) return false;
   const toks = tokenize(command);
   if (toks.some((t) => t.op || t.unquotedSpecial)) return false;
   if (toks.length < 3 || toks[0].quoted || toks[0].v !== 'gh' || toks[1].v !== 'issue') return false;
