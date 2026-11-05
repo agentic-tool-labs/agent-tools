@@ -321,7 +321,7 @@ if (input.agent_id) {
   // Issue writes: the plugin's MCP endpoint (/x/pull_requests) carries no issue
   // tools, so `gh issue create|comment` is github-worker's only path to them.
   // Granted only as one plain command, nothing chained or substituted.
-  if (tool === 'Bash' && /(^|:)github-worker$/.test(input.agent_type || '') && isIssueWriteGh(cmd)) {
+  if (tool === 'Bash' && input.agent_type === 'github-pr-toolkit:github-worker' && isIssueWriteGh(cmd)) {
     process.stdout.write(
       JSON.stringify({
         hookSpecificOutput: {
@@ -864,14 +864,40 @@ function destructiveDenial(command, cwd) {
 // the file-writing escape hatches (sed -i, `>`/`>>` redirection) are refused
 // too. A false denial just means the reviewer works from Read/Grep instead;
 // a false allow would be silent unprompted mutation. Err toward denial.
-// Exactly one `gh issue create` or `gh issue comment` command: no operator, no
-// substitution, no redirection, no escape, no env prefix, no wrapper.
+// Exactly one `gh issue create` or `gh issue comment` command whose every flag is
+// on an allowlist: create takes -R/--repo, -t/--title, -b/--body; comment takes
+// one numeric issue plus -R/--repo, -b/--body. Each flag takes its value as the
+// next token (no --flag=value), and a value never starts with `-`. No operator,
+// substitution, redirection, escape, env prefix or wrapper, and no unquoted
+// token that the shell would expand (~ * ? [ {). Anything else is not granted.
+// The table lives inside the function: a top-level const down here is in its
+// temporal dead zone when the guard body above calls this (see guard.test.sh).
 function isIssueWriteGh(command) {
+  const ISSUE_FLAGS = {
+    create: new Set(['-R', '--repo', '-t', '--title', '-b', '--body']),
+    comment: new Set(['-R', '--repo', '-b', '--body']),
+  };
   if (/[`$<>\\]/.test(command)) return false;
   const toks = tokenize(command);
-  if (toks.some((t) => t.op)) return false;
-  return toks.length >= 3 && toks[0].v === 'gh' && !toks[0].quoted && toks[1].v === 'issue'
-    && (toks[2].v === 'create' || toks[2].v === 'comment');
+  if (toks.some((t) => t.op || (!t.quoted && /[~*?[{]/.test(t.v)))) return false;
+  if (toks.length < 3 || toks[0].quoted || toks[0].v !== 'gh' || toks[1].v !== 'issue') return false;
+  const verb = toks[2].v;
+  const flags = ISSUE_FLAGS[verb];
+  if (!flags) return false;
+  let positionals = 0;
+  for (let i = 3; i < toks.length; i++) {
+    const t = toks[i].v;
+    if (t.startsWith('-')) {
+      const value = toks[i + 1];
+      if (!flags.has(t) || !value || value.v.startsWith('-')) return false;
+      i++;
+    } else if (verb === 'comment' && positionals === 0 && /^[0-9]+$/.test(t)) {
+      positionals++;
+    } else {
+      return false;
+    }
+  }
+  return verb === 'create' || positionals === 1;
 }
 
 function isReviewerSafeBash(command) {
