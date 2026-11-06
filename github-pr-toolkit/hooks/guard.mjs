@@ -318,6 +318,23 @@ if (input.agent_id) {
     if (worker) recordWorktreeAdds(cmd, input.cwd, input.session_id);
   }
 
+  // Issue writes: the plugin's MCP endpoint (/x/pull_requests) carries no issue
+  // tools, so `gh issue create|comment` is github-worker's only path to them.
+  // Granted only as one plain command, nothing chained or substituted.
+  if (tool === 'Bash' && input.agent_type === 'github-pr-toolkit:github-worker' && isIssueWriteGh(cmd)) {
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          permissionDecisionReason:
+            'github-pr-toolkit github-worker — gh issue create/comment, which the MCP endpoint does not carry',
+        },
+      })
+    );
+    process.exit(0);
+  }
+
   if (isToolkitMcp && worker) {
     process.stdout.write(
       JSON.stringify({
@@ -639,11 +656,16 @@ function tokenize(text) {
   const toks = [];
   let cur = '';
   let quoted = false;
+  // Whether the token holds a character the shell expands OUTSIDE quotes (tilde,
+  // glob, brace). Decided per character: a token quoted in part still expands
+  // its unquoted part.
+  let unquotedSpecial = false;
   let q = null;
   const push = () => {
-    if (cur !== '' || quoted) toks.push({ v: cur, quoted });
+    if (cur !== '' || quoted) toks.push({ v: cur, quoted, unquotedSpecial });
     cur = '';
     quoted = false;
+    unquotedSpecial = false;
   };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -670,6 +692,8 @@ function tokenize(text) {
       toks.push({ v: c, op: true });
       continue;
     }
+    // `=` opening a word is zsh's EQUALS expansion (`=cmd` becomes a path).
+    if ('~*?[]{}'.includes(c) || (c === '=' && cur === '' && !quoted)) unquotedSpecial = true;
     cur += c;
   }
   push();
@@ -847,6 +871,44 @@ function destructiveDenial(command, cwd) {
 // the file-writing escape hatches (sed -i, `>`/`>>` redirection) are refused
 // too. A false denial just means the reviewer works from Read/Grep instead;
 // a false allow would be silent unprompted mutation. Err toward denial.
+// Exactly one `gh issue create` or `gh issue comment` command whose every flag is
+// on an allowlist: create takes -R/--repo, -t/--title, -b/--body; comment takes
+// one numeric issue plus -R/--repo, -b/--body. Each flag takes its value as the
+// next token (no --flag=value), and a value never starts with `-`. No operator,
+// substitution, redirection, escape, env prefix or wrapper, and no unquoted
+// token that the shell would expand (~ * ? [ {). Anything else is not granted.
+// The table lives inside the function: a top-level const down here is in its
+// temporal dead zone when the guard body above calls this (see guard.test.sh).
+function isIssueWriteGh(command) {
+  const ISSUE_FLAGS = {
+    create: new Set(['-R', '--repo', '-t', '--title', '-b', '--body']),
+    comment: new Set(['-R', '--repo', '-b', '--body']),
+  };
+  if (/[`$<>\\]/.test(command)) return false;
+  // Whitespace other than ASCII splits words here but not in the shell, or the reverse.
+  if (/(?![ \t\n\r\f\v])\s/u.test(command)) return false;
+  const toks = tokenize(command);
+  if (toks.some((t) => t.op || t.unquotedSpecial)) return false;
+  if (toks.length < 3 || toks[0].quoted || toks[0].v !== 'gh' || toks[1].v !== 'issue') return false;
+  const verb = toks[2].v;
+  const flags = ISSUE_FLAGS[verb];
+  if (!flags) return false;
+  let positionals = 0;
+  for (let i = 3; i < toks.length; i++) {
+    const t = toks[i].v;
+    if (t.startsWith('-')) {
+      const value = toks[i + 1];
+      if (!flags.has(t) || !value || value.v === '' || value.v.startsWith('-')) return false;
+      i++;
+    } else if (verb === 'comment' && positionals === 0 && /^[0-9]+$/.test(t)) {
+      positionals++;
+    } else {
+      return false;
+    }
+  }
+  return verb === 'create' || positionals === 1;
+}
+
 function isReviewerSafeBash(command) {
   const REVIEWER_HEADS = new Set([
     'git', 'ls', 'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'fd',

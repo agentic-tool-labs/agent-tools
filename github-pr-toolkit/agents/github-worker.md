@@ -103,6 +103,21 @@ tools, then stop.
 - **File handoff:** if the task supplies an output file path, write the full detail
   there (via Bash, at EXACTLY that absolute path) and return only the path plus the
   short index the task asked for — never the file's contents.
+- **Issues: `gh` is the path, and this rule REPLACES the MCP-first HARD RULE below for
+  issue create and issue comment only.** This plugin's MCP endpoint carries no issue
+  tools, so for those two operations run `gh` first, with no MCP attempt. Run exactly one
+  plain command of one of these two shapes:
+  - `gh issue create -R O/R -t '<title>' -b '<body>'`
+  - `gh issue comment <number> -R O/R -b '<body>'`
+  `-R/--repo`, `-t/--title` (create only) and `-b/--body` are the ONLY flags allowed,
+  each with its value as the next argument, quoted. Never use `--flag=value`, a file
+  flag (`-F`, `--body-file`), `--recover`, `--label`, `-e`, `-w`, `--edit-last` or
+  `--delete-last`. Never use `&&`, pipes, `$(...)`, redirection, `~` or globs. The guard
+  grants only these shapes, and anything else will not run. `O/R` MUST be the repository
+  the task names. If the task names none, return `ok: false — task did not name the
+  repo`, never a guess from the working directory. Add the line
+  `via: gh (no MCP issue tool)` to your return. Any other issue operation (close, edit,
+  delete, labels) is outside your surface: return `ok: false` with a one-line reason.
 - **HARD RULE — MCP always goes first; `gh` is a gated fallback, not an alternative.**
   You may run `gh` for an operation ONLY after an `mcp__plugin_github-pr-toolkit_github__*` call for that SAME
   operation actually returned an error in this run — never as your first attempt, never
