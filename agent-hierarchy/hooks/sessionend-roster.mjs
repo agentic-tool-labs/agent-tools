@@ -14,6 +14,7 @@
 import { isSubagent, isTopLevelAgentSession, logHookError, lookupRole, readHookInput } from "./lib-config.mjs";
 import { appendRosterRecord, hierarchyDir, pidAlive, upRecordFor } from "./lib-hier.mjs";
 import { clearActivity } from "./lib-status.mjs";
+import { herdrSelfPane } from "./lib-herdr.mjs";
 
 try {
   const input = await readHookInput();
@@ -30,7 +31,7 @@ try {
     const foreignEnd = up && up.pid !== ender && pidAlive(up.pid);
     if (!foreignEnd && sessionId) clearActivity(dir, sessionId);
     if (role && !foreignEnd) {
-      appendRosterRecord(dir, { status: "down", role, session_id: sessionId || null, pid: ender, pane_id: (up && up.pane_id) || process.env.HERDR_PANE_ID || null, cwd });
+      appendRosterRecord(dir, { status: "down", role, session_id: sessionId || null, pid: ender, pane_id: (up && up.pane_id) || herdrSelfPane() || null, cwd });
     }
   }
 } catch (err) {

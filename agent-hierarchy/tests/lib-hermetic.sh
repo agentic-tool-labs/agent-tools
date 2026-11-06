@@ -2,7 +2,7 @@
 # agent-hierarchy — the shared hermetic preamble. Every tests/test-*.sh sources this as its first executable line.
 #
 # After it, a test cannot reach the user's real herdr, tmux, claude or codex, and cannot leave a tmux server behind:
-#   - every HERDR_* variable and TMUX / TMUX_PANE / AH_TEAM_FILE / CLAUDE_PID is unset (a file may set any of them
+#   - every HERDR_* and HC_* (herdr core) variable and TMUX / TMUX_PANE / AH_TEAM_FILE / CLAUDE_PID is unset (a file may set any of them
 #     again for its own fixtures);
 #   - TMUX_TMPDIR is a fresh directory, so a tmux a test starts gets a private server (a test that passes tmux -S puts
 #     the socket under it);
@@ -26,7 +26,7 @@ if [ "${AH_TEST_HERMETIC:-}" = 1 ] && [ "${AH_TEST_PID:-}" = "$$" ]; then
   return 0 2>/dev/null || true
 fi
 
-for _ah_v in $(compgen -v HERDR_); do unset "$_ah_v"; done
+for _ah_v in $(compgen -v HERDR_) $(compgen -v HC_); do unset "$_ah_v"; done
 unset _ah_v TMUX TMUX_PANE AH_TEAM_FILE CLAUDE_PID AH_TEST_FAKE_BIN
 
 # The real tmux, found before a test prepends fakes to PATH. A value inherited from a parent test is kept.

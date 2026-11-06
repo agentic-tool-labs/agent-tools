@@ -22,6 +22,7 @@ import { realpathSync } from "node:fs";
 import { logHookError, mainHierarchyDir, readHookInput, resolveHierarchyRole } from "./lib-config.mjs";
 import { ensureHierarchyDir } from "./lib-hier.mjs";
 import { attributeSessionTeam, expectedRootFor, sessionMemberRow } from "./lib-roster.mjs";
+import { herdrSelfPane } from "./lib-herdr.mjs";
 
 function decide(decision, reason, systemMessage) {
   if (decision) {
@@ -46,7 +47,7 @@ function isRelocation(input, role) {
     if (typeof path !== "string" || !path) return false;
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     const dir = ensureHierarchyDir(cwd);
-    const paneId = process.env.HERDR_PANE_ID || process.env.TMUX_PANE || null;
+    const paneId = herdrSelfPane() || process.env.TMUX_PANE || null;
     const resolved = attributeSessionTeam(dir, role, { paneId, homes: [dir, mainHierarchyDir(cwd)] });
     const expectedRoot = resolved && expectedRootFor(resolved.team, sessionMemberRow(resolved.team, paneId));
     if (!expectedRoot) return false;

@@ -52,7 +52,8 @@ transport (`HERDR_ENV=1`) for teams of peers in panes. Without it, roster
 spawning falls back to tmux, and without tmux, to plain terminal windows.
 Nothing breaks; you just don't get herdr's pane placement. It's been checked
 against herdr 0.8.2. See herdr's own install instructions for getting it on
-your `PATH`.
+your `PATH`. The herdr desktop app (beta) works too: from one of its terminals,
+ah uses its `hc` and `herdr-app` commands instead of `herdr`.
 
 The [status entry](#the-status-entry-the-team-at-a-glance), and the
 [band, the Pane and toasts](#the-band-the-pane-and-toasts), need Claude Code

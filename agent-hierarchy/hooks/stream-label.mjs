@@ -17,9 +17,10 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isSubagent, logHookError, readHookInput } from "./lib-config.mjs";
+import { herdrSelfPane } from "./lib-herdr.mjs";
 
 try {
-  const pane = process.env.HERDR_PANE_ID;
+  const pane = herdrSelfPane();
   const teamFile = process.env.AH_TEAM_FILE;
   if (pane && teamFile) {
     // Loaded only past the early exit: a static import would add lib-hier's load time to every session.
