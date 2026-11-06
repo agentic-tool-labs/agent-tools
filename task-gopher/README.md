@@ -588,7 +588,9 @@ recent bypasses (last 4) — what was run directly:
   truncate silently.
 - `hooks/` holds the hooks. The mod (`register.ts`) injects the full directive
   on any prompt whose conversation does not hold it (startup, resume, clear,
-  compact) and straight after a compaction, plus a one-line reminder each turn;
+  compact) and straight after a compaction, plus a one-line reminder each turn.
+  After a compaction, even one mid-turn, the next request gets it as a row of
+  its own, also where an organization manages Claude Code;
   `sessionstart.mjs` and `userpromptsubmit.mjs` hold the text and its gates.
   `PreToolUse` runs the subagent relay whenever the plugin
   is on, the per-request smart-gopher gate, and, in strict mode, the escalating

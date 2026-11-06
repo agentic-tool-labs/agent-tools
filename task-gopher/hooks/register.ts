@@ -52,14 +52,26 @@ export const register: Register = on => {
     return next(added.length ? { ...e, context: [...(e.context ?? []), ...added] } : e)
   })
 
-  // An automatic compaction can land mid-turn, long before the next prompt: the summary row carries the directive on.
-  // A row appended from a session.compact hook does not survive the compaction installing its result.
-  on('session.append', { door: 'compaction' }, async ($, e, next) => {
-    if (e.agentId || e.message.type !== 'user') return next(e)
-    const text = await injection($, 'sessionstart.mjs')
-    const { content } = e.message
-    if (!text || !Array.isArray(content)) return next(e)
-    return next({ ...e, message: { ...e.message, content: [...content, { type: 'text', text }] } })
+  // An automatic compaction can land mid-turn, long before the next prompt. A main-loop request that carries fewer
+  // messages than the last one follows a compaction, so the directive goes in as a row of its own unless the
+  // conversation holds it. Not session.append on the compaction door: where an organization manages Claude Code it
+  // passes over installed plugins (the engine's hooks-passed-over warning), and turn.step does not.
+  let lastCount: number | undefined
+  on('turn.step', async function* ($, e, next) {
+    const shrank = !e.agentId && lastCount !== undefined && e.messageCount < lastCount
+    if (!e.agentId) lastCount = e.messageCount
+    if (shrank) {
+      const text = await injection($, 'sessionstart.mjs')
+      if (text) {
+        try {
+          const held = JSON.stringify(await $.session.messages({ as: 'api' })).includes(text.slice(0, 40))
+          if (!held) await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+        } catch {
+          // never block a request
+        }
+      }
+    }
+    return yield* next(e)
   })
 
   for (const tool of TOOLS) {
