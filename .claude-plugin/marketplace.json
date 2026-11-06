@@ -144,7 +144,7 @@
     {
       "name": "retry-on-error",
       "source": "./retry-on-error",
-      "version": "0.3.0",
+      "version": "0.3.2",
       "description": "Resumes a session after a turn dies on a transient API error or a stalled API request: waits a few seconds, then submits a short continue prompt.",
       "license": "Apache-2.0",
       "author": {
