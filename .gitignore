@@ -13,3 +13,4 @@ node_modules/
 # Written by Claude Code when it loads a plugin's mod from its folder.
 task-gopher/tsconfig.json
 retry-on-error/tsconfig.json
+idle-compactor/tsconfig.json
