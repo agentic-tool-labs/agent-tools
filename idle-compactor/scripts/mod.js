@@ -4,6 +4,7 @@
 // The Node half of hooks/register.ts, which has no Node of its own.
 //   mod.js arm    stdin: the classic Stop input. Prints {ms, instructions, ...}
 //                 when the mod should arm, else {}; claims the turn from arm.js.
+//   mod.js check  stdin: the plan. Prints {why} when the fire must wait, else {}.
 //   mod.js fired  stdin: the plan arm printed plus {ok, reason, detail}.
 //                 Records the fire in the stats log as timer.js does.
 
@@ -26,19 +27,37 @@ function arm(input) {
     state.takeClaim(sessionId);
     return {};
   }
-  config.ensureRoot();
-  fs.writeFileSync(state.claimFile(sessionId), String(Date.now()));
   const info = input.transcript_path ? transcript.lastAssistantInfo(input.transcript_path) : null;
   const tokens = info ? info.tokens : null;
+  // Below the floor arm.js declines too, so nothing is claimed.
   if (tokens !== null && tokens < cfg.minTokens) return {};
-  return {
+  const plan = {
     ms: cfg.idleMinutes * 60 * 1000,
     instructions: prompt.resolveFor(input.cwd || process.cwd(), cfg).text,
     sessionId,
+    transcriptPath: input.transcript_path || null,
     tokens,
     model: info ? info.model : null,
     effort: info ? info.effort : null,
   };
+  // Last, once the plan is whole: a throw above leaves arm.js to inject.
+  config.ensureRoot();
+  fs.writeFileSync(state.claimFile(sessionId), String(Date.now()));
+  return plan;
+}
+
+// The fire-time guard timer.js uses. Prints {why} when the fire must wait; the
+// first wait of an arm logs the activity-detected row, as timer.js's defer does.
+function check(input) {
+  const why = input.transcriptPath ? transcript.fireBlocker(input.transcriptPath) : null;
+  if (why && why !== 'gone' && !input.deferLogged) {
+    stats.record(
+      input.sessionId,
+      { ok: false, reason: 'activity-detected', detail: why },
+      { mode: 'compact', tokens: input.tokens, model: input.model, effort: input.effort }
+    );
+  }
+  return why ? { why } : {};
 }
 
 function fired(input) {
@@ -56,7 +75,8 @@ function fired(input) {
 readInput()
   .then((input) => {
     const verb = process.argv[2];
-    const out = verb === 'arm' ? arm(input || {}) : verb === 'fired' ? fired(input || {}) : {};
+    const fn = { arm, check, fired }[verb];
+    const out = fn ? fn(input || {}) : {};
     process.stdout.write(JSON.stringify(out));
     process.exit(0);
   })

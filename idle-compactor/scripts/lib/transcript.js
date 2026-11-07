@@ -88,6 +88,24 @@ function mtimeMs(file) {
   }
 }
 
+// turnState() is the activity signal — this is only a race guard against a
+// burst of closing writes or a line landing mid-read. It is NOT the idleness
+// check and must never be tuned as one; widening it doesn't make
+// busy-detection more accurate, it just delays every fire.
+const SETTLE_MS = 60 * 1000;
+
+// The pre-fire guard shared by timer.js and the mod: null when the session is
+// idle enough to compact, 'gone' when the transcript has vanished, otherwise
+// why the fire must wait.
+function fireBlocker(file) {
+  const mtime = mtimeMs(file);
+  if (mtime === null) return 'gone';
+  const turn = turnState(file);
+  if (turn.busy) return turn.why;
+  if (Date.now() - mtime < SETTLE_MS) return 'settling';
+  return null;
+}
+
 function sizeBytes(file) {
   try {
     return fs.statSync(file).size;
@@ -177,6 +195,7 @@ module.exports = {
   contextTokens,
   mtimeMs,
   turnState,
+  fireBlocker,
   sizeBytes,
   tailSince,
 };

@@ -1,13 +1,21 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-// `process.run` stands in for scripts/mod.js: `arm` answers `plan`, `fired` is recorded. session.compact is the engine's.
-const setup = (on: any, plan: object, compacted: object = { messages: [{ role: 'user', text: 'summary', toolUses: [] }] }) => {
-  const seen = { compacts: [] as any[], fired: [] as any[], stopsBeneath: 0 }
+// `process.run` stands in for scripts/mod.js: `arm` answers `plan`, `check` answers `checks` in turn (then {}), `fired`
+// is recorded. session.compact is the engine's.
+const setup = (
+  on: any,
+  plan: object,
+  compacted: object = { messages: [{ role: 'user', text: 'summary', toolUses: [] }] },
+  checks: object[] = [],
+) => {
+  const seen = { compacts: [] as any[], fired: [] as any[], checked: [] as any[], stopsBeneath: 0 }
   const clock = mock.clock(on, { now: 0 })
   on('process.run', (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
     const verb = e.argv[2]
-    if (verb === 'fired') seen.fired.push(JSON.parse(e.init?.stdin ?? '{}'))
-    const stdout = verb === 'arm' ? JSON.stringify(plan) : '{}'
+    const input = JSON.parse(e.init?.stdin ?? '{}')
+    if (verb === 'fired') seen.fired.push(input)
+    if (verb === 'check') seen.checked.push(input)
+    const stdout = verb === 'arm' ? JSON.stringify(plan) : verb === 'check' ? JSON.stringify(checks.shift() ?? {}) : '{}'
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.compact', (_: unknown, e: { instructions?: string }) => {
@@ -64,4 +72,24 @@ test('a vetoed compaction is recorded as a failure', async ($, on) => {
   expect(seen.fired.length).toBe(1)
   expect(seen.fired[0].ok).toBe(false)
   expect(seen.fired[0].reason).toBe('compact-skipped')
+})
+
+test('a busy session at fire time waits another window instead of failing', async ($, on) => {
+  const { seen, clock } = setup(on, PLAN, undefined, [{ why: 'pending-tool' }])
+  await $.classic.Stop(STOP)
+  await clock.advance(61_000)
+  expect(seen.compacts.length).toBe(0)
+  expect(seen.fired.length).toBe(0)
+  await clock.advance(60_000)
+  expect(seen.compacts.length).toBe(1)
+  expect(seen.checked[1].deferLogged).toBe(true)
+  expect(seen.fired[0].ok).toBe(true)
+})
+
+test('a vanished transcript ends the arm without compacting', async ($, on) => {
+  const { seen, clock } = setup(on, PLAN, undefined, [{ why: 'gone' }])
+  await $.classic.Stop(STOP)
+  await clock.advance(24 * 60 * 60 * 1000)
+  expect(seen.compacts.length).toBe(0)
+  expect(seen.checked.length).toBe(1)
 })

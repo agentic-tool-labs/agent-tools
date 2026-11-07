@@ -38,6 +38,7 @@ assert.ok(hc.send().ok);
 assert.strictEqual(hc.snapshot(), 'screen');
 assert.ok(hc.submit().ok);
 assert.deepStrictEqual(fs.readFileSync(argvLog, 'utf8').trim().split('\n'), [
+  'keys|t2j|esc|',
   'send|t2j|/compact keep it|',
   'read|t2j|',
   'keys|t2j|enter|',
@@ -69,5 +70,20 @@ const kept = JSON.parse(run('mod.js', ['arm'], stop, { CLAUDE_IDLE_COMPACT_DISAB
 assert.deepStrictEqual(kept, {});
 assert.ok(!fs.existsSync(state.claimFile('claim1')));
 assert.strictEqual(state.takeClaim('claim1'), false);
+// Negative: Stop input that makes arm throw after reading the transcript (a non-string cwd) prints no plan and
+// leaves no claim, so arm.js still injects.
+const malformed = run('mod.js', ['arm'], { session_id: 'claim2', cwd: 123 });
+assert.strictEqual(malformed.stdout, '');
+assert.ok(!fs.existsSync(state.claimFile('claim2')), 'a failed arm leaves no claim');
+
+// --- fire-time guard (shared with timer.js) ---
+const tp = path.join(SANDBOX, 't.jsonl');
+fs.writeFileSync(tp, '{"type":"user","message":{"role":"user","content":"hi"}}\n');
+const checkOf = (p) => JSON.parse(run('mod.js', ['check'], { sessionId: 'g1', transcriptPath: p }).stdout);
+assert.deepStrictEqual(checkOf(tp), { why: 'settling' }, 'a just-written transcript defers');
+assert.deepStrictEqual(checkOf(path.join(SANDBOX, 'none.jsonl')), { why: 'gone' });
+const old = new Date(Date.now() - 10 * 60 * 1000);
+fs.utimesSync(tp, old, old);
+assert.deepStrictEqual(checkOf(tp), {}, 'a quiet transcript fires');
 
 console.log('hc-and-claim: ok');

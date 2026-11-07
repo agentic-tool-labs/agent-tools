@@ -237,6 +237,9 @@ function providerHc(ctx) {
       return run('hc', ['keys', String(term), 'enter']);
     },
     send() {
+      // Dismiss an open dialog or picker first, as herdr does; best-effort.
+      run('hc', ['keys', String(term), 'esc']);
+      sleepSync(80);
       return run('hc', ['send', String(term), ctx.text]);
     },
   };

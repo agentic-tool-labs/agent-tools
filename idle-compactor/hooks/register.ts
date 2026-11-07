@@ -23,6 +23,19 @@ async function helper($: any, verb: string, input: unknown): Promise<Plan> {
 
 async function fire($: any, plan: Plan) {
   timer = undefined
+  // timer.js's pre-fire guard: still busy or settling waits another window; a vanished transcript ends the arm.
+  let why: unknown
+  try {
+    why = (await helper($, 'check', plan)).why
+  } catch {
+    // no verdict: compact, as an unguarded fire would
+  }
+  if (why === 'gone') return
+  if (why) {
+    plan.deferLogged = true
+    timer = $.clock.after(plan.ms ?? 0, () => void fire($, plan))
+    return
+  }
   let outcome: { ok: boolean; reason?: string; detail?: string }
   try {
     const done = await $.session.compact(plan.instructions ? { instructions: plan.instructions } : {})
