@@ -226,21 +226,27 @@ function providerHerdr(ctx) {
 function providerHc(ctx) {
   const term = ctx.env.HC_TERMINAL_ID;
   if (!term || !have('hc')) return null;
+  // A caller with an hc identity gets its text wrapped as `<hc from="…">` (a chat
+  // message, not a slash command), so every hc call runs without one.
+  const env = Object.assign({}, process.env);
+  delete env.HC_TERMINAL_ID;
+  delete env.HC_SOCKET;
+  const opts = { env };
   return {
     name: 'hc',
     blind: false,
     snapshot() {
-      const res = run('hc', ['read', String(term)]);
+      const res = run('hc', ['read', String(term)], opts);
       return res.ok ? res.stdout : null;
     },
     submit() {
-      return run('hc', ['keys', String(term), 'enter']);
+      return run('hc', ['keys', String(term), 'enter'], opts);
     },
     send() {
       // Dismiss an open dialog or picker first, as herdr does; best-effort.
-      run('hc', ['keys', String(term), 'esc']);
+      run('hc', ['keys', String(term), 'esc'], opts);
       sleepSync(80);
-      return run('hc', ['send', String(term), ctx.text]);
+      return run('hc', ['send', String(term), ctx.text], opts);
     },
   };
 }

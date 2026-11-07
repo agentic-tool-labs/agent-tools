@@ -23,9 +23,14 @@ const state = require(path.join(PLUGIN, 'scripts', 'lib', 'state.js'));
 const bin = path.join(SANDBOX, 'bin');
 fs.mkdirSync(bin);
 const argvLog = path.join(SANDBOX, 'hc-argv.txt');
+const envLog = path.join(SANDBOX, 'hc-env.txt');
+// The calling session's own hc identity, which every hc child must be spawned without.
+process.env.HC_TERMINAL_ID = 'self';
+process.env.HC_SOCKET = '/tmp/hc.sock';
 fs.writeFileSync(
   path.join(bin, 'hc'),
-  '#!/bin/sh\nprintf "%s|" "$@" >> ' + JSON.stringify(argvLog) + '\nprintf "\\n" >> ' + JSON.stringify(argvLog) + '\necho screen\n'
+  '#!/bin/sh\nprintf "%s|" "$@" >> ' + JSON.stringify(argvLog) + '\nprintf "\\n" >> ' + JSON.stringify(argvLog) +
+    '\nprintf "%s/%s\\n" "${HC_TERMINAL_ID-unset}" "${HC_SOCKET-unset}" >> ' + JSON.stringify(envLog) + '\necho screen\n'
 );
 fs.chmodSync(path.join(bin, 'hc'), 0o755);
 process.env.PATH = bin + path.delimiter + ORIG_PATH;
@@ -43,6 +48,8 @@ assert.deepStrictEqual(fs.readFileSync(argvLog, 'utf8').trim().split('\n'), [
   'read|t2j|',
   'keys|t2j|enter|',
 ]);
+assert.deepStrictEqual(fs.readFileSync(envLog, 'utf8').trim().split('\n'), Array(4).fill('unset/unset'),
+  'every hc call is spawned without HC_TERMINAL_ID and HC_SOCKET');
 // Negative: no terminal id, and an id with no hc on PATH.
 assert.ok(!inject.detect(inject.makeContext({ env: {} })).some((p) => p.name === 'hc'));
 process.env.PATH = '/usr/bin:/bin';
