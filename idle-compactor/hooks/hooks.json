@@ -1,5 +1,6 @@
 {
-  "description": "Arms an idle timer when a turn ends and cancels it when the user comes back.",
+  "description": "Arms an idle timer when a turn ends and cancels it when the user comes back. The mod (register.ts) compacts through the engine where one loads it; the command hooks type /compact into the terminal otherwise.",
+  "modules": ["./register.ts"],
   "hooks": {
     "SessionStart": [
       {

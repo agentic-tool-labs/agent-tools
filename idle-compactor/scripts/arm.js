@@ -26,6 +26,12 @@ async function main() {
   const previous = state.read(sessionId);
   if (previous && previous.timerPid) state.killIfRunning(previous.timerPid);
 
+  // The mod (hooks/register.ts) armed a session.compact timer for this turn.
+  if (state.takeClaim(sessionId)) {
+    state.remove(sessionId);
+    return;
+  }
+
   const transcriptPath = input.transcript_path;
 
   // A keepalive ping is confirmed by this very Stop event: had the user

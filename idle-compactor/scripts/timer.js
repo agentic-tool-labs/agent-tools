@@ -21,11 +21,6 @@ const notify = require('./lib/notify');
 // arm.js always mints a fresh armId and spawns exactly one daemon per arm,
 // so that reused-armId shape never occurs outside a test.
 const POLL_MS = Number(process.env.IDLE_COMPACTOR_POLL_MS) || 15 * 1000;
-// transcript.turnState() is the activity signal now — this is only a race
-// guard against a burst of closing writes or a line landing mid-read. It is
-// NOT the idleness check and must never be tuned as one; widening it doesn't
-// make busy-detection more accurate, it just delays every fire.
-const SETTLE_MS = 60 * 1000;
 // Deferring no longer exits, so this is the only thing that ever ends a
 // defer loop that never goes quiet. armedAt is frozen at arm time and never
 // advances on defer, which is what keeps this reachable.
@@ -184,14 +179,12 @@ function tick() {
   if (Date.now() < record.fireAt) return;
 
   if (record.transcriptPath) {
-    const mtime = transcript.mtimeMs(record.transcriptPath);
-    if (mtime === null) {
+    const why = transcript.fireBlocker(record.transcriptPath);
+    if (why === 'gone') {
       state.remove(record.sessionId);
       process.exit(0);
     }
-    const turn = transcript.turnState(record.transcriptPath);
-    if (turn.busy) return defer(record, turn.why);
-    if (Date.now() - mtime < SETTLE_MS) return defer(record, 'settling');
+    if (why) return defer(record, why);
   }
 
   const result = inject.inject({
