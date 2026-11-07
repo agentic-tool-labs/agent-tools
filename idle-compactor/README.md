@@ -40,7 +40,16 @@ idle      ──▶ timer.js wakes, re-verifies the armId and that the transcrip
               pane this session is running in
 ```
 
-That means the plugin needs a way to send keystrokes to your terminal. By
+Where Claude Code loads the plugin's mod (`hooks/register.ts`, listed under
+`modules` in `hooks/hooks.json`), no typing happens: the mod arms its own
+timer when a turn ends, cancels it on your next prompt, and compacts through
+the engine (`$.session.compact`, the call `/compact` makes). It reads the same
+config (idle window, token floor, compaction prompt) and writes the same fire
+log. Keepalive mode still types its ping. The mod loads with the plugin
+(update it, then `/reload-plugins`); `claude --debug` logs a line naming it
+if it did not load.
+
+Without the mod, the plugin needs a way to send keystrokes to your terminal. By
 default it only uses methods that can pick out your specific pane or tab.
 Methods that type into whichever window has focus are off unless you turn them
 on (see [Blind injection](#blind-injection)).
@@ -103,6 +112,7 @@ It works fine on its own. The two other compaction plugins in this repo,
 | Terminal | Method | Targeted? | Notes |
 |---|---|---|---|
 | herdr | `herdr pane run $HERDR_PANE_ID` | yes | |
+| herdr-core | `hc send $HC_TERMINAL_ID` | yes | needs `hc` on `PATH` |
 | tmux | `send-keys -t $TMUX_PANE` | yes | |
 | GNU screen | `-X stuff` | yes | |
 | WezTerm | `wezterm cli send-text --pane-id` | yes | |
@@ -233,7 +243,13 @@ These environment variables override the file for a single session:
 
 ```
 node idle-compactor/test/run.js
+node idle-compactor/test/hc-and-claim.js
+claude plugin test idle-compactor
 ```
+
+`hc-and-claim.js` covers the herdr-core provider and the mod's hand-off from
+`arm.js`; `claude plugin test` runs `test/register.test.ts`, the mod's
+arm/cancel/fire on fake events.
 
 The suite runs against a throwaway `HOME`, so it never touches your real
 `~/.claude`. It covers token accounting, how the threshold is worked out, the

@@ -11,6 +11,22 @@ function sessionFile(sessionId) {
   return path.join(config.SESSION_DIR, safe + '.json');
 }
 
+// Written by scripts/mod.js just before arm.js runs on the same Stop: the mod
+// has armed this turn, so arm.js must not start an injection timer too.
+function claimFile(sessionId) {
+  return sessionFile(sessionId).replace(/\.json$/, '.mod');
+}
+
+// Consumed on read, so a mod unloaded mid-session cannot leave arm.js disabled.
+function takeClaim(sessionId) {
+  try {
+    fs.unlinkSync(claimFile(sessionId));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function newArmId() {
   return crypto.randomBytes(9).toString('hex');
 }
@@ -87,6 +103,8 @@ function listSessions() {
 
 module.exports = {
   sessionFile,
+  claimFile,
+  takeClaim,
   newArmId,
   read,
   readPath,

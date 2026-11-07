@@ -16,6 +16,7 @@ const CAPTURED_ENV = [
   'HERDR_PANE_ID',
   'HERDR_SOCKET_PATH',
   'HERDR_BIN_PATH',
+  'HC_TERMINAL_ID',
   'TMUX',
   'TMUX_PANE',
   'STY',
@@ -217,6 +218,26 @@ function providerHerdr(ctx) {
       // insufficient in practice.
       sleepSync(120);
       return this.submit();
+    },
+  };
+}
+
+// herdr-core terminals. `hc send` pastes the text and presses Enter in one call.
+function providerHc(ctx) {
+  const term = ctx.env.HC_TERMINAL_ID;
+  if (!term || !have('hc')) return null;
+  return {
+    name: 'hc',
+    blind: false,
+    snapshot() {
+      const res = run('hc', ['read', String(term)]);
+      return res.ok ? res.stdout : null;
+    },
+    submit() {
+      return run('hc', ['keys', String(term), 'enter']);
+    },
+    send() {
+      return run('hc', ['send', String(term), ctx.text]);
     },
   };
 }
@@ -507,6 +528,7 @@ function providerWindowsSendKeys(ctx) {
 
 const PROVIDERS = [
   providerHerdr,
+  providerHc,
   providerTmux,
   providerScreen,
   providerWezterm,
