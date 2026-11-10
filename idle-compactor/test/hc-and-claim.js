@@ -50,6 +50,21 @@ assert.deepStrictEqual(fs.readFileSync(argvLog, 'utf8').trim().split('\n'), [
 ]);
 assert.deepStrictEqual(fs.readFileSync(envLog, 'utf8').trim().split('\n'), Array(4).fill('unset/unset'),
   'every hc call is spawned without HC_TERMINAL_ID and HC_SOCKET');
+// Order, after the mod: the herdr app's pane, then herdr core's terminal, then the other providers. Stubs only.
+for (const name of ['herdr', 'tmux']) {
+  fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(path.join(bin, name), 0o755);
+}
+const both = { HERDR_ENV: '1', HERDR_PANE_ID: 'p1', HC_TERMINAL_ID: 't1', TMUX: '/tmp/tmux-sock,1,0', TMUX_PANE: '%1' };
+assert.deepStrictEqual(inject.detect(inject.makeContext({ env: both })).map((p) => p.name).slice(0, 3),
+  ['herdr', 'hc', 'tmux'], 'herdr app, then herdr core, ahead of every other provider');
+assert.deepStrictEqual(inject.detect(inject.makeContext({ env: Object.assign({}, both, { HERDR_PANE_ID: '' }) }))
+  .map((p) => p.name).slice(0, 2), ['hc', 'tmux'], 'herdr core alone leads the other providers');
+// The herdr app's env as a session in it has it: the pane id is captured for the detached timer; HERDR_ENV
+// alone names no pane, so it is not a herdr session to send to (negative).
+assert.strictEqual(inject.captureEnv(both).HERDR_PANE_ID, 'p1');
+assert.ok(!inject.detect(inject.makeContext({ env: { HERDR_ENV: '1' } })).some((p) => p.name === 'herdr'));
+for (const name of ['herdr', 'tmux']) fs.unlinkSync(path.join(bin, name));
 // Negative: no terminal id, and an id with no hc on PATH.
 assert.ok(!inject.detect(inject.makeContext({ env: {} })).some((p) => p.name === 'hc'));
 process.env.PATH = '/usr/bin:/bin';
