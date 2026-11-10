@@ -49,6 +49,12 @@ log. Keepalive mode still types its ping. The mod loads with the plugin
 (update it, then `/reload-plugins`); `claude --debug` logs a line naming it
 if it did not load.
 
+Works under managed Claude Code: the mod arms on `turn.complete`, which an
+organization's policy does not pass over the way it does a user plugin's
+`classic.*` hooks, so it compacts through the engine with no admin step. Where
+the Stop hook (arm.js) also ran and armed its injection timer, the mod stops
+that timer after it arms, whichever of the two ran first.
+
 Without the mod, the plugin needs a way to send keystrokes to your terminal. By
 default it only uses methods that can pick out your specific pane or tab.
 Methods that type into whichever window has focus are off unless you turn them

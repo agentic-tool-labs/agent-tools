@@ -50,6 +50,21 @@ assert.deepStrictEqual(fs.readFileSync(argvLog, 'utf8').trim().split('\n'), [
 ]);
 assert.deepStrictEqual(fs.readFileSync(envLog, 'utf8').trim().split('\n'), Array(4).fill('unset/unset'),
   'every hc call is spawned without HC_TERMINAL_ID and HC_SOCKET');
+// Order, after the mod: the herdr app's pane, then herdr core's terminal, then the other providers. Stubs only.
+for (const name of ['herdr', 'tmux']) {
+  fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(path.join(bin, name), 0o755);
+}
+const both = { HERDR_ENV: '1', HERDR_PANE_ID: 'p1', HC_TERMINAL_ID: 't1', TMUX: '/tmp/tmux-sock,1,0', TMUX_PANE: '%1' };
+assert.deepStrictEqual(inject.detect(inject.makeContext({ env: both })).map((p) => p.name).slice(0, 3),
+  ['herdr', 'hc', 'tmux'], 'herdr app, then herdr core, ahead of every other provider');
+assert.deepStrictEqual(inject.detect(inject.makeContext({ env: Object.assign({}, both, { HERDR_PANE_ID: '' }) }))
+  .map((p) => p.name).slice(0, 2), ['hc', 'tmux'], 'herdr core alone leads the other providers');
+// The herdr app's env as a session in it has it: the pane id is captured for the detached timer; HERDR_ENV
+// alone names no pane, so it is not a herdr session to send to (negative).
+assert.strictEqual(inject.captureEnv(both).HERDR_PANE_ID, 'p1');
+assert.ok(!inject.detect(inject.makeContext({ env: { HERDR_ENV: '1' } })).some((p) => p.name === 'herdr'));
+for (const name of ['herdr', 'tmux']) fs.unlinkSync(path.join(bin, name));
 // Negative: no terminal id, and an id with no hc on PATH.
 assert.ok(!inject.detect(inject.makeContext({ env: {} })).some((p) => p.name === 'hc'));
 process.env.PATH = '/usr/bin:/bin';
@@ -92,5 +107,55 @@ assert.deepStrictEqual(checkOf(path.join(SANDBOX, 'none.jsonl')), { why: 'gone' 
 const old = new Date(Date.now() - 10 * 60 * 1000);
 fs.utimesSync(tp, old, old);
 assert.deepStrictEqual(checkOf(tp), {}, 'a quiet transcript fires');
+
+// --- the mod's arm input from $.session (turn.complete has no transcript_path) ---
+const transcript = require(path.join(PLUGIN, 'scripts', 'lib', 'transcript.js'));
+const root = '/work/my.repo';
+const projDir = path.join(SANDBOX, '.claude', 'projects', '-work-my-repo');
+fs.mkdirSync(projDir, { recursive: true });
+const found = path.join(projDir, 'loc1.jsonl');
+fs.writeFileSync(found, '{"message":{"model":"m1","usage":{"input_tokens":9}}}\n');
+assert.strictEqual(transcript.locate('loc1', [root, '/elsewhere']), found, 'locate finds <root slug>/<id>.jsonl');
+assert.strictEqual(transcript.locate('loc1', [undefined, '/work/my.repo']), found, 'a missing root falls to cwd');
+// Negative: another id, or a dir whose slug differs, finds nothing.
+assert.strictEqual(transcript.locate('loc2', [root]), null);
+assert.strictEqual(transcript.locate('loc1', ['/work/my/repo2']), null);
+assert.strictEqual(transcript.locate('', [root]), null);
+
+const located = JSON.parse(run('mod.js', ['arm'], { session_id: 'loc1', cwd: SANDBOX, root, tokens: 50000 }).stdout);
+assert.strictEqual(located.transcriptPath, found, 'the plan carries the located transcript');
+assert.strictEqual(located.model, 'm1', 'stats read from the located transcript');
+assert.strictEqual(located.tokens, 50000, "the floor uses $.session.usage()'s tokens, not the transcript's");
+state.takeClaim('loc1');
+// Negative: no transcript found still arms, with no stats.
+const blind = JSON.parse(run('mod.js', ['arm'], { session_id: 'loc3', cwd: SANDBOX, root, tokens: 50000 }).stdout);
+assert.ok(blind.ms > 0, 'a missing transcript skips the stats, not the arm');
+assert.strictEqual(blind.transcriptPath, null);
+assert.strictEqual(blind.model, null);
+state.takeClaim('loc3');
+// The floor: below minTokens declines and claims nothing; at it arms.
+assert.deepStrictEqual(JSON.parse(run('mod.js', ['arm'], { session_id: 'loc4', cwd: SANDBOX, tokens: 19999 }).stdout), {});
+assert.ok(!fs.existsSync(state.claimFile('loc4')), 'below the floor nothing is claimed');
+assert.ok(JSON.parse(run('mod.js', ['arm'], { session_id: 'loc4', cwd: SANDBOX, tokens: 20000 }).stdout).ms > 0);
+state.takeClaim('loc4');
+
+// --- arm.js's Stop before the mod's turn.complete: disarm.js stops the injection timer ---
+run('arm.js', [], { session_id: 'order1', cwd: SANDBOX });
+const injecting = state.read('order1');
+assert.ok(injecting && injecting.timerPid, 'arm.js, first, arms an injection timer');
+assert.ok(JSON.parse(run('mod.js', ['arm'], { session_id: 'order1', cwd: SANDBOX, tokens: 50000 }).stdout).ms > 0);
+run('disarm.js', [], { session_id: 'order1' });
+assert.strictEqual(state.read('order1'), null, 'disarm.js removes the injection record');
+let alive = true;
+for (let i = 0; i < 50 && alive; i++) {
+  try {
+    process.kill(injecting.timerPid, 0);
+    spawnSync('sleep', ['0.1']);
+  } catch (_) {
+    alive = false;
+  }
+}
+assert.ok(!alive, 'the injection timer is stopped');
+state.takeClaim('order1');
 
 console.log('hc-and-claim: ok');
