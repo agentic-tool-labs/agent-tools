@@ -1,8 +1,8 @@
 import type { Register } from 'claude-code'
 
 // Compacts an idle Claude Code session through the engine ($.session.compact) instead of typing /compact into its
-// terminal. scripts/mod.js holds the config, the arm decision and the stats; it claims the turn before arm.js runs
-// beneath this hook, so arm.js starts no injection timer. Where no engine loads this module, arm.js injects as before.
+// terminal. scripts/mod.js holds the config, the arm decision and the stats; it claims the turn so arm.js starts no
+// injection timer, and disarm.js stops one arm.js already started. Where no engine loads this module, arm.js injects.
 
 type Plan = { ms?: number; instructions?: string; [k: string]: unknown }
 
@@ -51,11 +51,27 @@ async function fire($: any, plan: Plan) {
 }
 
 export const register: Register = on => {
-  on('classic.Stop', async ($, e, next) => {
+  // turn.complete, not classic.Stop: where an organization manages Claude Code a user plugin's classic.* hooks are
+  // passed over. The main loop's end alone: a subagent's turn (agentId) leaves the session busy.
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId) return next(e)
     cancel()
     try {
-      const plan = await helper($, 'arm', e)
-      if (plan.ms) timer = $.clock.after(plan.ms, () => void fire($, plan))
+      const [session_id, cwd, root, usage] = await Promise.all([
+        $.session.id(),
+        $.session.cwd(),
+        $.session.root(),
+        $.session.usage(),
+      ])
+      const plan = await helper($, 'arm', { session_id, cwd, root, tokens: usage.context.tokens ?? null })
+      if (plan.ms) {
+        timer = $.clock.after(plan.ms, () => void fire($, plan))
+        // Whichever of this hook and arm.js's Stop runs first, arm.js's injection timer is stopped.
+        await $.process.run(['node', `${$.plugin.root}/scripts/disarm.js`], {
+          stdin: JSON.stringify({ session_id }),
+          timeoutMs: 10000,
+        })
+      }
     } catch {
       // nothing claimed: arm.js beneath arms its injection timer
     }

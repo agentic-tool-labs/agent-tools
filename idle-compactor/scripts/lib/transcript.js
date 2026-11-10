@@ -1,6 +1,8 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const TAIL_BYTES = 512 * 1024;
 
@@ -189,7 +191,20 @@ function turnState(file) {
   return { busy: false };
 }
 
+// Best effort, for the mod, which is handed no transcript_path: the first
+// ~/.claude/projects/<dir, each non-alphanumeric as '-'>/<id>.jsonl that exists.
+function locate(sessionId, dirs) {
+  if (!sessionId) return null;
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const file = path.join(os.homedir(), '.claude', 'projects', dir.replace(/[^A-Za-z0-9]/g, '-'), sessionId + '.jsonl');
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
 module.exports = {
+  locate,
   lastAssistantInfo,
   lastUsage,
   contextTokens,

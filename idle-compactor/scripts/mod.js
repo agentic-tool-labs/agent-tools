@@ -2,7 +2,7 @@
 'use strict';
 
 // The Node half of hooks/register.ts, which has no Node of its own.
-//   mod.js arm    stdin: the classic Stop input. Prints {ms, instructions, ...}
+//   mod.js arm    stdin: {session_id, cwd, root, tokens}. Prints {ms, instructions, ...}
 //                 when the mod should arm, else {}; claims the turn from arm.js.
 //   mod.js check  stdin: the plan. Prints {why} when the fire must wait, else {}.
 //   mod.js fired  stdin: the plan arm printed plus {ok, reason, detail}.
@@ -27,15 +27,17 @@ function arm(input) {
     state.takeClaim(sessionId);
     return {};
   }
-  const info = input.transcript_path ? transcript.lastAssistantInfo(input.transcript_path) : null;
-  const tokens = info ? info.tokens : null;
+  // The context fill comes from $.session.usage(); the transcript, when found, adds the stats and the fire-time guard.
+  const transcriptPath = input.transcript_path || transcript.locate(sessionId, [input.root, input.cwd]);
+  const info = transcriptPath ? transcript.lastAssistantInfo(transcriptPath) : null;
+  const tokens = typeof input.tokens === 'number' ? input.tokens : info ? info.tokens : null;
   // Below the floor arm.js declines too, so nothing is claimed.
   if (tokens !== null && tokens < cfg.minTokens) return {};
   const plan = {
     ms: cfg.idleMinutes * 60 * 1000,
     instructions: prompt.resolveFor(input.cwd || process.cwd(), cfg).text,
     sessionId,
-    transcriptPath: input.transcript_path || null,
+    transcriptPath: transcriptPath || null,
     tokens,
     model: info ? info.model : null,
     effort: info ? info.effort : null,
