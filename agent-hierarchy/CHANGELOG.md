@@ -5,6 +5,11 @@ Versions are the plugin's `version` in `.claude-plugin/plugin.json`. Feature
 detail lives in the README and in [docs/](./docs/); design reasoning in
 [docs/specs/](./docs/specs/).
 
+## [0.130.1]
+
+### Fixed
+- herdr desktop: commands ah prints for someone to run no longer name the TUI's `herdr`, which is usually on PATH too and would act on the TUI server. Under herdr core, close hints (dismiss, untrack, disband plan, orphaned pane) print `hc kill <id>`; a startup-prompt remedy prints `hc read` / `hc keys`; the spawn plan's `layout_plan.inspect_command` and `split_command` are `null`, since `roster.mjs layout-splits` places the panes. Under the TUI nothing changes.
+
 ## [0.130.0]
 
 ### Added

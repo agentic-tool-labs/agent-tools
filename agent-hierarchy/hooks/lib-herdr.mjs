@@ -28,6 +28,14 @@ export function herdrBinary(flavour = herdrFlavour()) {
   return flavour === "core" ? "hc" : "herdr";
 }
 
+/**
+ * The close command ah prints for someone to run by hand. Under core it has to be `hc kill`: the TUI's `herdr`
+ * is usually on PATH as well, and `herdr pane close` would go to the TUI server and fail with `pane_not_found`.
+ */
+export function herdrCloseCommand(id, flavour = herdrFlavour()) {
+  return flavour === "core" ? `hc kill ${id}` : `herdr pane close ${id}`;
+}
+
 /** The calling session's own pane id: HERDR_PANE_ID under tui, the terminal address HC_TERMINAL_ID under core. */
 export function herdrSelfPane(env = process.env) {
   return (herdrFlavourFromEnv(env) === "core" ? env.HC_TERMINAL_ID : env.HERDR_PANE_ID) || null;

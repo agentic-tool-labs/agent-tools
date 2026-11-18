@@ -156,7 +156,7 @@
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import { guardShellCommand, muxExec } from "./lib-mux.mjs";
-import { herdrAppPresent, herdrExec, herdrFlavour, herdrFlavourFromEnv, herdrSelfPane } from "./lib-herdr.mjs";
+import { herdrAppPresent, herdrCloseCommand, herdrExec, herdrFlavour, herdrFlavourFromEnv, herdrSelfPane } from "./lib-herdr.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -2261,7 +2261,7 @@ function untrackMember(dir, team, target, name) {
   if (commitState.live || commitState.indeterminate) {
     let command = null;
     if (routeHasPane(target.route) && target.transport_id) {
-      if (team.transport === "herdr") command = `herdr pane close ${target.transport_id}`;
+      if (team.transport === "herdr") command = herdrCloseCommand(target.transport_id);
       else if (team.transport === "tmux") command = `tmux kill-pane -t ${target.transport_id}`;
     }
     process.stderr.write(
@@ -2900,13 +2900,15 @@ function layoutPlan(mode, transport, plan) {
   if (transport !== "herdr") return null;
   const paneCount = plan.filter((m) => routeHasPane(m.route)).length;
   if (paneCount === 0) return null;
+  const core = herdrFlavour() === "core";
   return {
     mode,
     computed_by: "roster.mjs layout-splits",
     pane_count: paneCount,
-    inspect_command: `herdr pane layout --current`,
+    // Under core these would hit the TUI's `herdr` on PATH; layout-splits places the panes itself.
+    inspect_command: core ? null : `herdr pane layout --current`,
     inspect_source: { kind: "json", path: ".result.layout.panes" },
-    split_command: `herdr pane split --pane <SPLIT_TARGET> --direction <DIRECTION> --cwd "${cwd}" --no-focus`,
+    split_command: core ? null : `herdr pane split --pane <SPLIT_TARGET> --direction <DIRECTION> --cwd "${cwd}" --no-focus`,
     target_source: { kind: "json", path: ".result.pane.pane_id" },
   };
 }
@@ -3726,7 +3728,7 @@ function herdrErrorCode(attempt) {
 function closeOrphanPane(member, { nameHeldElsewhere = false } = {}) {
   const id = member.transport_id;
   if (!id) return { remedy: "the agent name never registered" };
-  const keep = { orphaned_transport_id: id, remedy: `the pane is orphaned (the agent name never registered) — close it with \`herdr pane close ${id}\`` };
+  const keep = { orphaned_transport_id: id, remedy: `the pane is orphaned (the agent name never registered) — close it with \`${herdrCloseCommand(id)}\`` };
   if (!nameHeldElsewhere && herdrAgentState(member.name).live) return keep;
   const call = (args) => {
     try {
@@ -3973,7 +3975,9 @@ async function launchMember(member, transport) {
           launch_result: {
             code,
             detail: errorText(),
-            remedy: `${member.name} is live but awaiting a startup prompt — \`herdr agent read ${member.name} --source recent-unwrapped --lines 40\` shows it, \`herdr agent send-keys ${member.name} <key>\` answers it`,
+            remedy: herdrFlavour() === "core"
+              ? `${member.name} is live but awaiting a startup prompt — \`hc read ${member.transport_id} --lines 40\` shows it, \`hc keys ${member.transport_id} <key>\` answers it`
+              : `${member.name} is live but awaiting a startup prompt — \`herdr agent read ${member.name} --source recent-unwrapped --lines 40\` shows it, \`herdr agent send-keys ${member.name} <key>\` answers it`,
           },
           retried,
         };
@@ -4535,7 +4539,7 @@ function adoptCommand(teamName) {
 }
 
 function peerFallbackPlanEntry(m) {
-  return { role: m.role, name: m.name, route: m.route, transport: "herdr", transport_id: m.transport_id, command: m.transport_id ? `herdr pane close ${m.transport_id}` : null, live: m.live, how: m.how, source: m.source || "peers", ...(m.stray ? { stray: true } : {}) };
+  return { role: m.role, name: m.name, route: m.route, transport: "herdr", transport_id: m.transport_id, command: m.transport_id ? herdrCloseCommand(m.transport_id) : null, live: m.live, how: m.how, source: m.source || "peers", ...(m.stray ? { stray: true } : {}) };
 }
 
 /** Close one member of a (possibly mixed, spec 0040 §1.4a) close set: team rows use the team's
