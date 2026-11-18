@@ -370,6 +370,17 @@ reset; setup_roster
 OUT=$(env -i $TUI_ENV CLAUDE_PID=$$ node "$H/roster.mjs" spawn-one reviewer --dry-run --cwd "$PROJ" 2>&1)
 check "spawn-one under tui (negative): the launch line is herdr agent start, with no PATH prefix" 'echo "$OUT" | grep -q "herdr agent start" && ! echo "$OUT" | grep -q "env PATH="'
 
+# Commands ah prints for a person or agent to run: under core the TUI's `herdr` is usually also on PATH, so a
+# printed `herdr …` line would reach the TUI server. Each must name hc, or be left out.
+closecmd() { env -i PATH="$NODE_DIR" "$@" node --input-type=module -e 'import { herdrCloseCommand } from "'"$H"'/lib-herdr.mjs"; console.log(herdrCloseCommand("t7"))'; }
+check "printed close under core is hc kill" '[ "$(closecmd HC_TERMINAL_ID=t1)" = "hc kill t7" ]'
+check "printed close under tui (negative) stays herdr pane close" '[ "$(closecmd HERDR_ENV=1 HERDR_PANE_ID=p1)" = "herdr pane close t7" ]'
+reset; setup_roster
+OUT=$(env -i $CORE_ENV CLAUDE_PID=$$ node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1)
+check "create --plan under core: layout_plan prints no herdr inspect/split command" 'echo "$OUT" | node -e "const lp=JSON.parse(require(\"fs\").readFileSync(0,\"utf8\")).layout_plan;process.exit(lp&&lp.inspect_command===null&&lp.split_command===null?0:1)"'
+OUT=$(env -i $TUI_ENV CLAUDE_PID=$$ node "$H/roster.mjs" create --plan --cwd "$PROJ" 2>&1)
+check "create --plan under tui (negative): layout_plan keeps the herdr commands" 'echo "$OUT" | node -e "const lp=JSON.parse(require(\"fs\").readFileSync(0,\"utf8\")).layout_plan;process.exit(lp&&/^herdr pane split /.test(lp.split_command)?0:1)"'
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
