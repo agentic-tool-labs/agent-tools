@@ -47,6 +47,10 @@ function checkout(items) {
 module.exports = { checkout };
 EOF
 git add -A && git commit -qm "base"
+# A local bare remote, so the flow's `git fetch origin <base>` works offline.
+git clone -q --bare . "$dir.origin.git"
+git remote add origin "$dir.origin.git"
+git fetch -q origin
 
 git checkout -qb feature/discounts
 cat > docs/tickets/ENG-42.md <<'EOF'

@@ -220,8 +220,15 @@ the tab when none remain.
 - **Pre-existing bugs in touched functions** — also list bugs in unchanged lines of
   the functions this change edits. They are shown ungraded in their own section and
   never fixed or posted by default.
-- **Start fresh** — offer this only when L2.6 found a ledger for this branch, and name
-  its size in the option text. It ignores the earlier runs' findings for this review.
+- **Start fresh** — offer this only when a ledger exists for this branch, and name its
+  size in the option text. Before this ask, check for L2.6's file with `ls` and count
+  its lines. Loading it waits for L2. The option ignores the earlier runs' findings for
+  this review.
+
+**Right after this ask, refuse incompatible extras.** `--deep` together with
+`level: low` is refused here, before any dispatch: low skips verification, and deep
+needs it. Say so in one line and ask whether to switch the level to medium or drop
+deep.
 
 ## L2 — Generate the diffs (yourself)
 Do this with your own read-only git — do NOT delegate it:
@@ -280,7 +287,8 @@ Do not add an ask for it, because the wizard's tabs are full.
   `--git-common-dir` resolves to the main repo's `.git` from a worktree too, so the
   ledger is never committed, never pushed, and kept per clone.
 - **Line format:** each line is one finding:
-  `{"key","file","line","category","severity","problem","verdict","disposition","sha","source"}`.
+  `{"key","file","line","quote","category","severity","problem","verdict","disposition","sha","source"}`.
+  - `quote` is the cited line's text, trimmed. Re-anchoring matches on it.
   - `key` is a short mechanism slug, such as `null-deref:parseUser:result`.
   - `disposition` is one of `open | fixed | declined | posted | refuted | stale`.
   - `source` is one of `review | pr-comment`.
@@ -289,8 +297,12 @@ Do not add an ask for it, because the wizard's tabs are full.
   - An entry whose code is gone becomes `stale` and is not carried forward.
   - In the PR flow, also import G1.2's existing review threads as
     `source: pr-comment` entries, so other reviewers' findings count as known.
-- **Build `known-findings:`** for each dispatch: one line per live entry on that
-  dispatch's files. `refuted` and `declined` entries are marked `rejected`.
+- **Build `known-findings:`** for each dispatch, one line per entry on that dispatch's
+  files:
+  - **Live:** `open` and `posted`.
+  - **`rejected`:** `refuted` and `declined`.
+  - **Left out:** `fixed` and `stale`. A fixed defect that comes back is a regression,
+    so it must be findable again.
 - **Nothing found:** `known-findings: none`.
 
 This ledger is review bookkeeping, NOT a code edit, so the ZERO-edits rule doesn't
@@ -534,6 +546,8 @@ to cap.
 move on. A cap question with nothing to cap is noise.
 
 Otherwise ask: *"You selected **N** categories. How many reviewers should run at once?"*
+When L4.5 will shard (more than 5 files or more than 200 changed lines), N is
+categories × shards. Say both: *"6 categories × 3 shards = 18 reviewers"*.
 **Name the actual N in the question**, and the diff's size alongside it — the whole point
 is that the user sees the width before it happens, not after.
 
@@ -784,9 +798,10 @@ it.
     6`) before dispatching.
   - The single-agent, peer and advisor paths do not shard. They get the coverage check
     alone.
-- **Coverage check (all subagent paths).** Build your own hunk list from
-  `git diff -U0 <base spec>` (the `@@` headers). Check each return's `coverage:` block
-  against it.
+- **Coverage check (all subagent paths).** Build your own hunk list from the `@@`
+  headers of the same default-context `git diff <base spec>` the reviewers run, and add
+  each `untracked:` file as one whole-file hunk. A hunk counts as covered when a
+  returned `coverage:` range OVERLAPS it. Match by overlap, never by exact range.
   - A hunk that is missing, or skipped without a reason that holds (`trivial` is valid
     only for imports, whitespace, generated files and lockfiles), goes back to the same
     lens: ONE follow-up dispatch scoped to just those hunks, with the same lines.
@@ -927,8 +942,9 @@ location.** Two tests, and a finding must pass both:
 Checking (1) alone is what lets pre-existing code through, since context lines live
 inside hunks. You remain responsible for the merged result.
 
-**Two admissions to test (2).** Working-tree hunks are CHANGED lines whenever L2 step 3
-set a merge-base base spec. With `pre-existing: on`, a
+**Admissions to tests (1) and (2).** Working-tree hunks are CHANGED lines whenever L2
+step 3 set a merge-base base spec. A line in an `untracked:` file passes both tests
+when the line exists in that file. With `pre-existing: on`, a
 `pre-existing-in-touched-function` finding passes test (2) when its line sits inside the
 enclosing function of a changed hunk. Check that yourself, and drop it otherwise.
 
@@ -983,10 +999,12 @@ month", not "true about this diff".
 Either way: produce concrete findings, each tied to a file + line, tagged with its
 category, and carrying its `scope:`.
 
-### L4.6 — Verification: is each finding real? (after cross-check and dedup)
+### L4.6 — Verification: is each finding real? (after cross-check, dedup and the level gate)
 **Skip at `level: low`.** There, only certain or High+ findings survive anyway.
-- **What gets verified.** Every finding that survived the provenance cross-check and
-  L5's cross-category dedup, at Low or above. Nits and `Pre-existing` findings are
+- **What gets verified.** Every finding at Low or above after the provenance
+  cross-check, L5's cross-category dedup, impact filter and level gate. Run those L5
+  steps first, then verify, then rank. Verifying a finding the gate is about to demote
+  to Nit wastes a dispatch. Nits and `Pre-existing` findings are
   exempt.
 - **Dispatch.** One **`github-pr-toolkit:code-reviewer-verifier`** dispatch per
   finding.
@@ -1009,8 +1027,8 @@ category, and carrying its `scope:`.
     the verifier, not reviewed".
 
 ### L4.7 — Deep passes (only with `depth: deep`)
-**Requires L4.6.** At `level: low`, where L4.6 is skipped, refuse `--deep` and give a
-one-line reason. Ask whether to switch the level to medium.
+**Requires L4.6.** L1/G1.1 already refused `--deep` at `level: low`, so a deep run
+always verifies.
 
 Pass 1 is the normal review, through verification. Then loop:
 1. **Plan line before each pass:** `pass <k>/<cap>: <n> reviewers; pass <k-1> added <m>
@@ -1023,7 +1041,8 @@ Pass 1 is the normal review, through verification. Then loop:
      merge at dedup.
    - **From pass 3 on**, `known-findings:` also carries every finding verified so far,
      and every refuted one marked `rejected`.
-   - Add a `sweep:` line naming the miss list: *moved or extracted code that dropped a
+   - From pass 3 on, add a `sweep:` line naming the miss list. Pass 2 runs as an
+     ordinary review, so it stays comparable to pass 1. The miss list: *moved or extracted code that dropped a
      guard or anchor; dataclass/default values evaluated once; `hash()`
      non-determinism; a shrunk lock scope; predicate methods with side effects;
      setup/teardown asymmetry in tests; flipped config defaults.*
@@ -1080,7 +1099,9 @@ severity change is the non-material demotion to `Nit`, announced per ALWAYS SHOW
 SEVERITY; it never re-grades a material finding.
 
 **L5.0 — If nothing clears the bar, the review is DONE and it succeeded.** Trigger on the
-POST-triage list being empty — whether the reviewers returned nothing, or everything they
+POST-triage list of NEW findings being empty. If L2.6 loaded open known findings, the
+report says **"no new findings"**, never "reviewed clean", and still lists the
+still-open ones. Trigger on the POST-triage list being empty — whether the reviewers returned nothing, or everything they
 returned was dropped for scope/impact. Report it plainly and specifically: the categories
 that ran, the base spec, the file count, and the drop note if anything was dropped
 ("reviewed clean; 3 findings dropped for scope"). "Reviewed and clean" must never read as
@@ -1285,6 +1306,13 @@ PRESENTING, not acting on it.
 **If the Task tools are unavailable in this session**, say so in one line and fall back
 to the numbered list as the tracking mechanism. Never let missing task tooling stall the
 review.
+
+**Still-open known findings (when L2.6 loaded a ledger).** Reviewers were told not to
+re-report these, so list them yourself in their own section after the ranked list:
+*"Still open from earlier runs and PR comments"*. Each line shows its severity, `file:line`
+and problem, and they carry their saved severity. A known finding the reviewers'
+coverage shows was looked at again and that now reads as fixed in this diff becomes
+`fixed`. Say so in one line.
 
 **Pre-existing section (only with `pre-existing: on`).** After the Nit block, list
 `Pre-existing` findings under *"Seen while reviewing, not caused by this change"*. Each
@@ -1575,8 +1603,11 @@ the tab when none remain.
 - **Pre-existing bugs in touched functions** — also list bugs in unchanged lines of
   the functions this change edits. They are shown ungraded in their own section and
   never fixed or posted by default.
-- **Start fresh** — offer this only when L2.6 (run it before this ask, keyed `pr-<N>`) found a ledger for this branch, and name
-  its size in the option text. It ignores the earlier runs' findings for this review.
+- **Start fresh** — offer this only when a ledger exists for `pr-<N>` (check with `ls`
+  before this ask), and name its size in the option text. It ignores the earlier runs'
+  findings for this review.
+
+Refuse `--deep` with `level: low` right after this ask, exactly as L1 does.
 
 **G1.2 Delegate with the EXACT path — one combined dispatch.** Delegate to
 `critic-worker`: *"WORKTREE + EXISTING-COMMENTS task — (1) check out PR #N into a
@@ -1601,7 +1632,9 @@ As in L2, with your own read-only git inside the worktree:
 `git -C <path> fetch origin <base>` then `git -C <path> diff origin/<base>...HEAD`
 (`--stat` first, then per file). Do NOT delegate this and do NOT review a diff you did
 not compute. **Keep the changed-file and changed-line counts as L2 does** — G3 runs L3 in
-full, and Tab 3's recommended reviewer is a function of those two numbers.
+full, and Tab 3's recommended reviewer is a function of those two numbers. Then run
+**L2.5** (intent brief, with the PR and issue text from G1.2) and **L2.6** (ledger
+`pr-<N>`, importing G1.2's threads). L2 step 3 doesn't apply here.
 
 ## G3–G5 — Review (same as L3–L5), then dedup against existing comments
 Run L3 in full — **all FOUR tabs in one AskUserQuestion**, not three. Categories / More

@@ -122,8 +122,8 @@ sweep.
 
 **Decision (D1).** This becomes an independent **depth** knob, not part of the level. The
 review-level spec stays as written ("the level … does nothing else", "`high` is not
-permission to sweep again"). Depth and level compose: `--deep --level low` searches
-harder and still reports only certain, material defects.
+permission to sweep again"). Depth and level compose, except that `--deep --level low` is refused
+up front: low skips verification, and deep needs it.
 
 **Change:**
 - Add a `--deep` argument. In the wizard, ask it as its own question in the **same**

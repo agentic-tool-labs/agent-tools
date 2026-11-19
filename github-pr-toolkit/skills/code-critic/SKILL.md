@@ -203,7 +203,10 @@ order. That file is the single source of truth for the flow; do not improvise pa
 Outline (same steps): **0** arm the session-named guard lock
 (`touch .git/code-critic-$CLAUDE_CODE_SESSION_ID.lock`) + pick mode (local vs GitHub PR) →
 **local:** declare the outcome (fix / report only / decide after — Tab 1 of the base
-ask) → choose base ref → YOU fetch + generate per-file diffs vs `origin/<base>` →
+ask) → choose base ref, level and Extras (`--deep`, `--pre-existing`, start fresh) → YOU fetch + generate per-file
+diffs vs `origin/<base>`, including uncommitted work → YOU build the intent brief (PR,
+tickets, cited specs and ADRs; reviewers get it as data) and load the `.git/code-critic/`
+findings ledger →
 choose review categories (multi-select: general / security / design & architecture /
 rules & idioms adherence / performance / tests, plus opt-in UI/UX; the six
 non-UI categories are the default) + choose the
@@ -213,8 +216,10 @@ and high-severity findings to the advisor before finalizing) + the reviewer MODE
 (*Default (model I'm using)* / Opus / Sonnet / Fable; one model runs every selected
 category, passed as the Agent tool's dispatch-time `model` override). **All four are
 tabs of ONE AskUserQuestion** — the model is never a follow-up ask →
-per-category adversarial review (subagent findings cross-checked against YOUR diff,
-merged, deduped across categories) → severity-ranked numbered
+per-category adversarial review following the METHOD, with per-hunk coverage checked and
+large diffs sharded (subagent findings cross-checked against YOUR diff, merged, deduped
+across categories) → read-only verification of each graded finding
+(`code-reviewer-verifier`) → with `--deep`, repeat passes until one adds nothing new → severity-ranked numbered
 findings with a succinct action each, **tracked as a task list** (3+ findings; one task
 per finding, all `pending`, severity leading the subject and the impact line in the
 description — `metadata` is never returned by any reader, so nothing may depend on it) →
