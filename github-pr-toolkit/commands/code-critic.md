@@ -560,7 +560,7 @@ ASK C asks only the path Tab 3 chose. It cannot ride inside ASK B, which already
 four tabs and can't know the answers it depends on. Main agent and Advisor get no
 ASK C. Their adherence-basis question, if L3.1 needs one, is asked alone.
 
-**ASK C-S — Subagents** (up to three questions, one call):
+**ASK C-S — Subagents** (up to four questions, one call):
 1. **Shape** (2+ categories) — **One per category** (fan-out; strongest: each lens reaches
    its verdict independently) or **One agent, all categories** (a single
    `code-reviewer-all`: one dispatch, and it sees cross-lens interactions, but it is one
@@ -572,9 +572,23 @@ ASK C. Their adherence-basis question, if L3.1 needs one, is asked alone.
    pacing doesn't apply. It is still asked in the same call, because a deferred
    question is how asks go missing.
 3. **Adherence basis** — only when L3.1 needs it.
+4. **Sharding** — whenever L2 measured more than 5 files or more than 200 changed lines,
+   with any number of categories. Explain it in the question, naming the real numbers:
+   *"This diff is <files> files / <lines> changed lines. Sharding splits it into slices
+   so each reviewer reads a smaller part closely instead of skimming the whole diff; the
+   cost is more agents, since every category gets one reviewer per slice<, again on
+   each deep pass>. Use sharding, and how fine?"* Each option names its pass-1 reviewer
+   count:
+   - **No sharding (default, <c> reviewers)** — each category's reviewer gets the whole
+     diff; the coverage check still sends back any hunk it skipped.
+   - **Light — ~400-line shards (<c> × <s'> = <R'>)**
+   - **Fine — ~200-line shards (<c> × <s> = <R>)**
+   If Shape picks one agent, a one-line note says sharding doesn't apply (that path
+   never shards). Under the size, skip it with the one-line note `Sharding: not needed
+   (diff under 5 files / 200 lines).`
 
-With ONE category selected and no adherence basis needed, there is no ASK C-S: announce
-the single dispatch.
+With ONE category selected, no adherence basis needed and a diff under the sharding
+size, there is no ASK C-S: announce the single dispatch.
 
 **ASK C-P — Peer agents** (up to three questions, one call):
 1. **Which peers** (multiSelect, 2+ live) — up to four live candidates, each labelled
@@ -586,8 +600,9 @@ the single dispatch.
 3. **Adherence basis** — only when L3.1 needs it.
 
 **Pacing question (C-S Q2):** *"You selected **N** categories. How many reviewers should run at once?"*
-When L4.5 will shard (more than 5 files or more than 200 changed lines), N is
-categories × shards. Say both: *"6 categories × 3 shards = 18 reviewers"*.
+Pacing rides in the same call as the Sharding question, so when that question is
+asked, name N for each sharding choice: *"6 reviewers unsharded, 12 with ~400-line
+shards, 18 with ~200-line shards."* The cap paces whichever the user picks.
 **Name the actual N in the question**, and the diff's size alongside it — the whole point
 is that the user sees the width before it happens, not after.
 
@@ -832,11 +847,12 @@ A reviewer that returns no `coverage:` block has not met its contract. L4.5 re-d
 it.
 
 ### L4.5 — Coverage: every hunk accounted for
-- **Sharding (fan-out path).** When L2 measured more than 5 files or more than 200
-  changed lines, split each category into shards of about 200 changed lines, unless
-  the L4.0 trim chose a bigger size or none. Sharding is never a surprise: L4.0 states
-  it on its own line, with the multiplication, before anything runs. Keep each
-  file in the same shard as its tests and its in-diff callers.
+- **Sharding (fan-out path) is OFF by default.** Each category's reviewer gets the
+  whole diff, and the coverage check below catches hunks it skips. Shard only when the
+  user turns it on, at ASK C-S's Sharding question or later at L4.0's **Sharding**
+  ask, at the size they picked (~200 or ~400 changed lines per shard). Both are offered
+  only when L2 measured more than 5 files or more than 200 changed lines. Keep each file in the same shard as its tests and its in-diff
+  callers.
   - Each shard is its own dispatch, carrying `shard: <i>/<n>` and its file subset.
     L3.0's cap paces them, and every shard counts toward it.
   - The shard count goes in the L4.0 plan's pass-1 row (`6 categories × 3 shards = 18
@@ -878,14 +894,17 @@ one agent each`. Without any of them, leave the line out.
   known findings loaded from the ledger.
 - **Who and on what model:** the path; the Tab 4 alias or `session default`; each peer's
   own model, or `own model (unknown)`.
-- **Sharding, stated on its own line, before the table** whenever `<s>` > 1:
-  `Sharding: <files> files / <lines> changed lines is over the 5-file / 200-line limit,
-  so each category is split into <s> shards of ~200 lines. That multiplies every
-  category: <c> × <s> = <R> reviewers per pass<, and again on each deep pass>.` Follow
-  it with one line on why: `Smaller slices mean each reviewer reads every hunk closely
-  instead of skimming a long diff; the cost is more agents.` Then one line per shard
-  naming its files. With `<s>` = 1, say `Sharding: none (diff under
-  the limit)`.
+- **Sharding, stated on its own line, before the table** (fan-out path only; the
+  other paths never shard). It is off by default:
+  - Off, diff under 5 files and 200 changed lines: `Sharding: off (diff is small).`
+  - Off, diff over that size: `Sharding: off (your ASK C-S answer) — each category
+    reviews the whole diff (<files> files / <lines> changed lines). Available: shards of ~200 lines
+    would give <c> × <s> = <R> reviewers per pass<, and again on each deep pass>.
+    Smaller slices mean each reviewer reads every hunk closely instead of skimming a
+    long diff; the cost is more agents.`
+  - On (picked at ASK C-S): `Sharding: on — <s> shards of ~<size> lines, so <c> × <s>
+    = <R> reviewers per pass<, and again on each deep pass>.` Then one line per shard
+    naming its files.
 - **Phase rows**, one per phase that will run:
   | Phase | Agents | Notes |
   |---|---|---|
@@ -901,12 +920,13 @@ one agent each`. Without any of them, leave the line out.
   intent coverage table, `not reviewed:` lines if any, a pre-existing section if on);
   what happens next per the Step 0.3 outcome; and the report path.
 
-**Ask** (one AskUserQuestion, one question): **Run this plan*** │ **Adjust sharding**
-(only when `<s>` > 1) │ **Trim something else** │ **Cancel**.
-- **Adjust sharding** asks the shard size, each option naming its resulting reviewer
-  count: **~200 lines (as planned, <R>)** │ **~400 lines (<R'>)** │ **No sharding
-  (<c>)**, each reviewer gets the whole diff. The coverage check runs either way, so
-  hunks an unsharded reviewer skips still get L4.5's follow-up.
+**Ask** (one AskUserQuestion, one question): **Run this plan*** │ **Sharding** (only
+on the fan-out path with a diff over 5 files or 200 changed lines) │ **Trim something
+else** │ **Cancel**.
+- **Sharding** re-asks ASK C-S's question so the user can change their answer, each
+  option naming its resulting reviewer count: **Off (<c>)**, each reviewer gets the whole diff │ **~400-line shards
+  (<R'>)** │ **~200-line shards (<R>)**. The coverage check runs either way, so hunks
+  an unsharded reviewer skips still get L4.5's follow-up.
 - **Trim something else** asks which lever to pull (multi-select; fewer categories goes
   through Other): **Drop or shorten deep passes** │ **One agent, all categories** │
   **Lower the verifier ceiling**.
@@ -948,7 +968,8 @@ missing one means an ask went out incomplete — not that you may fill the gap y
    is a violation of L3, not a shortcut. One subagent is still a subagent dispatch; a
    single agent does not exempt this.
 2. **ASK C (L3.0)** — on the Subagents path with **2+ categories**, both Shape and
-   Pacing are required. On the Peer agents path, the chosen peers are required, plus
+   Pacing are required, plus Sharding (any category count) when the diff is over 5 files
+   or 200 changed lines. On the Peer agents path, the chosen peers are required, plus
    Split when 2+ peers and 2+ categories. Missing either means you skipped that ask. Do not default to "all at once"
    and do not pick a cap yourself: unbounded fan-out is the exact thing L3.0 exists to
    put in the user's hands, and quietly choosing for them reproduces the bug.

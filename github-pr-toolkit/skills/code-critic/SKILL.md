@@ -74,6 +74,8 @@ the stats record them too.
     cross-lens interactions, but it is one reasoner whose read of one lens colours the
     next, so it's cheaper and weaker.
   - **Pacing** — how many reviewers run at once.
+  - **Sharding** — on a diff over 5 files or 200 lines: no sharding (default), ~400-line
+    or ~200-line shards, with what it buys (closer reading) and costs (more agents).
 - **Peers:**
   - **Which peers** (multi-select).
   - **One peer holds every lens**, or **split categories across the chosen peers**
@@ -84,10 +86,11 @@ the stats record them too.
 Main agent and Advisor get no ASK C.
 
 **Step 3 — the plan (L4.0), on every path.** Before anything reviews, state sharding on
-its own line (why, how many shards, the multiplication), then show the agent
+its own line. It is off by default; on a diff over 5 files or 200 lines, say it is
+available, why, and the multiplication it would cost. Then show the agent
 count per phase (reviewers × shards, coverage follow-ups, verifiers capped at 10 per
 pass, deep passes) with the worst-case total, the models, and what to expect. Ask
-**Run this plan** / **Adjust sharding** / **Trim something else** / **Cancel**. No flag pre-approves it. The approved
+**Run this plan** / **Sharding** (off* / ~400 / ~200 lines) / **Trim something else** / **Cancel**. No flag pre-approves it. The approved
 counts are a ceiling: going past one asks first. The plan and the run's outcome are
 written to `<git-common-dir>/code-critic/<key>-report.md`.
 
@@ -121,7 +124,7 @@ the user both override this. Either way, say which you dispatched and why.
 - **one at a time**;
 - a number they name.
 
-N includes shards. Above the cap, use a ROLLING queue: refill each freed slot as a
+N includes shards when sharding is on. Above the cap, use a ROLLING queue: refill each freed slot as a
 reviewer returns. A cap of 1 IS the no-fan-out answer. A cap of 0 is not "the main agent
 reviews": reviewer identity belongs to the Who-reviews tab. Never silently exceed a cap
 the user set.
@@ -251,10 +254,10 @@ ones named with their own models / Main agent / Advisor) + the MODEL for subagen
 dispatch-time `model` override; peers keep their own model, which the question names).
 **All four are tabs of ONE AskUserQuestion** — the model is never a follow-up ask →
 ASK C for the chosen path only (Subagents: Shape = one per category / one for all, plus
-Pacing; Peers: which peers, plus one peer for every lens / split across them; either
+Pacing, Sharding on a large diff; Peers: which peers, plus one peer for every lens / split across them; either
 path: the adherence basis if needed) →
 per-category adversarial review following the METHOD, with per-hunk coverage checked and
-large diffs sharded (subagent findings cross-checked against YOUR diff, merged, deduped
+large diffs sharded only if you turned sharding on at the plan (subagent findings cross-checked against YOUR diff, merged, deduped
 across categories) → read-only verification of each graded finding
 (`code-reviewer-verifier`) → with `--deep`, repeat passes until one adds nothing new → severity-ranked numbered
 findings with a succinct action each, **tracked as a task list** (3+ findings; one task

@@ -22,7 +22,7 @@ The wizard picks the reviewer in two steps; the full design is in
 
 | Path | ASK C asks | Dispatches | Tradeoff |
 |---|---|---|---|
-| **Subagents → One per category** *(default on larger diffs)* | Shape, then Pacing (the cap) | one `code-reviewer-<category>` per category (and per shard), paced by the cap | strongest — each lens reaches its verdict independently |
+| **Subagents → One per category** *(default on larger diffs)* | Shape, then Pacing (the cap) | one `code-reviewer-<category>` per category (and per shard, if you turn sharding on), paced by the cap | strongest — each lens reaches its verdict independently |
 | **Subagents → One agent, all categories** *(recommended at ≤ 5 files and ≤ 200 lines)* | Shape | a single `code-reviewer-all` | cheaper; one reasoner, so lenses colour each other. Returns a **roll-call** |
 | **Peer agents → One peer, every lens** | Which peers | one brief to the most role-fit chosen peer | a warm session that may know the codebase; one reasoner |
 | **Peer agents → Split across peers** | Which peers, then Split | one brief per peer, categories assigned round-robin | independence across peers, on their own models |
@@ -224,15 +224,16 @@ commits & pushes them to the PR branch, SHA-verified before the worktree is clea
 each issue can still take a comment instead.
 
 **Nothing reviews until you approve the plan.** After the last wizard question the
-orchestrator shows a plan. When the diff is over 5 files or 200 lines, it says first
-that each category will be split into shards of about 200 lines, and how many agents
-that multiplies into. Then it gives one row per phase: pass-1 reviewers (categories ×
+orchestrator shows a plan. Its first line is sharding. On a diff over 5 files or 200 lines
+the subagent setup has already asked whether to shard (no sharding is the default) and
+how finely; the plan restates that answer, why sharding helps (each reviewer reads a
+smaller slice closely) and how many agents it multiplies into. Then it gives one row per phase: pass-1 reviewers (categories ×
 shards), coverage follow-ups, verifiers (one per finding, at most 10 per pass by
 default), and deep passes. When deep passes, sharding or a worst case over 12 agents
 is in play, the plan opens with a **⚠ High token use** line naming each cause and
 what it multiplies. Each row gives an agent count and the worst-case total, the
-models, and what comes back. Answer **Run this plan**, **Adjust sharding** (~200 lines, ~400 lines
-or none, each showing its agent count), **Trim something else** (drop or shorten
+models, and what comes back. Answer **Run this plan**, **Sharding** (off, ~400-line or
+~200-line shards, each showing its agent count), **Trim something else** (drop or shorten
 deep, one agent, a lower verifier ceiling) or **Cancel**. No flag skips this, `--deep`
 included. The approved counts are a ceiling: anything that would go past one stops and
 asks first. The plan and the run's outcome (planned vs. dispatched, findings and where
@@ -337,7 +338,7 @@ to keep finding new ones. These mechanisms close that gap:
 | Mechanism | What it does | When |
 |---|---|---|
 | **Method** | The general and all-categories reviewers read the whole function around each hunk, audit deleted lines for dropped guarantees, trace callers of changed functions, check language pitfalls and check wrapper routing. Security and design run the steps that fit their lens. | always |
-| **Coverage ledger** | Each reviewer returns one `coverage:` line per hunk. A missed hunk goes back to the same lens once. One still missed is reported as `not reviewed`. Diffs over 5 files or 200 changed lines are sharded at about 200 lines per reviewer. | always |
+| **Coverage ledger** | Each reviewer returns one `coverage:` line per hunk. A missed hunk goes back to the same lens once. One still missed is reported as `not reviewed`. On a diff over 5 files or 200 changed lines you're asked whether to shard and how finely: no sharding (default), ~400-line or ~200-line shards, each with its agent count. | always |
 | **Verification** | `code-reviewer-verifier` checks each graded finding by reading the code and returns CONFIRMED, PLAUSIBLE or REFUTED. Refuting requires a quoted line, the orchestrator re-checks that quote, and refutations are counted in the drop note. | `medium` and `high` |
 | **Intent brief** | The orchestrator distils the PR, linked tickets (Linear, Jira or GitHub, through whatever tracker tooling the session has), and the specs and ADRs they cite into a brief with acceptance criteria. Every reviewer gets it as data, never as instructions. L5 shows a criteria coverage table. | when a source exists, or with `--intent` |
 | **Findings ledger** | `$(git rev-parse --git-common-dir)/code-critic/<branch or pr-N>.jsonl` holds every finding with its verdict and disposition, plus the PR's existing review comments. Later runs pass it to reviewers as `known-findings`, so they look only for what's new. Refuted and declined findings aren't re-raised. | always; `--fresh` skips reading it |

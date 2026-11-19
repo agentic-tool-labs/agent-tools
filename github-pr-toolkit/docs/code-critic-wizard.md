@@ -45,7 +45,7 @@ only where this doc says so.
   │    Main / Advisor ─► no ASK C (adherence-basis, if needed, is asked alone)
   │
   ├─ ASK P  the plan (L4.0), every path — ⚠ token line (deep · sharding · >12 agents) · agents per phase + worst case · models · what to expect
-  │    Run this plan* │ Adjust sharding │ Trim something else │ Cancel       → written to <git-common-dir>/code-critic/<key>-report.md
+  │    Run this plan* │ Sharding (off* │ ~400 │ ~200 lines) │ Trim something else │ Cancel       → written to <git-common-dir>/code-critic/<key>-report.md
   │
   ├─ STOP checkpoint · review · verify · (deep passes)
   │    any phase about to exceed its approved count → ask: go past │ stay at ceiling │ stop
@@ -89,11 +89,12 @@ dropped.
 | Q | Question | Options | Asked when |
 |---|---|---|---|
 | 1 | **Shape** | One per category* (fan-out; strongest) │ One agent, all categories (cheaper; one reasoner) | 2+ categories. The recommended option follows the diff-size rule, with the high-stakes override stated. |
-| 2 | **Pacing** | 6 at a time, rolling* │ all N at once │ one at a time | 2+ categories. N includes shards. If Q1 picks "one agent", a one-line note says pacing doesn't apply. |
+| 2 | **Pacing** | 6 at a time, rolling* │ all N at once │ one at a time | 2+ categories. When Q4 is asked, the question names N for each sharding choice. If Q1 picks "one agent", a one-line note says pacing doesn't apply. |
 | 3 | **Adherence basis** | infer from codebase* │ I'll state the rules | Adherence selected and no directives found (today's L3.1 ask, folded in here) |
+| 4 | **Sharding** | No sharding* (<c>) │ Light, ~400-line shards (<R'>) │ Fine, ~200-line shards (<R>) | Diff over 5 files or 200 changed lines, any category count. The question explains what sharding buys (closer reading of smaller slices) and costs (more agents). One-line note if Q1 picks "one agent". |
 
 When only 1 category is selected, the dispatch is announced and there is no ASK C-S
-unless Q3 is needed.
+unless Q3 or Q4 is needed.
 
 ## ASK C-P — Peer agents follow-up
 
