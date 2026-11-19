@@ -190,6 +190,14 @@ Apply each category the dispatch names. The built-in slugs and what they cover:
 - **`tests`** — coverage the change now leaves uncaught, assertions that don't test the
   behavior claimed, fragile/flaky constructions, a regression path with no test. A
   coverage gap ships fine, so state the regression it fails to catch.
+- **`ui-ux`** *(opt-in — apply only when named)* — what the changed UI does to its user:
+  missing interaction states and double-submit, unconfirmed destructive actions and
+  stranding flows, layouts that break at 375/768/1440px, raw values where the repo has
+  a token/component (name it), keyboard/label/alt/focus/semantic-HTML/contrast gaps
+  (WCAG 2.1 AA), missing loading/empty/error states, and unclear interface copy. Impact
+  names a user and a situation (`when a keyboard-only user…`); polish that leaves every
+  task completable is `Nit`; what only a render can show is `uncertain — confirming
+  needs a live render`. Full checklist: `code-reviewer-ui-ux.md`.
 
 **If the dispatch names a CUSTOM category**, it carries that category's focus text —
 apply it as written, and use its slug in `category:`. Do not guess at a custom

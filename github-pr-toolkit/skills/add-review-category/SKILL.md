@@ -14,7 +14,7 @@ description: >-
 Adds a **custom review category** to this plugin's `/code-critic` flow. A category is
 one agent file, `code-reviewer-<slug>.md`, installed OUTSIDE the plugin (so plugin
 updates never overwrite it). code-critic's L3 step discovers these files and offers
-the category alongside the six built-ins; the guard hook auto-grants any
+the category alongside the seven built-ins; the guard hook auto-grants any
 `code-reviewer-*` agent read-only inspection Bash and nothing more.
 
 ## Hard gates (never violate)
@@ -40,7 +40,7 @@ file** (they give a path) / **Import from GitHub** (they give a raw URL, or
 Interview the user (free text is fine; use AskUserQuestion only where options are
 natural). Collect:
 1. **Slug** — kebab-case, becomes `code-reviewer-<slug>`. Reject collisions with the
-   built-ins (general, security, design, adherence, performance, tests) and with any
+   built-ins (general, security, design, adherence, performance, tests, ui-ux) and with any
    existing custom file in either install dir.
 2. **Title** — the human name shown in the L3 picker (e.g. "Accessibility").
 3. **Charter** — one sentence: what this lens hunts for (goes in the description).

@@ -28,7 +28,7 @@ approve, or only comment on or report them. The review itself is the same
 either way, and comment mode makes no code changes at all.
 
 The review then runs over the categories you pick (general, security, design,
-rules-adherence, performance, tests), using parallel review subagents on a
+rules-adherence, performance, tests, and opt-in UI/UX), using parallel review subagents on a
 model you choose. That's session default, Opus, Sonnet, or Fable, one model
 across all categories, or else the advisor or the main agent. You can also hand
 the review to a live peer agent rooted in the repo: an agent-hierarchy peer,
@@ -82,7 +82,7 @@ distilled results.
 Review subagents can split code-critic's adversarial pass across the
 categories you select. There's one per built-in category
 (`code-reviewer-general`, `-security`, `-design`, `-adherence`,
-`-performance`, `-tests`), plus any custom categories you've added with
+`-performance`, `-tests`, and the opt-in `-ui-ux`), plus any custom categories you've added with
 `add-review-category`, and `code-reviewer-all` covers every selected category
 in a single dispatch instead of one agent per category. They run on the model
 you pick (*Default (model I'm using)*, Opus, Sonnet, or Fable), the same one

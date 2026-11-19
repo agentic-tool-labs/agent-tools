@@ -167,7 +167,7 @@ rides as Tab 1 of the base ask, and is skipped only when you already said which 
 want → pick a base → orchestrator fetches and generates per-file diffs vs
 `origin/<base>` → pick the **review categories** (multi-select: General, Security,
 Design & Architecture, Rules & Idioms Adherence, Performance & Efficiency, Test
-Quality & Coverage — all six is the default) and the **reviewer** (parallel
+Quality & Coverage, and opt-in UI/UX — the six non-UI categories are the default) and the **reviewer** (parallel
 per-category `code-reviewer-*` subagents by default; or the advisor / the orchestrator
 itself) → if you chose subagents, pick the **reviewer model** (*Default (model I'm
 using)*, or Opus / Sonnet / Fable) — one model runs *every* selected category, so

@@ -5,7 +5,8 @@ description: >-
   severity, and act on them — fix locally, or post inline PR review comments — delegating
   ALL GitHub and outbound-git work to a Haiku critic-worker while the main model, the
   advisor, or parallel per-category review subagents (user-selected categories: general,
-  security, design, rules-adherence, performance, tests — on a user-selected model)
+  security, design, rules-adherence, performance, tests, plus opt-in ui-ux — on a
+  user-selected model)
   reason. Use when the user wants to review, critique, or adversarially review
   their local changes / current diff / commits vs main; do a code review of a GitHub PR
   and comment on it; "red-team this diff"; or "critique PR N". This AUTHORS a review; for
@@ -204,7 +205,8 @@ Outline (same steps): **0** arm the session-named guard lock
 **local:** declare the outcome (fix / report only / decide after — Tab 1 of the base
 ask) → choose base ref → YOU fetch + generate per-file diffs vs `origin/<base>` →
 choose review categories (multi-select: general / security / design & architecture /
-rules & idioms adherence / performance / tests; all six is the default) + choose the
+rules & idioms adherence / performance / tests, plus opt-in UI/UX; the six
+non-UI categories are the default) + choose the
 reviewer (parallel `code-reviewer-<category>` subagents default / advisor / main, with
 advisor consultation folded into the same tab — default on: reviewers take borderline
 and high-severity findings to the advisor before finalizing) + the reviewer MODEL
