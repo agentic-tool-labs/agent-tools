@@ -26,7 +26,7 @@ only where this doc says so.
   │    Q2 Target      Local: base = main* │ other branch │ commit/tag
   │                   PR:    worktree = .claude/worktrees/pr-N* │ elsewhere
   │    Q3 Level       medium* │ low │ high
-  │    Q4 Extras      (multi) deep │ pre-existing │ start fresh [only if a ledger exists]
+  │    Q4 Extras      (multi) deep ⚠ high token use │ pre-existing │ start fresh [only if a ledger exists]
   │    → refuse deep+low here
   │
   ├─ (no ask) diff · intent brief shown · ledger loaded · peer discovery (peer-dispatch §1–§2)
@@ -44,7 +44,7 @@ only where this doc says so.
   │    Peer agents ─► C-P
   │    Main / Advisor ─► no ASK C (adherence-basis, if needed, is asked alone)
   │
-  ├─ ASK P  the plan (L4.0), every path — agents per phase + worst case · models · what to expect
+  ├─ ASK P  the plan (L4.0), every path — ⚠ token line (deep · sharding · >12 agents) · agents per phase + worst case · models · what to expect
   │    Run this plan* │ Adjust sharding │ Trim something else │ Cancel       → written to <git-common-dir>/code-critic/<key>-report.md
   │
   ├─ STOP checkpoint · review · verify · (deep passes)

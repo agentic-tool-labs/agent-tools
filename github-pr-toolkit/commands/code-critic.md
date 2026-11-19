@@ -144,7 +144,11 @@ unrecognized value, leaves the tab to be asked. The level is defined in L4's
 **0.2c Extras from the invocation.** Each one sets its switch and skips the matching
 option of the Extras tab (L1/G1.1). A plain-language request counts the same as the
 flag ("go deep", "include pre-existing bugs", "ignore earlier runs").
-- `--deep[=N]` turns on depth: deep. N is the pass cap, default 4 (L4.7).
+- `--deep[=N]` turns on depth: deep. N is the pass cap, default 4 (L4.7). Because it
+  skips the Extras tab, it also skips that tab's warning, so say it here in one line,
+  as soon as the flag (or "go deep") is read: `⚠ --deep: every pass repeats all
+  reviewers (and shards) — up to <N>× the agents of a normal review. The plan (L4.0)
+  shows the count before anything runs.`
 - `--pre-existing` turns on pre-existing: on (L4 IN SCOPE).
 - `--fresh` ignores the findings ledger for this run. It is still written (L2.6).
 - `--intent <ticket key | URL | path>` adds an intent source (L2.5). Repeat it for
@@ -216,7 +220,9 @@ was given in `$ARGUMENTS` — a tab the flow stops asking is how knobs go missin
 the tab when none remain.
 - **Deep — repeat until nothing new** — after the normal pass, repeat passes that look
   only for defects not yet found, until a pass adds nothing that survives verification
-  (L4.7). The cap is 4 passes, and each pass costs about one more review.
+  (L4.7). ⚠ **High token use:** each pass repeats every reviewer and shard, so the
+  worst case is up to 4× the agents of a normal review. The plan (L4.0) shows the
+  count before anything runs.
 - **Pre-existing bugs in touched functions** — also list bugs in unchanged lines of
   the functions this change edits. They are shown ungraded in their own section and
   never fixed or posted by default.
@@ -528,7 +534,8 @@ on — do NOT drop the tab to avoid the moot
 case, because a dropped tab is how this ask went missing in the first place.
 - **Default (model I'm using)** — every reviewer inherits the model running this
   session.
-- **Opus** — highest-reasoning pass.
+- **Opus** — highest-reasoning pass; the costliest per agent, which multiplies with
+  categories, shards and deep passes.
 - **Sonnet** — faster and cheaper per category; a step down in reasoning depth.
 - **Fable** — the Mythos-class alternative.
 
@@ -857,6 +864,14 @@ first reviewer, shard, peer brief, verifier or deep pass, build the plan, write 
 the run report, print it, and ask. **Nothing that reviews is dispatched until the user
 approves.** Workers that already ran (fetch, checkout, PR context) are listed as done.
 No flag pre-approves the plan, `--deep` included.
+
+**Token warning, the plan's first line**, whenever any of these is in effect: `depth:
+deep`, `<s>` > 1, or a worst case over 12 agents. Name every driver that applies and
+what it multiplies, with no token estimate: `⚠ High token use: <driver — effect>; …
+Worst case <W> agents. Trim or adjust below before running.` The drivers: `--deep (up
+to <cap>× pass 1)`, `sharding (<c> × <s> = <R> reviewers per pass)`, `Opus or Fable on
+every agent` (when Tab 4 picked one and the worst case is over 12), `<c> categories,
+one agent each`. Without any of them, leave the line out.
 
 **The plan counts agents. It never estimates tokens or time** (Review stats rule 1):
 - **Target:** base spec, files, changed lines, untracked files, level, intent source,
@@ -1738,7 +1753,9 @@ was given in `$ARGUMENTS` — a tab the flow stops asking is how knobs go missin
 the tab when none remain.
 - **Deep — repeat until nothing new** — after the normal pass, repeat passes that look
   only for defects not yet found, until a pass adds nothing that survives verification
-  (L4.7). The cap is 4 passes, and each pass costs about one more review.
+  (L4.7). ⚠ **High token use:** each pass repeats every reviewer and shard, so the
+  worst case is up to 4× the agents of a normal review. The plan (L4.0) shows the
+  count before anything runs.
 - **Pre-existing bugs in touched functions** — also list bugs in unchanged lines of
   the functions this change edits. They are shown ungraded in their own section and
   never fixed or posted by default.

@@ -66,7 +66,9 @@ It's also built to be thorough:
 
 Uncommitted changes are reviewed along with commits. Two options are off by default:
 - `--deep[=N]` repeats passes until one finds nothing new that survives verification,
-  and gives a rough estimate of what's probably still undetected.
+  and gives a rough estimate of what's probably still undetected. ⚠ It uses a lot of
+  tokens: each pass repeats every reviewer, up to 4× a normal review. The plan shown
+  before the review gives the agent count, and you can trim it.
 - `--pre-existing` also lists, ungraded, bugs in the edited functions that this change
   didn't cause.
 
