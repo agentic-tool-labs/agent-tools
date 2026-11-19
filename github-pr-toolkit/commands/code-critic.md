@@ -826,12 +826,14 @@ it.
 
 ### L4.5 — Coverage: every hunk accounted for
 - **Sharding (fan-out path).** When L2 measured more than 5 files or more than 200
-  changed lines, split each category into shards of about 200 changed lines. Keep each
+  changed lines, split each category into shards of about 200 changed lines, unless
+  the L4.0 trim chose a bigger size or none. Sharding is never a surprise: L4.0 states
+  it on its own line, with the multiplication, before anything runs. Keep each
   file in the same shard as its tests and its in-diff callers.
   - Each shard is its own dispatch, carrying `shard: <i>/<n>` and its file subset.
     L3.0's cap paces them, and every shard counts toward it.
-  - Say the shard count in the plan line (`6 categories × 3 shards = 18 reviewers, cap
-    6`) before dispatching.
+  - The shard count goes in the L4.0 plan's pass-1 row (`6 categories × 3 shards = 18
+    reviewers, cap 6`), which the user approves before any dispatch.
   - The single-agent, peer and advisor paths do not shard. They get the coverage check
     alone.
 - **Coverage check (all subagent paths).** Build your own hunk list from the `@@`
@@ -849,7 +851,80 @@ it.
   checklists itemized in L3, the METHOD and the extras. Tell the user in one line that
   this happened.
 
-**STOP — checkpoint before ANY subagent dispatch.** Two answers must be in hand, and a
+### L4.0 — Review plan: shown, written down, and approved before anything runs (EVERY path)
+After the last wizard ask (ASK C, or ASK B on the Main/Advisor paths) and before the
+first reviewer, shard, peer brief, verifier or deep pass, build the plan, write it to
+the run report, print it, and ask. **Nothing that reviews is dispatched until the user
+approves.** Workers that already ran (fetch, checkout, PR context) are listed as done.
+No flag pre-approves the plan, `--deep` included.
+
+**The plan counts agents. It never estimates tokens or time** (Review stats rule 1):
+- **Target:** base spec, files, changed lines, untracked files, level, intent source,
+  known findings loaded from the ledger.
+- **Who and on what model:** the path; the Tab 4 alias or `session default`; each peer's
+  own model, or `own model (unknown)`.
+- **Sharding, stated on its own line, before the table** whenever `<s>` > 1:
+  `Sharding: <files> files / <lines> changed lines is over the 5-file / 200-line limit,
+  so each category is split into <s> shards of ~200 lines. That multiplies every
+  category: <c> × <s> = <R> reviewers per pass<, and again on each deep pass>.` Follow
+  it with one line on why: `Smaller slices mean each reviewer reads every hunk closely
+  instead of skimming a long diff; the cost is more agents.` Then one line per shard
+  naming its files. With `<s>` = 1, say `Sharding: none (diff under
+  the limit)`.
+- **Phase rows**, one per phase that will run:
+  | Phase | Agents | Notes |
+  |---|---|---|
+  | Pass 1 reviewers | `<c> categories × <s> shards = <R>` | pacing cap; shard file split in one line |
+  | Coverage follow-ups | up to `<L>` (one per lens) | only for hunks a reviewer missed |
+  | Verification | up to `<V>`, one per finding at Low+ | `V` = 10 per pass unless the user names another number; skipped at low |
+  | Deep passes 2..cap | `<cap−1> × <R>`, plus their follow-ups and verifiers | only with `depth: deep`; stops early on saturation |
+  | **Worst case** | **sum of the above** | the ceiling the user is approving |
+  On the Main agent path every row reads `0 — I review it myself`. On the Advisor path,
+  `1 advisor call`. On the peer path, the reviewer row is the peer plan line (below),
+  and verification is `self-verified`.
+- **What to expect:** the order of phases; what comes back (a severity-ranked list, the
+  intent coverage table, `not reviewed:` lines if any, a pre-existing section if on);
+  what happens next per the Step 0.3 outcome; and the report path.
+
+**Ask** (one AskUserQuestion, one question): **Run this plan*** │ **Adjust sharding**
+(only when `<s>` > 1) │ **Trim something else** │ **Cancel**.
+- **Adjust sharding** asks the shard size, each option naming its resulting reviewer
+  count: **~200 lines (as planned, <R>)** │ **~400 lines (<R'>)** │ **No sharding
+  (<c>)**, each reviewer gets the whole diff. The coverage check runs either way, so
+  hunks an unsharded reviewer skips still get L4.5's follow-up.
+- **Trim something else** asks which lever to pull (multi-select; fewer categories goes
+  through Other): **Drop or shorten deep passes** │ **One agent, all categories** │
+  **Lower the verifier ceiling**.
+- After either, rebuild the plan and ask again.
+- **Cancel** ends the run: release the guard marker and session lock (Step 0), in the PR
+  flow run G7's zero-comments CLEANUP, and finish with the report and the Review stats
+  block.
+
+**The approved plan is a ceiling.** Before any dispatch that would take a phase past
+its approved count — more findings than `V` to verify, a coverage follow-up beyond
+`L`, a deep pass past the cap — stop and ask: **Go past the ceiling (+<n> agents)** │
+**Stay at the ceiling** (verify the top `V` by severity and self-verify the rest; skip
+the follow-up and report those hunks as `not reviewed`) │ **Stop here**. Never go past
+silently.
+
+**Run report.** Write the plan to
+`$(git rev-parse --git-common-dir)/code-critic/<key>-report.md`, with the same `<key>`
+as the L2.6 ledger, so it is never committed. On every exit path (normal close, clean
+review, cancel, early wind-down) append `## Outcome`:
+- planned vs actually dispatched, per phase row, with re-dispatches and asks to go past
+  the ceiling;
+- the findings as L5 presented them, with severity, and where each one ended up (fixed,
+  posted, declined, open);
+- the intent coverage table, `not reviewed:` lines, and the refutation note;
+- the Review stats block, verbatim.
+Print the report's path on the line after the Review stats block, as the closing
+summary's last line. In the PR flow the report stays local; G7 posts nothing from it.
+Like the L2.6 ledger, the report is review bookkeeping, NOT a code edit, so the
+ZERO-edits rule doesn't cover it. It is never memory. You write it with `Write`, and
+reviewers never do.
+
+**STOP — checkpoint before ANY review dispatch** (subagent, peer brief or advisor; on
+the Main agent path, before you start reviewing). Two answers must be in hand, and a
 missing one means an ask went out incomplete — not that you may fill the gap yourself:
 
 1. **Tab 4 (Reviewer model)** — required for *either* subagent path, the per-category
@@ -867,8 +942,11 @@ missing one means an ask went out incomplete — not that you may fill the gap y
    review produces findings with no declared destination — that gap is precisely where
    a reviewer turns into an uninvited fixer.
 
+4. **L4.0 plan approval** — required for EVERY path. The plan is built from (1)–(3),
+   so it comes last. No approval on record means no dispatch.
+
 Ask for whichever is missing now, then continue. The peer path is exempt from (1) —
-peers run their own model — but never from (2) or (3).
+peers run their own model — but never from (2), (3) or (4).
 
 **If ASK C-S chose One agent, all categories:** dispatch a single
 `code-reviewer-all` agent. Everything about the dispatch matches the fan-out below —
@@ -899,7 +977,8 @@ chosen peer.
 - **Assignment.** With ASK C-P's **One peer holds every lens** (or a single peer), that
   peer gets every selected category. With **Split**, assign categories round-robin in
   the Tab 1/Tab 2 order, starting with the most role-fit chosen peer.
-- **Plan line**, before sending: name each peer with its own model and its categories,
+- **Plan line**, inside the L4.0 plan's reviewer row (approved before any brief goes
+  out): name each peer with its own model and its categories,
   e.g. `2 peers: rev-1 (opus) — general, security, design; rev-2 (own model, unknown) —
   adherence, performance, tests`.
 - **Slug**, per its §4: `critic-pr-<n>` (GitHub flow) or `critic-<branchslug>` (Local
@@ -1063,6 +1142,10 @@ category, and carrying its `scope:`.
   - It carries the path, the base spec, the finding verbatim (all fields) and the
     `intent:` block if there is one.
   - It runs on the Tab 4 model (omit `model` for Default), paced by L3.0's cap.
+  - **Ceiling:** at most the plan's `V` verifiers per pass (10 unless the user set
+    another number). More findings than that triggers L4.0's ceiling ask before any
+    verifier is dispatched; **Stay at the ceiling** verifies the top `V` by severity
+    and self-verifies the rest.
 - **On the advisor, peer and main-agent paths**, or with no Agent tool, you verify each
   finding yourself by reading, against the same three verdicts. Label the result
   `self-verified`.
@@ -1083,8 +1166,9 @@ category, and carrying its `scope:`.
 always verifies.
 
 Pass 1 is the normal review, through verification. Then loop:
-1. **Plan line before each pass:** `pass <k>/<cap>: <n> reviewers; pass <k-1> added <m>
-   verified findings`. The user can stop here.
+1. **Progress line before each pass:** `pass <k>/<cap>: <n> reviewers; pass <k-1> added
+   <m> verified findings`. The L4.0 plan already approved these passes, up to the cap.
+   A pass past the approved cap needs L4.0's ceiling ask.
 2. **Dispatch the pass.** Each pass is the same set of reviewers as pass 1, fresh
    dispatches, with the full extras.
    - **Pass 2 is blind to pass 1.** Its `known-findings:` carries only what L2.6 loaded
@@ -1161,7 +1245,8 @@ that ran, the base spec, the file count, and the drop note if anything was dropp
 disclosure rule above. Then STOP: create no task list, skip L6 and L7, remove the
 assessment marker AND the session lock (Step 0), and close out — with no findings there
 are no fixes, so L8 has nothing to commit, but the clean report still **ends with the
-Review stats block** (defined in L8): agents ran on chosen models whether or not they
+Review stats block** (defined in L8), then the L4.0 run report's path, with its
+`## Outcome` appended: agents ran on chosen models whether or not they
 found anything, and "reviewed clean" with no stats is this block's most common way of
 going missing. Do not go looking for something to report to
 fill the silence.
@@ -1171,7 +1256,7 @@ the worktree exists and the review marker is set. Report clean, dispatch G7's CL
 (its zero-comments variant — reachable directly from here; G5.5 and G6 are skipped along
 with everything else), then remove the review marker per step 0.1. Closing out without
 that dispatch leaks the worktree — and the clean report ends with the Review stats
-block here too.
+block and the run report's path here too.
 
 ### FEEDBACK TONE — wording only, never substance
 
@@ -1509,7 +1594,8 @@ guessing which bucket it belonged in.
 
 ### Review stats (append to the closing summary — both flows, EVERY exit path)
 
-End the summary with a short **Review stats** block: who did the work, on what model, and
+End the summary with a short **Review stats** block, followed by one line naming the
+L4.0 run report (after appending its `## Outcome`): who did the work, on what model, and
 what it cost where cost is actually known. **The block is part of what "summarize" means
 in this flow — it prints on every exit path**: the normal L8/G7 close, the L5.0
 clean-review exit, and a review the user winds down early after agents ran. Having no
@@ -1829,7 +1915,8 @@ re-dispatch, then update those tasks), remove the review marker (step 0.1), and
 summarize — **ending with the Review stats block defined in L8**, same rules: copy
 metadata verbatim, `not reported` where a result carried none, `not measurable` for
 yourself and the advisor, and a retry dispatch shown as its own line rather than folded
-into the first.
+into the first. Then append the run report's `## Outcome` (L4.0) and print its path
+after the block.
 
 ---
 

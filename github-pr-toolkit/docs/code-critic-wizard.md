@@ -44,7 +44,11 @@ only where this doc says so.
   │    Peer agents ─► C-P
   │    Main / Advisor ─► no ASK C (adherence-basis, if needed, is asked alone)
   │
+  ├─ ASK P  the plan (L4.0), every path — agents per phase + worst case · models · what to expect
+  │    Run this plan* │ Adjust sharding │ Trim something else │ Cancel       → written to <git-common-dir>/code-critic/<key>-report.md
+  │
   ├─ STOP checkpoint · review · verify · (deep passes)
+  │    any phase about to exceed its approved count → ask: go past │ stay at ceiling │ stop
   │
   ├─ L5 present  →  ASK D  how to work the list  (L6/G6)  →  nit batch ask  →  per-issue
   └─ L8/G7 commit-push or publish ask  →  Review stats
@@ -116,9 +120,12 @@ peer returns as they do to subagent returns.
 
 | Path | Calls |
 |---|---|
-| Subagents | A, B (or B1 + B2 with customs), C-S |
-| Peer agents | A, B (or B1 + B2), C-P |
-| Main / Advisor | A, B (or B1 + B2), plus the adherence basis only if needed |
+| Subagents | A, B (or B1 + B2 with customs), C-S, P |
+| Peer agents | A, B (or B1 + B2), C-P, P |
+| Main / Advisor | A, B (or B1 + B2), plus the adherence basis only if needed, P |
+
+ASK P, the plan approval, is one more call on every path. It was added in 0.42.0 after a
+`--deep` run dispatched far more agents than the user expected.
 
 That is one call more than today on the subagent path, because today's separate L3.0
 and L3.1 asks become a single C-S. For a single category with directives present, the

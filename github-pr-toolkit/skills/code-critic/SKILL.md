@@ -83,6 +83,14 @@ the stats record them too.
 
 Main agent and Advisor get no ASK C.
 
+**Step 3 — the plan (L4.0), on every path.** Before anything reviews, state sharding on
+its own line (why, how many shards, the multiplication), then show the agent
+count per phase (reviewers × shards, coverage follow-ups, verifiers capped at 10 per
+pass, deep passes) with the worst-case total, the models, and what to expect. Ask
+**Run this plan** / **Adjust sharding** / **Trim something else** / **Cancel**. No flag pre-approves it. The approved
+counts are a ceiling: going past one asks first. The plan and the run's outcome are
+written to `<git-common-dir>/code-critic/<key>-report.md`.
+
 **Peer transport.** Its transport (`msg.mjs` / `roster.mjs` / `herdr agent`) is
 gate-exempt, so the assessing marker stays armed. A peer that goes busy or silent
 mid-review is never reassigned silently: ask where its categories go. Discovery, the

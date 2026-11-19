@@ -223,6 +223,21 @@ branch** — fixes land in the checked-out worktree and one confirmed worker dis
 commits & pushes them to the PR branch, SHA-verified before the worktree is cleaned up;
 each issue can still take a comment instead.
 
+**Nothing reviews until you approve the plan.** After the last wizard question the
+orchestrator shows a plan. When the diff is over 5 files or 200 lines, it says first
+that each category will be split into shards of about 200 lines, and how many agents
+that multiplies into. Then it gives one row per phase: pass-1 reviewers (categories ×
+shards), coverage follow-ups, verifiers (one per finding, at most 10 per pass by
+default), and deep passes. Each row gives an agent count and the worst-case total, the
+models, and what comes back. Answer **Run this plan**, **Adjust sharding** (~200 lines, ~400 lines
+or none, each showing its agent count), **Trim something else** (drop or shorten
+deep, one agent, a lower verifier ceiling) or **Cancel**. No flag skips this, `--deep`
+included. The approved counts are a ceiling: anything that would go past one stops and
+asks first. The plan and the run's outcome (planned vs. dispatched, findings and where
+each ended up, stats) are written to
+`$(git rev-parse --git-common-dir)/code-critic/<branch or pr-N>-report.md`, and that path
+is the summary's last line.
+
 The closing summary ends with a **Review stats** block: which model each agent ran on,
 how many agents were used, and — when the environment reports it — tokens per agent,
 which for per-category reviewers is also tokens per area. It prints on **every** exit,
