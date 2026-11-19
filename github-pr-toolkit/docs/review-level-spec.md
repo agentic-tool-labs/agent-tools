@@ -33,7 +33,7 @@ Same three level names as the built-in `code-review` skill. No `xhigh`/`max` —
 | File | Change |
 |---|---|
 | `github-pr-toolkit/commands/code-critic.md` | Step 0 flag parsing; L1 ask gains Tab 3; G1.1 ask gains a tab; WORTH-REPORTING prose amended (§5.2); new L4 subsection **REVIEW LEVEL** (§5.3); one `level:` line in each of the 5 reviewer-path dispatch blocks (§6); L5 level gate (§5.5); closing-summary line (§5.6) |
-| `github-pr-toolkit/agents/code-reviewer-{general,security,design,adherence,performance,tests,all}.md` | one paragraph each: the materiality rule + honour the `level:` line (§7); `level-dropped:` return trailer |
+| `github-pr-toolkit/agents/code-reviewer-{general,security,design,adherence,performance,tests,ui-ux,deployment,all}.md` | one paragraph each: the materiality rule + honour the `level:` line (§7); `level-dropped:` return trailer |
 | `github-pr-toolkit/skills/code-critic/SKILL.md`, `github-pr-toolkit/docs/code-critic.md`, `github-pr-toolkit/README.md` | doc paragraph (§8) |
 
 **No `plugin.json` change** — the setting is not shipped (§11). Do NOT touch the L3
