@@ -1,5 +1,5 @@
 ---
-description: Adversarial code review of a local diff or a GitHub PR — the FIRST wizard question declares the run's outcome (fix approved findings, or only comment/report them — the review itself is identical either way), then the user picks review categories (general, security, design, adherence, performance, tests), a reviewer (parallel category subagents, the advisor, the main agent, or — as a first-class Other answer — a live peer agent rooted in this repo: an agent-hierarchy roster peer, an agent-teams teammate, or a Herdr pane agent), and the model those subagents run on (session default, Opus, Sonnet, or Fable — one model across every category); findings are triaged by severity and acted on issue-by-issue in the declared mode. GitHub writes and commits/pushes go through a Haiku worker; diffs you generate yourself.
+description: Adversarial code review of a local diff or a GitHub PR — the FIRST wizard question declares the run's outcome (fix approved findings, or only comment/report them — the review itself is identical either way), then the user picks review categories (general, security, design, adherence, performance, tests), a reviewer (parallel category subagents, the advisor, the main agent, or live peer agents rooted in this repo — an agent-hierarchy roster peer, an agent-teams teammate, or a Herdr pane agent — each on its own model, one holding every lens or several splitting the categories), and the model those subagents run on (session default, Opus, Sonnet, or Fable — one model across every category); findings are triaged by severity and acted on issue-by-issue in the declared mode. GitHub writes and commits/pushes go through a Haiku worker; diffs you generate yourself.
 argument-hint: "[PR number/URL, or --branch <ref> / --against <ref> for local — optional] [--level low|medium|high] [--deep[=N]] [--pre-existing] [--fresh] [--intent <ticket|URL|path>]"
 ---
 
@@ -309,7 +309,7 @@ This ledger is review bookkeeping, NOT a code edit, so the ZERO-edits rule doesn
 cover it. It is never memory. You write it (L5.2) with `Write`, and reviewers never do.
 
 **Keep two numbers from that `--stat`: the changed-file count and the total changed
-lines.** L3 states them in the reviewer question and uses them to pick which reviewer it
+lines.** L3 states them in ASK C-S's Shape question and uses them to pick which shape it
 recommends — a user choosing the width of a review should be told the size of the thing
 being reviewed, and this is the only step that computes it.
 
@@ -414,51 +414,49 @@ nit block as one collective "strip these" decision. Scope is the usual rule: onl
 the diff introduces or modifies. After adherence, this is the lens most prone to becoming
 a repo-wide audit.
 
-**Tab 3 — "Reviewer".** *"Who performs the review?"* This tab carries the advisor
-choice too — second opinions used to be their own tab, and folding them in here is what
-frees the fourth slot for the model.
-**This tab is reviewer IDENTITY — exactly four options, which is the cap.** Advisor
-consultation is no longer one of them: it is resolved from Tab 4's model answer, per the
-rule below — not chosen here. That packing is deliberate — `AskUserQuestion` allows at most 4 options, and
-spending two of them on the same reviewer with consultation toggled left no room for the
-single-subagent path. Do not add a fifth option; the ask silently breaks.
+**Tab 3 — "Who reviews?"** This tab is reviewer IDENTITY only, and it has exactly
+four options, which is the cap. Do not add a fifth: the ask silently breaks. **Shape**
+(one subagent per category, or one for all) and **which peers** are decided in ASK C
+(L3.0), after this answer is in. Advisor consultation is not an option here either: it
+is resolved from Tab 4, per the rule below.
 
-- **Category subagents (default)** — one `code-reviewer-<category>` subagent per
-  selected category, run in parallel. The default fan-out, and the strongest review:
-  each lens reaches its verdict independently and cannot be coloured by the others.
-- **One subagent, all categories** — a single `code-reviewer-all` dispatch holding every
-  selected lens. One dispatch instead of six, and it can see interactions across lenses
-  that a single-lens reviewer structurally cannot. **State the tradeoff in one line when
-  you offer it, and again if they pick it:** the fan-out's value is six verdicts that
-  cannot contaminate each other, and this gives that up — one reasoner's read of
-  `security` is coloured by what it just concluded about `design`. Cheaper and quieter;
-  a weaker review.
-- **The advisor** — hand the diffs to the `advisor` tool for one independent pass
-  covering the selected categories.
-- **The main agent (you)** — you perform the adversarial review yourself.
+**Run peer discovery before this ask.** Load the `peer-dispatch` skill and run its
+availability and discovery steps (§1–§2). A peer is any of these, rooted in this repo:
+- an agent-hierarchy roster peer;
+- an agent-teams teammate this session spawned;
+- a Herdr pane agent.
 
-**A live peer rooted in this repo is a first-class *Other* answer, not a fifth option.**
-Load the `peer-dispatch` skill and run its availability and discovery steps (§1–§2): a
-peer is an agent-hierarchy roster peer, an agent-teams teammate this session spawned, or
-a Herdr pane agent, and "rooted here" means this repo's roster lists it or this session
-spawned it. When one is live, say so in the question text — name each candidate as
-name · role · kind · idle|busy — and note that answering Other with a name (e.g. *"use
-agent-tools-reviewer"*) picks it; treat that answer exactly like an option:
-dispatch per L4's peer path. State the tradeoffs when you offer it and again if picked:
-it carries the all-categories tradeoff (one reasoner holds every lens); it reviews as
-whatever role it was created as (a general validator, not the specialized category
-prompts — L4 compensates by passing every selected checklist inline); Tab 4 does not
-apply; and what it buys is a warm session that may already know this codebase from
-earlier work. Busy peers and peers not rooted here are **named as unavailable, not
-offered**. No candidate → say nothing; the tab is unchanged.
+Keep each live candidate's name · role · kind · model · idle|busy. The model comes
+from `roster.mjs show` → `members[].model`. Label a P2 or P3 peer with no recorded
+model `own model (unknown)`: it is still offered, and it can take part in a split.
+Busy peers, and peers not rooted here, are named as unavailable and not counted as live.
 
-**Which of the first two is RECOMMENDED depends on the diff's size, and you state the
-size in the question.** Six independent reviewers on an 87-line diff mostly re-read the
+- **Subagents (default)** — the plugin's own reviewers, on the model Tab 4 picks.
+  ASK C-S then chooses one per category or one for all, and the pacing.
+- **Peer agents** — always shown. With live peers, the option text names them:
+  `Peer agents — 2 live here: rev-1 · reviewer · opus · idle; rev-2 · …`. With none,
+  it reads `Peer agents — none live in this repo`. If the user picks it then, say in
+  one line that none is live and they can start one or pick another reviewer, and
+  re-ask Tab 3 alone.
+  - State the tradeoff when offering it, and again if it's picked. A peer reviews as
+    the role it was created as, so L4 passes every checklist inline. It runs **its
+    own model**, and Tab 4 doesn't apply to it. What it buys is a warm session that
+    may already know this codebase.
+  - ASK C-P then chooses which peers, and whether they split the categories.
+- **Main agent (me)** — you review it yourself.
+- **Advisor** — hand the diffs to the `advisor` tool for one independent pass covering
+  the selected categories.
+
+A named peer typed into Other (*"use agent-tools-reviewer"*) counts as **Peer agents**
+with that peer pre-chosen in ASK C-P.
+
+**ASK C-S's Shape question: which option is RECOMMENDED depends on the diff's size, and
+you state the size in that question.** Six independent reviewers on an 87-line diff mostly re-read the
 same 87 lines six times; the fan-out earns its ~5× when there is enough surface for the
 lenses to disagree about. Using L2's counts:
 
-- **≤ 5 files AND ≤ 200 changed lines** → recommend **One subagent, all categories**.
-- **Anything larger** → recommend **Category subagents**, as today.
+- **≤ 5 files AND ≤ 200 changed lines** → recommend **One agent, all categories**.
+- **Anything larger** → recommend **One per category**, as today.
 
 Name the numbers out loud and say what you are trading, e.g. *"This diff is 3 files / 87
 changed lines — one agent holding all lenses is the recommended default at this size; six
@@ -520,11 +518,13 @@ Sonnet — advisor consultation on"), so the decision is visible without a tab s
 with `advisor: none` — all four reviewers still work, they just stand on their own
 reasoning. Do not drop options or re-ask.
 
-**Tab 4 — "Reviewer model".** *"Which model should the review subagents run on? One
-model runs every selected category."* Always present this tab. It governs the subagent
-paths; if the user picked the advisor, the main agent, or a peer agent in Tab 3, note
-in one line that their answer here doesn't apply (a peer agent runs the model it was
-created with) and move on — do NOT drop the tab to avoid the moot
+**Tab 4 — "Model for subagents".** *"Which model should review subagents run on? One
+model runs every selected category. Peers keep their own model (<rev-1: opus; rev-2:
+own model (unknown)>)."* Name every live peer's model in the question text, or leave
+the parenthesis out when none is live. Always present this tab. It governs the subagent
+path, and L4.6's verifier on every path. If Tab 3 picked peers, the main agent or the
+advisor, note in one line that the review itself doesn't use this answer, and move
+on — do NOT drop the tab to avoid the moot
 case, because a dropped tab is how this ask went missing in the first place.
 - **Default (model I'm using)** — every reviewer inherits the model running this
   session.
@@ -547,19 +547,38 @@ of this flow. If the user picks a model below the session's, tell them once that
 trades review depth for speed/cost — then honor the choice without re-litigating it.
 Never pin reviewers to Haiku; it is not offered here for that reason.
 
-### L3.0 — Parallelism (only when Tab 3 chose **Category subagents**)
+### L3.0 — ASK C: the path follow-up (one AskUserQuestion, after ASK B)
 
-**Ask this as its own AskUserQuestion, AFTER the four-tab ask, and only on the fan-out
-path.** It cannot be a fifth tab — four is the hard cap — and it cannot ride inside the
-four, because the number of categories is not known until Tab 1/2 are answered. Skip it
-entirely for the advisor, the main agent, a peer agent, and the single
-`code-reviewer-all` agent: none of them runs concurrent subagents, so there is nothing
-to cap.
+ASK C asks only the path Tab 3 chose. It cannot ride inside ASK B, which already holds
+four tabs and can't know the answers it depends on. Main agent and Advisor get no
+ASK C. Their adherence-basis question, if L3.1 needs one, is asked alone.
 
-**Skip it too when only ONE category was selected** — announce the single dispatch and
-move on. A cap question with nothing to cap is noise.
+**ASK C-S — Subagents** (up to three questions, one call):
+1. **Shape** (2+ categories) — **One per category** (fan-out; strongest: each lens reaches
+   its verdict independently) or **One agent, all categories** (a single
+   `code-reviewer-all`: one dispatch, and it sees cross-lens interactions, but it is one
+   reasoner, so `security` is coloured by what it just decided about `design`; cheaper
+   and weaker). The recommendation follows the size rule in L3, with the high-stakes
+   override said out loud. State the contamination tradeoff when you offer it, and again
+   if they pick it.
+2. **Pacing** (2+ categories) — as below. If Shape picks one agent, a one-line note says
+   pacing doesn't apply. It is still asked in the same call, because a deferred
+   question is how asks go missing.
+3. **Adherence basis** — only when L3.1 needs it.
 
-Otherwise ask: *"You selected **N** categories. How many reviewers should run at once?"*
+With ONE category selected and no adherence basis needed, there is no ASK C-S: announce
+the single dispatch.
+
+**ASK C-P — Peer agents** (up to three questions, one call):
+1. **Which peers** (multiSelect, 2+ live) — up to four live candidates, each labelled
+   `name · role · model · idle`, most role-fit first (review → `reviewer`, then
+   `architect`, then any). More are reachable through Other. With exactly one live
+   peer, or one named via Other, announce it as chosen and skip this question.
+2. **Split** (2+ peers chosen and 2+ categories) — **One peer holds every lens** (the
+   most role-fit chosen peer) or **Split categories across the chosen peers**.
+3. **Adherence basis** — only when L3.1 needs it.
+
+**Pacing question (C-S Q2):** *"You selected **N** categories. How many reviewers should run at once?"*
 When L4.5 will shard (more than 5 files or more than 200 changed lines), N is
 categories × shards. Say both: *"6 categories × 3 shards = 18 reviewers"*.
 **Name the actual N in the question**, and the diff's size alongside it — the whole point
@@ -568,7 +587,8 @@ is that the user sees the width before it happens, not after.
 **This cap is about pacing, not cost.** N reviewers read the same diff whether they run
 together or one after another, so lowering it spreads the same spend over more wall-clock
 and saves nothing. Never present it as a saving. The lever that changes what a review
-costs is Tab 3's reviewer choice, which has already been made by the time this is asked.
+costs is the reviewer choice: Tab 3 and the Shape question, both asked in this same call
+or before it.
 
 - **6 at a time, rolling (default)** — at most 6 reviewers in flight; as each returns,
   the next queued category is dispatched into the freed slot. For the default selection
@@ -577,7 +597,7 @@ costs is Tab 3's reviewer choice, which has already been made by the time this i
 - **All N at once** — the full fan-out. Honor it without re-litigating; they have now
   been told the number.
 - **One at a time** — strictly sequential, one category per dispatch. **This is not the
-  same as Tab 3's "one subagent, all categories"**, and say so if they seem to be
+  same as the Shape question's "one agent, all categories"**, and say so if they seem to be
   reaching for that: this still runs N separate reviewers with N independent verdicts,
   it just never runs two at once. Same review, same cost, spread over time.
 - **Other** — any number they name becomes the cap and everything below works the same.
@@ -591,7 +611,8 @@ which one they mean.
 
 ### L3.1 — Adherence prerequisite (only if that category is selected)
 
-Check for project directives:
+Run this check after ASK B and BEFORE ASK C, because its answer decides whether ASK C
+carries the basis question. Check for project directives:
 - **CLAUDE.md files.** For each changed file: `~/.claude/CLAUDE.md`, the repo root's,
   and every `CLAUDE.md` or `CLAUDE.local.md` in an ANCESTOR directory of that file. A
   directory's file applies only at or below it. Pass each file with the changed files
@@ -600,8 +621,9 @@ Check for project directives:
   brief cites.
 - `.claude/rules/`, contributing docs, and lint/format configs.
 
-Adherence findings quote the exact rule and name its file. If none exist, ask
-(AskUserQuestion): **Infer conventions from the codebase** (read neighboring files for
+Adherence findings quote the exact rule and name its file. **If no directive exists,**
+ask the basis question. It rides in ASK C, or is asked alone on the main-agent and
+advisor paths: **Infer conventions from the codebase** (read neighboring files for
 the house style) or **User provides guidance** (let them state the rules to review
 against). Pass the outcome to whoever reviews that category.
 
@@ -835,8 +857,9 @@ missing one means an ask went out incomplete — not that you may fill the gap y
    without its fourth tab. Dispatching reviewers on a model the user was never offered
    is a violation of L3, not a shortcut. One subagent is still a subagent dispatch; a
    single agent does not exempt this.
-2. **L3.0 (Parallelism cap)** — required for the per-category fan-out with **2+
-   categories**. Missing it means you skipped that ask. Do not default to "all at once"
+2. **ASK C (L3.0)** — on the Subagents path with **2+ categories**, both Shape and
+   Pacing are required. On the Peer agents path, the chosen peers are required, plus
+   Split when 2+ peers and 2+ categories. Missing either means you skipped that ask. Do not default to "all at once"
    and do not pick a cap yourself: unbounded fan-out is the exact thing L3.0 exists to
    put in the user's hands, and quietly choosing for them reproduces the bug.
 3. **Step 0.3 (Outcome)** — required for EVERY path, subagent or not. If no outcome is
@@ -844,10 +867,10 @@ missing one means an ask went out incomplete — not that you may fill the gap y
    review produces findings with no declared destination — that gap is precisely where
    a reviewer turns into an uninvited fixer.
 
-Ask for whichever is missing now, then continue. The peer path is exempt from (1)
-and (2) — no model parameter to pass, nothing to fan out — but never from (3).
+Ask for whichever is missing now, then continue. The peer path is exempt from (1) —
+peers run their own model — but never from (2) or (3).
 
-**If ONE subagent for all categories was chosen:** dispatch a single
+**If ASK C-S chose One agent, all categories:** dispatch a single
 `code-reviewer-all` agent. Everything about the dispatch matches the fan-out below —
 same absolute path, same base spec, same changed-file list, same `advisor:` line,
 same `level:` line, same DISPATCH EXTRAS lines, same Tab 4 `model` parameter (omit it
@@ -871,17 +894,25 @@ Do not fan out as well. One subagent means one dispatch — if you also dispatch
 category "to be thorough", you have overridden the user's choice and doubled the cost of
 the thing they picked to make cheaper.
 
-**If a PEER was chosen (the first-class Other answer from Tab 3):** load the
-`peer-dispatch` skill and follow it. Slug: `critic-pr-<n>` (GitHub flow) or
-`critic-<branchslug>` (Local flow) per its §4; run its collision check (§3) before
-briefing. **The `.assessing` marker STAYS ARMED throughout — never lift it to dispatch
+**If Tab 3 chose Peer agents:** load the `peer-dispatch` skill and follow it, once per
+chosen peer.
+- **Assignment.** With ASK C-P's **One peer holds every lens** (or a single peer), that
+  peer gets every selected category. With **Split**, assign categories round-robin in
+  the Tab 1/Tab 2 order, starting with the most role-fit chosen peer.
+- **Plan line**, before sending: name each peer with its own model and its categories,
+  e.g. `2 peers: rev-1 (opus) — general, security, design; rev-2 (own model, unknown) —
+  adherence, performance, tests`.
+- **Slug**, per its §4: `critic-pr-<n>` (GitHub flow) or `critic-<branchslug>` (Local
+  flow), with `-<peer>` appended when more than one peer is briefed. Run its collision
+  check (§3) per slug before briefing. **The `.assessing` marker STAYS ARMED throughout — never lift it to dispatch
 or collect** — the guard admits exactly the skill's §6 transport commands, so a blocked
 command means the command shape is wrong, not the gate. The brief (written into
 the request file the skill's §5 creates) carries everything the all-categories dispatch
 above carries — same absolute repo (or worktree) path, same base spec, same changed-file
 list, same adherence hand-off, same roll-call demand — with these differences:
 
-- **Paste EVERY selected category's checklist inline, built-ins included.** The peer is
+- **Paste the checklist of every category ASSIGNED to that peer inline, built-ins
+  included.** The peer is
   its created role — a general validator, not one of the plugin's category agents — so
   unlike `code-reviewer-all` it holds none of the lenses. `Read` each selected
   `code-reviewer-<slug>.md` (customs too) and put the checklist text in the brief. A lens
@@ -894,19 +925,26 @@ list, same adherence hand-off, same roll-call demand — with these differences:
   the laundering rule, `advisor: none`). The peer session is outside this session's
   assessing marker, so the contract rides in prose.
 - **Reply shape** = the skill's §7(5), where the per-section unit is the lens: the
-  `## TL;DR` roll-call is one line per selected category, and one `## <category>` section
-  follows per selected lens.
-- **Tab 4 does not apply** — the agent runs the model it was created with; say so in
-  one line. Dispatch with `advisor: none` (its role has no advisor tool); if the tier
+  `## TL;DR` roll-call is one line per ASSIGNED category, and one `## <category>`
+  section follows per assigned lens. Check each peer's roll-call against its own
+  assignment.
+- **Tab 4 does not apply to the review** — each peer runs its own model, and the plan
+  line already named it. Dispatch with `advisor: none` (its role has no advisor tool); if the tier
   rule, `advisor_policy`, or the user calls for consultation, YOU take the merged
   borderline and high-severity findings to the advisor after L5 dedup instead.
 - **Send and collect per the skill's §6.** Its send/prompt confirmation IS the dispatch
   ask — do not ask twice. Wait event-driven for the reply (no polling, no re-send). Then
   run the SAME roll-call check and provenance cross-check as above; the transport
   changes nothing downstream, and a missing lens or fabricated line is judged exactly as
-  it would be from a subagent.
+  it would be from a subagent. Merge peers' returns exactly like the fan-out's: dedup
+  across categories, then coverage (L4.5), verification (L4.6, on the Tab 4 model) and
+  deep passes (re-briefing the same peers).
+- **A peer that goes busy or silent mid-review** — its send failed, it never replied, or
+  it reports busy. Do not reassign on your own. Stop and ask (AskUserQuestion) where its
+  categories go: the remaining chosen peers, subagents on the Tab 4 model, or you. A
+  partial review is reported as partial until that is answered.
 
-**If category subagents were chosen:** dispatch ONE `code-reviewer-<category>` agent per
+**If ASK C-S chose One per category** (or one category was selected)**:** dispatch ONE `code-reviewer-<category>` agent per
 selected category (the built-ins — general / security / design / adherence /
 performance / tests / ui-ux / deployment — use the plugin-prefixed type; customs use their bare type from
 the agents list), **respecting L3.0's cap**:
@@ -1488,7 +1526,8 @@ Six sourcing rules govern every line:
    carried none, that line reads `tokens: not reported` — an estimated or "typical"
    number is a fabricated one.
 2. **What you always know, say.** Model per dispatch (you set it: the Tab 4 alias, or
-   `session default` when you omitted the parameter; workers are `haiku` by frontmatter),
+   `session default` when you omitted the parameter; workers are `haiku` by frontmatter;
+   a peer's own model as the plan line named it, or `own model (unknown)`),
    the number of agents and which, and the number of worker dispatches. These need no
    metadata.
 3. **What you cannot know, name rather than skip.** Your own consumption and any
@@ -1646,13 +1685,13 @@ As in L2, with your own read-only git inside the worktree:
 `git -C <path> fetch origin <base>` then `git -C <path> diff origin/<base>...HEAD`
 (`--stat` first, then per file). Do NOT delegate this and do NOT review a diff you did
 not compute. **Keep the changed-file and changed-line counts as L2 does** — G3 runs L3 in
-full, and Tab 3's recommended reviewer is a function of those two numbers. Then run
+full, and ASK C-S's recommended Shape is a function of those two numbers. Then run
 **L2.5** (intent brief, with the PR and issue text from G1.2) and **L2.6** (ledger
 `pr-<N>`, importing G1.2's threads). L2 step 3 doesn't apply here.
 
 ## G3–G5 — Review (same as L3–L5), then dedup against existing comments
 Run L3 in full — **all FOUR tabs in one AskUserQuestion**, not three. Categories / More
-areas / Reviewer (category subagents default; point them at the WORKTREE path) /
+areas / Who reviews (Subagents default; point every reviewer at the WORKTREE path) /
 **Reviewer model**. Sending that call without the model tab is the failure this flow
 had; L4's STOP checkpoint catches it before any dispatch. Then run the per-category
 adversarial review, and compile the merged

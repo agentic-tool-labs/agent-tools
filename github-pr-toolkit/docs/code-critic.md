@@ -13,36 +13,65 @@ Same clean split of labor as /resolve-pr-comments:
 
 ### Who reviews, and what they can touch
 
-L3's **Reviewer** tab picks one of four, and advisor consultation is decided by the
-**model you pick at Tab 4**: consulted when you explicitly choose a cheaper one (Sonnet,
-Haiku, Fable), withheld on Opus or a session default left alone — the run cannot read its
-own tier, so the choice you made is the test. A same-tier advisor costs full price for no extra
-strength, and it is the one expense the Review-stats block cannot measure — so it is
-chosen, never assumed. The `advisor_policy` setting (`auto`/`always`/`never`) overrides
-the rule, and so does simply asking — "consult the advisor" and "have them work
-independently" are both first-class answers, just not tab slots, since
-`AskUserQuestion` caps at four options:
+The wizard picks the reviewer in two steps; the full design is in
+[code-critic-wizard.md](code-critic-wizard.md).
+1. L3's **Who reviews?** tab asks for identity only: **Subagents** *(default)*, **Peer
+   agents**, **Main agent** or **Advisor**. Peer agents is always shown. When peers are
+   live, the option names each one with its role, model and load.
+2. **ASK C** then asks only what that choice needs.
 
-| Reviewer | Dispatches | Tradeoff |
-|---|---|---|
-| **Category subagents** *(default)* | one `code-reviewer-<category>` per selected category, up to a cap you set | strongest — each lens reaches its verdict independently and can't be coloured by the others |
-| **One subagent, all categories** | a single `code-reviewer-all` | one dispatch instead of six, and it can see cross-lens interactions — but it's one reasoner, so `security` is coloured by what it just decided about `design`. Cheaper and quieter; a weaker review. Returns a **roll-call** so a skipped lens is visible rather than inferable |
-| **The advisor** | one `advisor` pass | no subagent return to cross-check, so scope discipline has to hold inline |
-| **The main agent** | none — reviews inline | spends orchestrator context on reviewing |
+| Path | ASK C asks | Dispatches | Tradeoff |
+|---|---|---|---|
+| **Subagents → One per category** *(default on larger diffs)* | Shape, then Pacing (the cap) | one `code-reviewer-<category>` per category (and per shard), paced by the cap | strongest — each lens reaches its verdict independently |
+| **Subagents → One agent, all categories** *(recommended at ≤ 5 files and ≤ 200 lines)* | Shape | a single `code-reviewer-all` | cheaper; one reasoner, so lenses colour each other. Returns a **roll-call** |
+| **Peer agents → One peer, every lens** | Which peers | one brief to the most role-fit chosen peer | a warm session that may know the codebase; one reasoner |
+| **Peer agents → Split across peers** | Which peers, then Split | one brief per peer, categories assigned round-robin | independence across peers, on their own models |
+| **Main agent** | — | none; reviews inline | spends orchestrator context |
+| **Advisor** | — | one `advisor` pass | scope discipline has to hold inline |
+
+ASK C also carries the adherence-basis question when adherence is selected and no
+directives exist.
+
+**Models.** Tab 4 (**Model for subagents**) sets the model for subagents and for the
+verifier. **Peers always run their own model.** The Tab 4 question names each one
+(`rev-1: opus`, or `own model (unknown)` for a teammate or pane agent with no recorded
+model), and the plan line and Review stats record them.
+
+**Advisor consultation** is decided by the Tab 4 model:
+- consulted when you explicitly choose a cheaper model (Sonnet, Fable);
+- withheld on Opus or on the session default left alone.
+
+The run can't read its own tier, so the choice you made is the test. `advisor_policy`
+(`auto`/`always`/`never`) or a plain "consult the advisor" / "work independently"
+overrides it. Peers are briefed with `advisor: none`.
 
 #### Peer reviewers
 
-A live **peer agent** rooted in this repo is a first-class *Other* answer on the Reviewer
-tab. Three kinds: an agent-hierarchy roster peer (a live Claude session), an agent-teams
-teammate this session spawned, or a Herdr-driven pane agent (codex, pi, …). **Rooted**
-means this repo's roster (`roster.mjs show --cwd "$PWD"`) lists it or this session spawned
-it — a session merely alive somewhere is never offered. Before briefing, an open request
-with the same slug (`critic-pr-<n>` / `critic-<branch>`) means a peer is already on this
-target: the default is to skip and wait for it. The peer gets a request file and reports by
-response file; its brief carries the same contract a subagent gets — static-only, no
-GitHub I/O, read-only git, every selected checklist pasted inline, `advisor: none` — and
-its reply is roll-called and cross-checked exactly like a subagent's. Details live in the
-`peer-dispatch` skill.
+Peers come in three kinds:
+- an agent-hierarchy roster peer (a live Claude session);
+- an agent-teams teammate this session spawned;
+- a Herdr-driven pane agent (codex, pi, …).
+
+**Rooted** means this repo's roster (`roster.mjs show --cwd "$PWD"`) lists it, or this
+session spawned it. A session merely alive somewhere is never offered. Busy peers are
+named as unavailable.
+
+**Briefing.** Before briefing, an open request with the same slug (`critic-pr-<n>` /
+`critic-<branch>`, with `-<peer>` appended when several are briefed) means a peer is
+already on this target, and the default is to skip and wait for it.
+
+Each peer gets a request file and reports by response file. Its brief carries the same
+contract a subagent gets:
+- static-only, no GitHub I/O, read-only git, `advisor: none`;
+- the checklists of its assigned categories, pasted inline;
+- the method and the dispatch extras.
+
+Its reply is roll-called against its assignment and cross-checked exactly like a
+subagent's.
+
+**A peer that goes busy or silent mid-review** is never reassigned silently. The run
+stops and asks whether its categories go to the remaining peers, to subagents, or to
+the orchestrator. Details live in the `peer-dispatch` skill.
 
 **The recommended reviewer follows the diff's size.** L2 already measures the change, so
 the question names it: at **≤5 files and ≤200 changed lines** the single all-lens agent is
@@ -68,7 +97,7 @@ than waiting on the slowest of a batch. A cap of **1** is the no-fan-out answer,
 why there's no separate on/off toggle; it still runs N independent reviewers, just never
 two at once (different from "one subagent, all categories", which is one reasoner holding
 every lens). **0** isn't a valid cap — zero subagents describes the advisor path as much
-as the main-agent path, so which reviewer runs stays the Reviewer tab's decision.
+as the main-agent path, so which reviewer runs stays the Who-reviews tab's decision.
 
 **A code review must not alter code**, and that's structural rather than requested. The
 reviewer agents ship **no `tools:` allowlist** — they inherit the session's tools, so any

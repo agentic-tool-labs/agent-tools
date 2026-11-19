@@ -48,48 +48,75 @@ worktree and one confirmed worker COMMIT(+PUSH) dispatch lands them on the PR br
 SHA-verified before cleanup. The review itself is identical in every mode, and the
 reviewers are never told the outcome.
 
-**Reviewer choice is four options, and advisor consultation follows Tab 4's model answer.**
-L3's Reviewer tab offers: category subagents (default, one per category in parallel), **one
-`code-reviewer-all` subagent covering every selected category** (one dispatch instead of
-six — say the tradeoff out loud: it can see cross-lens interactions, but it's one reasoner
-whose read of one lens colours the next, so it's cheaper and weaker), the advisor, or you
-inline. Four is the `AskUserQuestion` cap — never add a fifth. **A live peer agent rooted
-in THIS repo — an agent-hierarchy roster peer, an agent-teams teammate, or a Herdr pane
-agent — is a first-class *Other* answer**: when the `peer-dispatch` skill finds one, say so
-in the question (name · role · kind · busy state; pick via Other) and state its tradeoffs —
-the all-categories tradeoff plus it reviews as whatever role it was created as (checklists
-pasted inline compensate), in exchange for a warm session that may already know the
-codebase; a peer not rooted here or busy is named as unavailable, never offered; its
-transport (`msg.mjs` / `roster.mjs` / `herdr agent`) is gate-exempt so the assessing marker
-stays armed; and Tab 4 doesn't apply (it runs its created model). Discovery, collision
-check, brief contract, and reply shape all live in the `peer-dispatch` skill. **Which of the first two is
-RECOMMENDED follows the diff's size**, from L2's `--stat` counts: **≤5 files and ≤200
-changed lines → recommend the single all-lens agent**; larger → the fan-out, as today. Say
-the numbers out loud, and whenever you recommend the cheap one add *"pick the fan-out if
-this change is high-stakes"* — size measures how much there is to review, never how much
-is at risk. **If YOU judge the change high-stakes (auth, permissions, migration, crypto,
-payments), say what you noticed IN the question and recommend the fan-out — then ask.** A
-risk read is an observation to surface, never a decision to take for the user; never
-re-weight the recommendation without naming the reason. Thresholds are reasoned, not
-measured; they move the recommendation only, never the user's choice. The advisor is consulted
-only when Tab 4 explicitly named a cheaper model — `advisor: consult` for
-Sonnet/Haiku/Fable, `advisor: none` for Opus or a session default left alone. The test is
-Tab 4's answer, never a guess about the session's own tier (unreadable) — since a
-same-tier advisor costs full price for no extra strength and
-its spend is the one thing the stats block can't measure. `advisor_policy`
-(`auto`/`always`/`never`) and the user both override it; either way say which you
-dispatched and why.
+**Reviewer choice happens in two steps (see `docs/code-critic-wizard.md`), and advisor
+consultation follows Tab 4's model answer.**
 
-**Fan-out width is the user's call, not a default (L3.0).** When the per-category fan-out
-is chosen and 2+ categories are selected, ask — as a SEPARATE question after the four
-tabs, naming the actual count — how many reviewers run at once: **6 at a time rolling**
-(default; identical to "all" for the standard six, so the common path costs nothing),
-**all N at once**, **one at a time**, or a number they name. Above the cap use a ROLLING
-queue — refill each freed slot as a reviewer returns, never wait for a whole batch. A cap
-of 1 IS the no-fan-out answer, so there is no separate boolean; a cap of 0 is not "the
-main agent reviews" (zero subagents is equally true of the advisor path — reviewer
-identity belongs to the Reviewer tab, and a number that also picked the reviewer would
-fight it). Never silently exceed a cap the user set.
+**Step 1 — L3's "Who reviews?" tab is identity only.** Its four options are:
+- **Subagents** (default);
+- **Peer agents** — always shown. When the `peer-dispatch` skill's discovery finds live
+  peers rooted in THIS repo (agent-hierarchy roster peers, agent-teams teammates, Herdr
+  pane agents), the option names each one: name · role · model · idle|busy. With none,
+  it reads "none live here". A busy peer, or one not rooted here, is named as
+  unavailable and never offered;
+- **Main agent**;
+- **Advisor**.
+
+Four is the `AskUserQuestion` cap, so never add a fifth.
+
+**Tab 4 sets the model for subagents** (and the verifier). **Peers always keep their
+own model.** The question names each one, or `own model (unknown)`. The plan line and
+the stats record them too.
+
+**Step 2 — ASK C asks only the chosen path's follow-up**, in one call:
+- **Subagents:**
+  - **Shape** — one per category (fan-out) or one `code-reviewer-all` agent covering
+    every selected category. Say the tradeoff out loud: the single agent sees
+    cross-lens interactions, but it is one reasoner whose read of one lens colours the
+    next, so it's cheaper and weaker.
+  - **Pacing** — how many reviewers run at once.
+- **Peers:**
+  - **Which peers** (multi-select).
+  - **One peer holds every lens**, or **split categories across the chosen peers**
+    (round-robin; one brief, roll-call and slug per peer).
+- **Either path:** the adherence basis, when adherence is selected and no directives
+  exist.
+
+Main agent and Advisor get no ASK C.
+
+**Peer transport.** Its transport (`msg.mjs` / `roster.mjs` / `herdr agent`) is
+gate-exempt, so the assessing marker stays armed. A peer that goes busy or silent
+mid-review is never reassigned silently: ask where its categories go. Discovery, the
+collision check, the brief contract and the reply shape all live in the
+`peer-dispatch` skill.
+
+**The Shape RECOMMENDATION follows the diff's size**, from L2's `--stat` counts:
+- **≤5 files and ≤200 changed lines** → recommend the single all-lens agent;
+- larger → the fan-out.
+
+Say the numbers out loud. Whenever you recommend the cheap one, add *"pick the fan-out
+if this change is high-stakes"*: size measures how much there is to review, never how
+much is at risk. **If YOU judge the change high-stakes (auth, permissions, migration,
+crypto, payments), say what you noticed IN the question and recommend the fan-out, then
+ask.** The thresholds are reasoned, not measured.
+
+**Advisor consultation.** The advisor is consulted only when Tab 4 explicitly named a
+cheaper model:
+- `advisor: consult` for Sonnet or Fable;
+- `advisor: none` for Opus or a session default left alone.
+
+Peers are briefed with `advisor: none`. `advisor_policy` (`auto`/`always`/`never`) and
+the user both override this. Either way, say which you dispatched and why.
+
+**Pacing is the user's call, not a default (ASK C-S).** The options are:
+- **6 at a time, rolling** (default);
+- **all N at once**;
+- **one at a time**;
+- a number they name.
+
+N includes shards. Above the cap, use a ROLLING queue: refill each freed slot as a
+reviewer returns. A cap of 1 IS the no-fan-out answer. A cap of 0 is not "the main agent
+reviews": reviewer identity belongs to the Who-reviews tab. Never silently exceed a cap
+the user set.
 
 **A code review must not alter code**, and the reviewer agents enforce that structurally:
 no `tools:` allowlist (they inherit the session's tools, so any memory MCP server comes
@@ -210,12 +237,14 @@ findings ledger →
 choose review categories (multi-select: general / security / design & architecture /
 rules & idioms adherence / performance / tests, plus opt-in UI/UX and Deployment;
 the other six categories are the default) + choose the
-reviewer (parallel `code-reviewer-<category>` subagents default / advisor / main, with
-advisor consultation folded into the same tab — default on: reviewers take borderline
-and high-severity findings to the advisor before finalizing) + the reviewer MODEL
-(*Default (model I'm using)* / Opus / Sonnet / Fable; one model runs every selected
-category, passed as the Agent tool's dispatch-time `model` override). **All four are
-tabs of ONE AskUserQuestion** — the model is never a follow-up ask →
+reviewer IDENTITY (Who reviews: Subagents default / Peer agents, always shown, live
+ones named with their own models / Main agent / Advisor) + the MODEL for subagents
+(*Default (model I'm using)* / Opus / Sonnet / Fable, passed as the Agent tool's
+dispatch-time `model` override; peers keep their own model, which the question names).
+**All four are tabs of ONE AskUserQuestion** — the model is never a follow-up ask →
+ASK C for the chosen path only (Subagents: Shape = one per category / one for all, plus
+Pacing; Peers: which peers, plus one peer for every lens / split across them; either
+path: the adherence basis if needed) →
 per-category adversarial review following the METHOD, with per-hunk coverage checked and
 large diffs sharded (subagent findings cross-checked against YOUR diff, merged, deduped
 across categories) → read-only verification of each graded finding
