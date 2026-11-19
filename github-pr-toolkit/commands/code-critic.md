@@ -319,7 +319,8 @@ being reviewed, and this is the only step that computes it.
 `add-review-category` skill; they install as `code-reviewer-<slug>.md` agent files
 OUTSIDE the plugin. Check both homes with read-only Bash
 (`ls ~/.claude/agents/code-reviewer-*.md "$PWD"/.claude/agents/code-reviewer-*.md 2>/dev/null`),
-excluding the seven built-in slugs (the six defaults plus `ui-ux`). For each custom file found, `Read` its frontmatter
+excluding the eight built-in slugs (the six defaults plus the opt-in `ui-ux` and
+`deployment`) and the internal `verifier`. For each custom file found, `Read` its frontmatter
 `description` for the option text. A custom agent is only USABLE as a subagent if its
 type appears in your available-agents list (new files need a new/reloaded session) —
 if a file exists but the type isn't loaded, still offer the category and note that
@@ -346,7 +347,7 @@ then a second call carrying **both** Tab 3 and Tab 4 together. Never a third cal
 never Tab 3 without Tab 4. (Remind about Tab-to-amend either way.)
 
 **Tab 1 — "Categories" (multiSelect).** *"Which review categories? The six defaults
-(everything except UI/UX) are selected when you pick nothing."*
+(everything except UI/UX and Deployment) are selected when you pick nothing."*
 - **General Review** — correctness bugs, edge cases, error handling, concurrency,
   resource leaks, API misuse, simplification/altitude issues, **ephemeral comments**.
 - **Security Review** — injection, authn/authz gaps, secrets in code, unsafe
@@ -370,11 +371,24 @@ never Tab 3 without Tab 4. (Remind about Tab-to-amend either way.)
   HTML and contrast (WCAG 2.1 AA); missing loading/empty/error states and overflow;
   unclear interface copy. Render-only issues come back `uncertain — confirming needs a
   live render`.
+- **Deployment Review** *(opt-in)* — what happens when the change is applied, rolled
+  out and rolled back, read off the code (static; nothing is planned or applied):
+  - Terraform/IaC replacing or destroying stateful resources, renames with no `moved`
+    block, unpinned providers or modules;
+  - Helm/Kubernetes immutable-field upgrades, missing probes or limits, mutable image
+    tags, rollout settings that allow an outage, changed `values.yaml` defaults;
+  - migrations the previous release can't run against, and config renames with no
+    fallback;
+  - rollout ordering and environment parity;
+  - container and CI/CD pipeline safety (gates, triggers, pinned actions, secrets).
+
+  Plan-only questions come back `uncertain — confirming needs terraform plan / helm
+  template`.
 
 If the user selects nothing on a tab, that's fine; if they select nothing on ANY
 category tab, treat it as **the six default built-ins plus every custom category** —
-NOT `ui-ux`. UI/UX is opt-in: it runs only when the user ticks it, and never gets
-added "to be thorough" because a diff touches UI files.
+NOT `ui-ux` or `deployment`. UI/UX and Deployment are opt-in: it runs only when the user ticks it, and never gets
+added "to be thorough" because a diff touches UI or deployment files.
 
 **Ephemeral comments (part of General Review — binds every review path).** A comment's
 audience is the **next reader of the code**, not the reviewer of this PR. A comment that
@@ -559,7 +573,7 @@ costs is Tab 3's reviewer choice, which has already been made by the time this i
 - **6 at a time, rolling (default)** — at most 6 reviewers in flight; as each returns,
   the next queued category is dispatched into the freed slot. For the default selection
   (the six defaults) this IS "all at once", so the common path costs nothing; it only
-  bites when UI/UX or customs push the count higher.
+  bites when UI/UX, Deployment or customs push the count higher.
 - **All N at once** — the full fan-out. Honor it without re-litigating; they have now
   been told the number.
 - **One at a time** — strictly sequential, one category per dispatch. **This is not the
@@ -894,7 +908,7 @@ list, same adherence hand-off, same roll-call demand — with these differences:
 
 **If category subagents were chosen:** dispatch ONE `code-reviewer-<category>` agent per
 selected category (the built-ins — general / security / design / adherence /
-performance / tests / ui-ux — use the plugin-prefixed type; customs use their bare type from
+performance / tests / ui-ux / deployment — use the plugin-prefixed type; customs use their bare type from
 the agents list), **respecting L3.0's cap**:
 
 - **N ≤ cap** — all of them in a SINGLE message, so they run in parallel. This is the

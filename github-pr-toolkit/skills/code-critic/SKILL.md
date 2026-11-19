@@ -5,7 +5,7 @@ description: >-
   severity, and act on them — fix locally, or post inline PR review comments — delegating
   ALL GitHub and outbound-git work to a Haiku critic-worker while the main model, the
   advisor, or parallel per-category review subagents (user-selected categories: general,
-  security, design, rules-adherence, performance, tests, plus opt-in ui-ux — on a
+  security, design, rules-adherence, performance, tests, plus opt-in ui-ux and deployment — on a
   user-selected model)
   reason. Use when the user wants to review, critique, or adversarially review
   their local changes / current diff / commits vs main; do a code review of a GitHub PR
@@ -208,8 +208,8 @@ diffs vs `origin/<base>`, including uncommitted work → YOU build the intent br
 tickets, cited specs and ADRs; reviewers get it as data) and load the `.git/code-critic/`
 findings ledger →
 choose review categories (multi-select: general / security / design & architecture /
-rules & idioms adherence / performance / tests, plus opt-in UI/UX; the six
-non-UI categories are the default) + choose the
+rules & idioms adherence / performance / tests, plus opt-in UI/UX and Deployment;
+the other six categories are the default) + choose the
 reviewer (parallel `code-reviewer-<category>` subagents default / advisor / main, with
 advisor consultation folded into the same tab — default on: reviewers take borderline
 and high-severity findings to the advisor before finalizing) + the reviewer MODEL

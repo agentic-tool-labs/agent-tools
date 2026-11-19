@@ -283,6 +283,20 @@ Apply each category the dispatch names. The built-in slugs and what they cover:
   names a user and a situation (`when a keyboard-only user…`); polish that leaves every
   task completable is `Nit`; what only a render can show is `uncertain — confirming
   needs a live render`. Full checklist: `code-reviewer-ui-ux.md`.
+- **`deployment`** *(opt-in — apply only when named)* — what happens on apply, rollout and
+  rollback:
+  - Terraform replacing or destroying stateful resources, or renames with no `moved`
+    block;
+  - Helm upgrades that change immutable fields, missing probes or limits, mutable image
+    tags, rollout settings that allow an outage, changed `values.yaml` defaults;
+  - migrations the previous release can't run against, and config renames with no
+    fallback;
+  - rollout ordering and environment parity;
+  - unsafe CI/CD gates, triggers and secrets.
+
+  Impact names the deploy step (`when helm upgrade runs…`). Plan-only questions are
+  `uncertain — confirming needs terraform plan / helm template`. Full checklist:
+  `code-reviewer-deployment.md`.
 
 **If the dispatch names a CUSTOM category**, it carries that category's focus text —
 apply it as written, and use its slug in `category:`. Do not guess at a custom
