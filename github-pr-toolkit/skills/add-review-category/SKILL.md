@@ -40,7 +40,8 @@ file** (they give a path) / **Import from GitHub** (they give a raw URL, or
 Interview the user (free text is fine; use AskUserQuestion only where options are
 natural). Collect:
 1. **Slug** — kebab-case, becomes `code-reviewer-<slug>`. Reject collisions with the
-   built-ins (general, security, design, adherence, performance, tests, ui-ux) and with any
+   built-ins (general, security, design, adherence, performance, tests, ui-ux), the
+   internal `verifier`, and with any
    existing custom file in either install dir.
 2. **Title** — the human name shown in the L3 picker (e.g. "Accessibility").
 3. **Charter** — one sentence: what this lens hunts for (goes in the description).

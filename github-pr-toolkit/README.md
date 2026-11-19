@@ -48,6 +48,28 @@ banner (🔴 CRITICAL … ⚪ NIT) and uses the feedback tone you've configured
 (`--level low|medium|high`, default `medium`) decides what happens to a finding that
 isn't material.
 
+It's also built to be thorough:
+- **Method.** Every reviewer follows a set procedure: it reads the whole function
+  around each change, checks that every deleted line's guarantee still holds, traces
+  the callers of each changed function, and looks for language pitfalls.
+- **Coverage.** Each reviewer accounts for every hunk it was given, and missed hunks
+  are sent back to it. Large diffs are split across several reviewers.
+- **Verification.** A read-only verifier checks every graded finding and refutes it
+  only by quoting the code that disproves it.
+- **Intent.** The review checks the change against what it was meant to do: the PR
+  description, linked tickets (Linear, Jira or GitHub issues, when a tracker is
+  connected), and the specs and ADRs they cite. Add more sources with
+  `--intent <ticket|URL|path>`.
+- **Memory between runs.** A per-branch findings ledger under `.git/code-critic/`,
+  which also holds the PR's existing review comments, means each later run looks only
+  for what earlier runs missed. `--fresh` ignores it for one run.
+
+Uncommitted changes are reviewed along with commits. Two options are off by default:
+- `--deep[=N]` repeats passes until one finds nothing new that survives verification,
+  and gives a rough estimate of what's probably still undetected.
+- `--pre-existing` also lists, ungraded, bugs in the edited functions that this change
+  didn't cause.
+
 Full details: [docs/code-critic.md](docs/code-critic.md).
 
 ### `/github-pr-toolkit:doctor`

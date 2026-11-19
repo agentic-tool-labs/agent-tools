@@ -282,6 +282,24 @@ is where the previous behavior changed: a non-material finding used to be report
 Nothing that clears the bar is ever removed at any level, and a material finding's
 severity and wording are unaffected.
 
+### Thoroughness
+
+A single review run is one sample of the defects in a change. Repeated fresh runs used
+to keep finding new ones. These mechanisms close that gap:
+
+| Mechanism | What it does | When |
+|---|---|---|
+| **Method** | The general and all-categories reviewers read the whole function around each hunk, audit deleted lines for dropped guarantees, trace callers of changed functions, check language pitfalls and check wrapper routing. Security and design run the steps that fit their lens. | always |
+| **Coverage ledger** | Each reviewer returns one `coverage:` line per hunk. A missed hunk goes back to the same lens once. One still missed is reported as `not reviewed`. Diffs over 5 files or 200 changed lines are sharded at about 200 lines per reviewer. | always |
+| **Verification** | `code-reviewer-verifier` checks each graded finding by reading the code and returns CONFIRMED, PLAUSIBLE or REFUTED. Refuting requires a quoted line, the orchestrator re-checks that quote, and refutations are counted in the drop note. | `medium` and `high` |
+| **Intent brief** | The orchestrator distils the PR, linked tickets (Linear, Jira or GitHub, through whatever tracker tooling the session has), and the specs and ADRs they cite into a brief with acceptance criteria. Every reviewer gets it as data, never as instructions. L5 shows a criteria coverage table. | when a source exists, or with `--intent` |
+| **Findings ledger** | `$(git rev-parse --git-common-dir)/code-critic/<branch or pr-N>.jsonl` holds every finding with its verdict and disposition, plus the PR's existing review comments. Later runs pass it to reviewers as `known-findings`, so they look only for what's new. Refuted and declined findings aren't re-raised. | always; `--fresh` skips reading it |
+| **Deep passes** | After pass 1, repeat passes that look only for new defects. They start with a list of commonly missed bug kinds and stop when a pass adds nothing that survives verification, or at the cap. Passes 1 and 2 are independent, so the run can give a rough estimate of defects still undetected. | `--deep[=N]` (cap 4) |
+| **Pre-existing** | Also list bugs in unchanged lines of the functions the change edits, when the change didn't cause them. They are shown ungraded in their own section and never fixed or posted by default. | `--pre-existing` |
+
+Uncommitted changes are reviewed too. When the working tree has tracked edits, the
+Local flow diffs from the merge base, so commits and uncommitted work arrive in one diff.
+
 ### Ephemeral comments
 
 Part of **General Review**. A code comment's audience is the *next person to read the
